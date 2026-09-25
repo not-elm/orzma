@@ -1,4 +1,4 @@
-//! Internal storage cell and the SGR pen burned into it on print.
+//! The storage cell and the SGR pen burned into it on print.
 
 use crate::device::color::Color;
 use crate::hyperlink::HyperlinkId;
@@ -217,6 +217,14 @@ impl Cell {
             hyperlink_id: self.hyperlink_id,
             ..Self::default()
         }
+    }
+
+    /// Combines `mark` onto the glyph, reporting whether it was kept; a
+    /// mark past [`MAX_COMBINING`] is refused and changes nothing.
+    pub fn push_mark(&mut self, mark: char) -> bool {
+        self.extra
+            .get_or_insert_with(|| Box::new(CellExtra::default()))
+            .push(mark)
     }
 
     /// The marks combined onto the glyph, in arrival order; empty when
@@ -574,5 +582,20 @@ mod tests {
             .count(),
             0
         );
+    }
+
+    /// Asserts that `push_mark` keeps marks up to `MAX_COMBINING` and
+    /// refuses the next one, leaving the kept marks untouched.
+    ///
+    /// Case: a program stacks more combining accents on one letter than a
+    /// cell retains.
+    #[test]
+    fn push_mark_keeps_marks_up_to_the_cap() {
+        let mut cell = Cell::default();
+        for _ in 0..MAX_COMBINING {
+            assert!(cell.push_mark('\u{0301}'));
+        }
+        assert!(!cell.push_mark('\u{0302}'));
+        assert_eq!(cell.marks(), ['\u{0301}'; MAX_COMBINING]);
     }
 }

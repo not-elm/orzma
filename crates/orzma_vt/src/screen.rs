@@ -14,7 +14,7 @@ pub(crate) mod webview_placements;
 
 mod state;
 
-use self::cell::{BodyWidth, Cell, CellExtra, CellWidth, ClassifiedGlyph, Pen};
+use self::cell::{BodyWidth, Cell, CellWidth, ClassifiedGlyph, Pen};
 use self::grid::Grid;
 use self::grid::LineId;
 use self::grid::row::Row;
@@ -250,10 +250,7 @@ impl Screen {
             CellWidth::Spacer => candidate.saturating_sub(1),
             CellWidth::LeadingSpacer => return None,
         };
-        let extra = row[target]
-            .extra
-            .get_or_insert_with(|| Box::new(CellExtra::default()));
-        if !extra.push(mark) {
+        if !row[target].push_mark(mark) {
             return None;
         }
         self.damage_span(line, line)
