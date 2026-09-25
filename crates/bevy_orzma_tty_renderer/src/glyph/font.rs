@@ -1,8 +1,12 @@
+//! Terminal fonts: the faces the grid draws with, their cell metrics, and
+//! the systems that keep those metrics current.
+
 use crate::bundled::{
     BOLD, BOLD_ITALIC, FALLBACK_BOLD, FALLBACK_BOLD_ITALIC, FALLBACK_ITALIC, FALLBACK_REGULAR,
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
 use crate::error::{RendererError, RendererResult};
+use crate::material::MaterialStage;
 use crate::schema::Style;
 use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
 use bevy::prelude::*;
@@ -60,10 +64,17 @@ impl Plugin for TerminalFontPlugin {
         if !app.world().contains_resource::<TerminalFonts>() {
             app.insert_resource(TerminalFonts::default());
         }
-        app.init_resource::<TerminalFontSize>().add_systems(
-            Startup,
-            init_cell_metrics_from_primary_window.in_set(TerminalFontInitSet::InitCellMetrics),
-        );
+        app.init_resource::<TerminalFontSize>()
+            .add_systems(
+                Startup,
+                init_cell_metrics_from_primary_window.in_set(TerminalFontInitSet::InitCellMetrics),
+            )
+            .add_systems(
+                PostUpdate,
+                update_cell_metrics
+                    .in_set(MaterialStage::Metrics)
+                    .run_if(resource_exists::<TerminalCellMetricsResource>),
+            );
     }
 }
 
@@ -79,13 +90,23 @@ fn init_cell_metrics_from_primary_window(
     font_size: Res<TerminalFontSize>,
     window: Single<&Window, With<PrimaryWindow>>,
 ) {
-    let dpr = window.scale_factor();
-    let phys_font_size = physical_font_size(font_size.0, dpr);
-    let metrics = fonts.cell_metrics_px(phys_font_size);
-    commands.insert_resource(TerminalCellMetricsResource {
-        metrics,
-        phys_font_size,
-    });
+    let phys_font_size = physical_font_size(font_size.0, window.scale_factor());
+    commands.insert_resource(TerminalCellMetricsResource::new(&fonts, phys_font_size));
+}
+
+/// Rewrites `TerminalCellMetricsResource` when the physical font size that
+/// `TerminalFontSize` and the primary window's scale factor give differs
+/// from the one the metrics were measured at.
+fn update_cell_metrics(
+    mut metrics: ResMut<TerminalCellMetricsResource>,
+    fonts: Res<TerminalFonts>,
+    font_size: Res<TerminalFontSize>,
+    window: Single<&Window, With<PrimaryWindow>>,
+) {
+    let phys_font_size = physical_font_size(font_size.0, window.scale_factor());
+    if metrics.phys_font_size != phys_font_size {
+        *metrics = TerminalCellMetricsResource::new(&fonts, phys_font_size);
+    }
 }
 
 /// Pixel metrics for the regular face at the given physical pixel size.
@@ -113,6 +134,17 @@ pub struct CellMetrics {
     pub max_overflow_phys: f32,
 }
 
+impl CellMetrics {
+    /// The cell pitch the grid lays out at, in physical pixels: the advance
+    /// and the line height, each floored and at least one pixel.
+    pub fn cell_size_phys(&self) -> Vec2 {
+        Vec2::new(
+            self.advance_phys.floor().max(1.0),
+            self.line_height_phys.floor().max(1.0),
+        )
+    }
+}
+
 /// The canonical cell pitch and advance values.
 ///
 /// It is inserted at startup from the PrimaryWindow's scale_factor and
@@ -124,6 +156,16 @@ pub struct TerminalCellMetricsResource {
     pub metrics: CellMetrics,
     /// Physical font size (in pixels) that `metrics` was computed at.
     pub phys_font_size: u16,
+}
+
+impl TerminalCellMetricsResource {
+    /// The metrics of `fonts` measured at `phys_font_size` physical pixels.
+    pub fn new(fonts: &TerminalFonts, phys_font_size: u16) -> Self {
+        Self {
+            metrics: fonts.cell_metrics_px(phys_font_size),
+            phys_font_size,
+        }
+    }
 }
 
 #[derive(Resource, Clone)]
@@ -934,5 +976,75 @@ mod tests {
     #[test]
     fn physical_font_size_clamps_to_the_u16_ceiling() {
         assert_eq!(physical_font_size(100_000.0, 4.0), u16::MAX);
+    }
+
+    /// Asserts that the cell pitch floors each axis and never drops below
+    /// one pixel.
+    ///
+    /// Case: a fractional font size measures a 7.6 by 15.4 pixel cell, and
+    /// a degenerate face measures a zero-width advance.
+    #[test]
+    fn cell_size_phys_floors_each_axis_to_at_least_one_pixel() {
+        let metrics = |advance_phys, line_height_phys| CellMetrics {
+            advance_phys,
+            line_height_phys,
+            ascent_phys: 0.0,
+            descent_phys: 0.0,
+            underline_position_phys: 0.0,
+            underline_thickness_phys: 0.0,
+            max_overflow_phys: 0.0,
+        };
+        assert_eq!(metrics(7.6, 15.4).cell_size_phys(), Vec2::new(7.0, 15.0));
+        assert_eq!(metrics(0.0, 0.4).cell_size_phys(), Vec2::new(1.0, 1.0));
+    }
+
+    /// Asserts that the cell metrics follow a change of the primary
+    /// window's scale factor, and that an update which changes nothing
+    /// leaves the resource unmarked.
+    ///
+    /// Case: the user drags the window from a standard display to a Retina
+    /// display, and the terminal then sits idle.
+    #[test]
+    fn cell_metrics_follow_the_scale_factor_and_stay_unmarked_otherwise() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+
+        let mut app = App::new();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        app.add_plugins(TerminalFontPlugin);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<TerminalCellMetricsResource>()
+                .phys_font_size,
+            12
+        );
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the primary window")
+            .resolution
+            .set_scale_factor(2.0);
+        app.update();
+        let doubled = *app.world().resource::<TerminalCellMetricsResource>();
+        assert_eq!(doubled.phys_font_size, 24);
+        let expected = TerminalFonts::default().cell_metrics_px(24);
+        assert!((doubled.metrics.advance_phys - expected.advance_phys).abs() < 0.001);
+
+        let marked = app
+            .world()
+            .resource_ref::<TerminalCellMetricsResource>()
+            .last_changed();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource_ref::<TerminalCellMetricsResource>()
+                .last_changed(),
+            marked
+        );
     }
 }

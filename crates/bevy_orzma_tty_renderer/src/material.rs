@@ -1,3 +1,6 @@
+//! The terminal's UI material: its shader data layout and bind group, and
+//! the plugin that keeps every pane's material current.
+
 use crate::{
     cursor::{
         CaretPaint, CaretPaintInput, CaretStyle, LastKeyInstant, PackedCursorStyle, blink_phase_on,
@@ -37,13 +40,25 @@ use bevy::{
 
 mod state;
 
-/// Ordering anchor for the system that writes each terminal's material.
+/// Ordering anchor for the systems that write each terminal's material.
 ///
 /// A system that resizes a terminal's grid from the layout must run
 /// `.before(Self::UpdateMaterial)`.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum TerminalMaterialSystems {
     UpdateMaterial,
+}
+
+/// Ordering stages inside [`TerminalMaterialSystems::UpdateMaterial`], run
+/// in declaration order.
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
+pub(crate) enum MaterialStage {
+    /// Resolves the shared cell metrics.
+    Metrics,
+    /// Rebuilds and uploads each pane's cell and glyph buffers.
+    Upload,
+    /// Writes each pane's material uniforms.
+    Params,
 }
 
 const TERMINAL_SHADER_HANDLE: Handle<Shader> = uuid_handle!("98195199-3092-42b6-b370-77dfc2ef83f9");
@@ -63,9 +78,19 @@ impl Plugin for TerminalMaterialPlugin {
         app.init_resource::<TerminalPaddingFallback>()
             .add_plugins(UiMaterialPlugin::<TerminalUiMaterial>::default())
             .add_plugins(state::TerminalMaterialStatePlugin)
+            .configure_sets(
+                PostUpdate,
+                (
+                    MaterialStage::Metrics,
+                    MaterialStage::Upload,
+                    MaterialStage::Params,
+                )
+                    .chain()
+                    .in_set(TerminalMaterialSystems::UpdateMaterial),
+            )
             .add_systems(
                 PostUpdate,
-                update_terminal_material.in_set(TerminalMaterialSystems::UpdateMaterial),
+                update_terminal_material.in_set(MaterialStage::Upload),
             );
     }
 }
