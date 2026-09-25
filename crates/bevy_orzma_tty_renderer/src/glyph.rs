@@ -1,10 +1,7 @@
 //! Glyph rasterization: the terminal fonts, the glyph atlas they are packed
 //! into, and the atlas's GPU texture.
 
-use crate::glyph::{
-    atlas::{GlyphAtlas, TerminalGlyphAtlasPlugin},
-    font::TerminalFontPlugin,
-};
+use crate::glyph::atlas::{GlyphAtlas, TerminalGlyphAtlasPlugin};
 use crate::system_set::TerminalMaterialSystems;
 use bevy::{
     asset::{AssetEventSystems, RenderAssetUsages},
@@ -14,13 +11,15 @@ use bevy::{
 };
 
 pub(crate) mod atlas;
-pub(crate) mod font;
+mod key;
+
+pub use key::GlyphKey;
 
 pub struct TerminalGlyphPlugin;
 
 impl Plugin for TerminalGlyphPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((TerminalGlyphAtlasPlugin, TerminalFontPlugin))
+        app.add_plugins(TerminalGlyphAtlasPlugin)
             .add_systems(Startup, init_atlas_image)
             // NOTE: `sync_atlas_image` must run in `PostUpdate`, the schedule
             // of the `TerminalMaterialSystems::UpdateMaterial` systems,

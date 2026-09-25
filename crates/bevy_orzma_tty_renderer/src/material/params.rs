@@ -5,10 +5,8 @@ use crate::{
     cursor::{
         CaretPaint, CaretPaintInput, CaretStyle, LastKeyInstant, PackedCursorStyle, blink_phase_on,
     },
-    glyph::{
-        atlas::GlyphAtlas,
-        font::{CellMetrics, TerminalCellMetricsResource},
-    },
+    font::{CellMetrics, TerminalCellMetricsResource},
+    glyph::atlas::GlyphAtlas,
     grid::{TerminalCells, TerminalView},
     hyperlink::HyperlinkHoverState,
     material::{
@@ -403,7 +401,7 @@ fn selection_uniforms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::glyph::font::TerminalFonts;
+    use crate::font::TerminalFonts;
     use bevy::asset::uuid_handle;
     use orzma_vt::prelude::HyperlinkId;
 

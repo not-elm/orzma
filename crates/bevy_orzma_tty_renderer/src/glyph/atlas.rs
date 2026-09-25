@@ -1,4 +1,5 @@
-use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
+use crate::font::{FontFace, TerminalFonts};
+use crate::glyph::GlyphKey;
 use ab_glyph::{Font, FontArc, GlyphId, OutlinedGlyph, PxScale, Rect, ScaleFont, point};
 use bevy::{platform::collections::HashMap, prelude::*};
 use std::iter::once;
@@ -344,7 +345,8 @@ struct Shelf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
+    use crate::font::{FontFace, TerminalFonts};
+    use crate::glyph::GlyphKey;
 
     #[test]
     fn returned_rect_matches_written_pixels() {

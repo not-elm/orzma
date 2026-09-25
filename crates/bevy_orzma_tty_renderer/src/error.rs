@@ -1,7 +1,7 @@
 //! The error type the terminal renderer reports, and the result alias
 //! built on it.
 
-use crate::glyph::font::FontFace;
+use crate::font::FontFace;
 use ab_glyph::InvalidFont;
 use orzma_vt::prelude::VtError;
 use thiserror::Error;

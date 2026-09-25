@@ -7,6 +7,7 @@ use bevy::prelude::*;
 pub mod bundled;
 mod cursor;
 mod error;
+mod font;
 pub mod glyph;
 mod grid;
 mod hyperlink;
@@ -15,7 +16,7 @@ mod pane_style;
 mod system_set;
 
 pub use crate::error::{RendererError, RendererResult};
-pub use crate::glyph::font::{
+pub use crate::font::{
     CellMetrics, FontFace, TerminalCellMetricsResource, TerminalFontInitSet, TerminalFontPlugin,
     TerminalFontSize, TerminalFonts, physical_font_size,
 };
@@ -25,7 +26,7 @@ pub mod prelude {
     pub use crate::TerminalRendererPlugin;
     pub use crate::cursor::{CaretStyle, CursorPlugin, LastKeyInstant, NextCaretFlip};
     pub use crate::error::{RendererError, RendererResult};
-    pub use crate::glyph::font::{
+    pub use crate::font::{
         CellMetrics, FontFace, TerminalCellMetricsResource, TerminalFontInitSet,
         TerminalFontPlugin, TerminalFontSize, TerminalFonts, physical_font_size,
     };
@@ -46,6 +47,7 @@ impl Plugin for TerminalRendererPlugin {
             TerminalGridPlugin,
             TerminalMaterialPlugin,
             TerminalGlyphPlugin,
+            TerminalFontPlugin,
             CursorPlugin,
         ));
     }

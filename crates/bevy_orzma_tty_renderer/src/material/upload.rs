@@ -4,10 +4,8 @@
 
 use crate::{
     error::{RendererError, RendererResult},
-    glyph::{
-        atlas::GlyphAtlas,
-        font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
-    },
+    font::{FontFace, TerminalCellMetricsResource, TerminalFonts},
+    glyph::{GlyphKey, atlas::GlyphAtlas},
     grid::{TerminalCells, TerminalView},
     material::{GpuCell, GpuGlyph, STYLE_WIDE_RIGHT_HALF, pack_linear},
     system_set::MaterialStage,
