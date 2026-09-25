@@ -788,19 +788,16 @@ mod tests {
         assert!(painter.contains("col == cursor_span_right()"));
     }
 
-    /// Asserts that a new terminal node gets its upload cache and a
-    /// material seeded with one-element cell and glyph buffers and the glyph
-    /// atlas.
-    ///
-    /// Case: the shell surface spawns the first terminal node at startup.
-    #[test]
-    fn a_new_material_node_is_seeded_and_given_its_cache() {
-        const ATLAS: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000003");
+    const SEEDED_ATLAS: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000003");
+
+    /// An app that seeds material nodes through `init_material_node`, with
+    /// one material ready for a node to use.
+    fn material_node_app() -> (App, Handle<TerminalUiMaterial>) {
         let mut app = App::new();
         app.init_resource::<Assets<ShaderBuffer>>()
             .init_resource::<Assets<TerminalUiMaterial>>()
             .insert_resource(AtlasImage {
-                handle: ATLAS,
+                handle: SEEDED_ATLAS,
                 last_generation: 0,
             })
             .add_observer(init_material_node);
@@ -808,6 +805,17 @@ mod tests {
             .world_mut()
             .resource_mut::<Assets<TerminalUiMaterial>>()
             .add(TerminalUiMaterial::default());
+        (app, material)
+    }
+
+    /// Asserts that a new terminal node gets its upload cache and a
+    /// material seeded with one-element cell and glyph buffers and the glyph
+    /// atlas.
+    ///
+    /// Case: the shell surface spawns the first terminal node at startup.
+    #[test]
+    fn a_new_material_node_is_seeded_and_given_its_cache() {
+        let (mut app, material) = material_node_app();
         let node = app.world_mut().spawn(MaterialNode(material.clone())).id();
         app.update();
 
@@ -817,7 +825,7 @@ mod tests {
             .resource::<Assets<TerminalUiMaterial>>()
             .get(&material)
             .expect("the node's material");
-        assert_eq!(seeded.atlas, ATLAS);
+        assert_eq!(seeded.atlas, SEEDED_ATLAS);
         let buffers = app.world().resource::<Assets<ShaderBuffer>>();
         for buffer in [&seeded.cells, &seeded.glyphs] {
             assert!(
@@ -842,25 +850,13 @@ mod tests {
         use crate::glyph::font::{TerminalCellMetricsResource, TerminalFonts};
         use crate::schema::{Color as CellColor, GridCell, GridSlot, TerminalCells, TerminalView};
 
-        const ATLAS: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000004");
         let fonts = TerminalFonts::default();
-        let mut app = App::new();
-        app.init_resource::<Assets<ShaderBuffer>>()
-            .init_resource::<Assets<TerminalUiMaterial>>()
-            .insert_resource(AtlasImage {
-                handle: ATLAS,
-                last_generation: 0,
-            })
-            .insert_resource(TerminalCellMetricsResource::new(&fonts, 16))
+        let (mut app, material) = material_node_app();
+        app.insert_resource(TerminalCellMetricsResource::new(&fonts, 16))
             .insert_resource(fonts)
             .insert_resource(GlyphAtlas::default())
-            .add_observer(init_material_node)
             .add_plugins(CellUploadPlugin);
 
-        let material = app
-            .world_mut()
-            .resource_mut::<Assets<TerminalUiMaterial>>()
-            .add(TerminalUiMaterial::default());
         let view = TerminalView {
             cols: 1,
             rows: 1,
