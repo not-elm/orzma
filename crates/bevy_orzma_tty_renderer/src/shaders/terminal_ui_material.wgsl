@@ -123,33 +123,36 @@ fn tint_bg(c: vec4<f32>) -> vec4<f32> {
 
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
-    // Out-of-grid fragments (degenerate grid, or the right/bottom padding
-    // strip) fall back to bg_padding_color so the surrounding band blends
-    // with the terminal background instead of opaque black. The padding is a
-    // background region, so it receives the inactive-pane tint too.
+    // Shader runs entirely in PHYSICAL pixels. Bevy 0.18
+    // UiVertexOutput.size is physical px (verified in spec R1 audit), so
+    // we use it directly.
+    return dim_pane(paint_pane(in.uv * in.size));
+}
+
+// The color of the fragment at `p_px`, before the pane-level dim.
+//
+// Out-of-grid fragments (degenerate grid, or the right/bottom padding
+// strip) fall back to bg_padding_color so the surrounding band blends
+// with the terminal background instead of opaque black. The padding is a
+// background region, so it receives the inactive-pane tint too.
+fn paint_pane(p_px: vec2<f32>) -> vec4<f32> {
     let fallback = tint_bg(params.bg_padding_color);
-
-    var color: vec4<f32>;
     if params.grid_size.x == 0u || params.grid_size.y == 0u {
-        color = fallback;
-    } else {
-        // Shader runs entirely in PHYSICAL pixels. Bevy 0.18
-        // UiVertexOutput.size is physical px (verified in spec R1 audit), so
-        // we use it directly.
-        let p_px = in.uv * in.size;
-        let hit = locate_cell(p_px);
-        if !hit.valid {
-            color = paint_right_strip(p_px, fallback);
-        } else {
-            color = paint_grid_cell(hit, fallback);
-        }
+        return fallback;
     }
+    let hit = locate_cell(p_px);
+    if !hit.valid {
+        return paint_right_strip(p_px, fallback);
+    }
+    return paint_grid_cell(hit, fallback);
+}
 
-    // Pane-level brightness: active pane => params.dim == 1.0 (no-op); inactive
-    // pane => params.dim <= 1.0. RGB only; alpha is preserved so blending and
-    // the opaque-padding contract are unchanged. The inactive-pane background
-    // tint is applied earlier (tint_bg, at the background stage). Composes with
-    // the per-cell SGR STYLE_DIM independently.
+// Pane-level brightness: active pane => params.dim == 1.0 (no-op); inactive
+// pane => params.dim <= 1.0. RGB only; alpha is preserved so blending and
+// the opaque-padding contract are unchanged. The inactive-pane background
+// tint is applied earlier (tint_bg, at the background stage). Composes with
+// the per-cell SGR STYLE_DIM independently.
+fn dim_pane(color: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(color.rgb * params.dim, color.a);
 }
 
@@ -181,35 +184,19 @@ fn paint_grid_cell(hit: CellHit, fallback: vec4<f32>) -> vec4<f32> {
 // `max_overflow_phys` band reserved by the host, paint the rightmost cell's
 // bbox overflow. Falls back to `fallback` outside the band or on a miss.
 fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
-    // Defensive guard (#10): cell_size_px is Vec2::ZERO during the
-    // ~1-frame window between MaterialNode insertion and the first
-    // write_terminal_params write. The grid_h_phys = 0 check below
-    // already prevents the strip-entry, but the explicit cell_size_px
-    // guard documents the invariant and protects against future
-    // refactors that might remove the height check.
-    let grid_w_phys = params.cell_size_px.x * f32(params.grid_size.x);
-    let grid_h_phys = params.cell_size_px.y * f32(params.grid_size.y);
-    let in_right_strip = params.cell_size_px.x > 0.0
-        && params.cell_size_px.y > 0.0
-        && p_px.x >= grid_w_phys
-        && p_px.x < grid_w_phys + params.max_overflow_phys
-        && p_px.y < grid_h_phys;
-    if !in_right_strip {
+    if !in_right_strip(p_px) {
         return fallback;
     }
 
     let col = params.grid_size.x - 1u;
     let row = u32(floor(p_px.y / params.cell_size_px.y));
-    let idx = row * params.grid_size.x + col;
+    let idx = cell_index(row, col);
     if idx >= arrayLength(&cells) {
         return fallback;
     }
 
     let strip_cell = cells[idx];
-    let strip_local = vec2<f32>(
-        p_px.x - f32(col) * params.cell_size_px.x,
-        p_px.y - f32(row) * params.cell_size_px.y,
-    );
+    let strip_local = p_px - cell_origin_px(row, col);
     let colors = resolve_painted_colors(strip_cell, row, col);
     var color = blend_premultiplied_over(fallback, tint_bg(colors.bg));
     // NOTE: paint_cell_glyph (NOT paint_primary_glyph). strip_local.x is
@@ -223,6 +210,23 @@ fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
     return paint_cell_overlays(hit, colors.fg, color);
 }
 
+// Whether `p_px` lies in the band past the grid's right edge that the host
+// reserves for the last column's glyph overflow.
+fn in_right_strip(p_px: vec2<f32>) -> bool {
+    // Defensive guard (#10): cell_size_px is Vec2::ZERO during the
+    // ~1-frame window between MaterialNode insertion and the first
+    // write_terminal_params write. The grid-height check below
+    // already prevents the strip-entry, but the explicit cell_size_px
+    // guard documents the invariant and protects against future
+    // refactors that might remove the height check.
+    let grid_px = grid_extent_px();
+    return params.cell_size_px.x > 0.0
+        && params.cell_size_px.y > 0.0
+        && p_px.x >= grid_px.x
+        && p_px.x < grid_px.x + params.max_overflow_phys
+        && p_px.y < grid_px.y;
+}
+
 // ============================================================================
 // Cell glyph stages (primary + left overdraw)
 // ============================================================================
@@ -231,11 +235,10 @@ fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
 // glyph anchored to the left-half origin — i.e. shifted +cell_pitch.x into
 // "this cell" coordinates — so the wide glyph spans both cells.
 fn paint_primary_glyph(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
-    let cur_is_wide_right = (hit.cell.style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
     let primary_local = select(
         hit.in_cell_px,
-        hit.in_cell_px + vec2<f32>(params.cell_size_px.x, 0.0),
-        cur_is_wide_right,
+        in_left_neighbor_px(hit.in_cell_px),
+        is_wide_right_half(hit.cell.style_flags),
     );
     return paint_cell_glyph(hit.cell, primary_local, fg, base);
 }
@@ -251,19 +254,21 @@ fn paint_left_overdraw(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     if hit.col == 0u {
         return base;
     }
-    let cur_is_wide_right = (hit.cell.style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
-    if cur_is_wide_right {
+    if is_wide_right_half(hit.cell.style_flags) {
         return base;
     }
-    let left_idx = hit.row * params.grid_size.x + (hit.col - 1u);
-    let left_cell = cells[left_idx];
-    let left_is_wide_right = (left_cell.style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
-    if left_is_wide_right {
+    let left_cell = cells[cell_index(hit.row, hit.col - 1u)];
+    if is_wide_right_half(left_cell.style_flags) {
         return base;
     }
-    let left_local = hit.in_cell_px + vec2<f32>(params.cell_size_px.x, 0.0);
+    let left_local = in_left_neighbor_px(hit.in_cell_px);
     let left_fg = resolve_cell_colors(left_cell).fg;
     return paint_cell_glyph(left_cell, left_local, left_fg, base);
+}
+
+// The fragment's position in the cell-local px of the cell to its left.
+fn in_left_neighbor_px(in_cell_px: vec2<f32>) -> vec2<f32> {
+    return in_cell_px + vec2<f32>(params.cell_size_px.x, 0.0);
 }
 
 // ============================================================================
@@ -287,8 +292,8 @@ fn paint_cell_overlays(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32
     return color;
 }
 
-// Underline metrics come from font-derived uniforms; strike sits at half the
-// ascent and reuses the underline thickness.
+// Paints the decoration lines the cell's style and link ask for: the
+// underline, then the strike line.
 fn paint_text_decorations(
     style: u32,
     in_cell_px: vec2<f32>,
@@ -296,30 +301,63 @@ fn paint_text_decorations(
     base: vec4<f32>,
     cell_hyperlink_id: u32,
 ) -> vec4<f32> {
-    var color = base;
-    let is_link = cell_hyperlink_id != 0u;
-    let hovered_link =
-        is_link &&
-        params.hover_active != 0u &&
-        cell_hyperlink_id == params.hover_hyperlink_id;
-    if is_link || (style & STYLE_UNDERLINE) != 0u {
-        let underline_color = select(fg, ACCENT_LINK_COLOR, hovered_link);
-        // underline_position_phys is negative (below baseline). The actual
-        // y in the cell is baseline + |underline_position|.
-        let y_top = params.ascent_px - params.underline_position_phys;
-        let y_bot = y_top + params.underline_thickness_phys;
-        if in_cell_px.y >= y_top && in_cell_px.y < y_bot {
-            color = vec4<f32>(underline_color.rgb, max(color.a, underline_color.a));
-        }
+    let color = paint_underline(style, in_cell_px.y, fg, base, cell_hyperlink_id);
+    return paint_strike(style, in_cell_px.y, fg, color);
+}
+
+// Paints the underline of an underlined or hyperlinked cell at the cell-local
+// `y`, in the accent color while the cell's link is hovered. The underline
+// metrics come from font-derived uniforms.
+fn paint_underline(
+    style: u32,
+    y: f32,
+    fg: vec4<f32>,
+    base: vec4<f32>,
+    cell_hyperlink_id: u32,
+) -> vec4<f32> {
+    if cell_hyperlink_id == 0u && (style & STYLE_UNDERLINE) == 0u {
+        return base;
     }
-    if (style & STYLE_STRIKE) != 0u {
-        let y_top = params.ascent_px * 0.5 - params.underline_thickness_phys * 0.5;
-        let y_bot = y_top + params.underline_thickness_phys;
-        if in_cell_px.y >= y_top && in_cell_px.y < y_bot {
-            color = vec4<f32>(fg.rgb, max(color.a, fg.a));
-        }
+    // underline_position_phys is negative (below baseline). The actual
+    // y in the cell is baseline + |underline_position|.
+    let top = params.ascent_px - params.underline_position_phys;
+    if !in_band(y, top, params.underline_thickness_phys) {
+        return base;
     }
-    return color;
+    let line_color = select(fg, ACCENT_LINK_COLOR, is_hovered_link(cell_hyperlink_id));
+    return paint_line(base, line_color);
+}
+
+// Paints the strike line of a struck-through cell at the cell-local `y`.
+// The line sits at half the ascent and reuses the underline thickness.
+fn paint_strike(style: u32, y: f32, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
+    if (style & STYLE_STRIKE) == 0u {
+        return base;
+    }
+    let top = params.ascent_px * 0.5 - params.underline_thickness_phys * 0.5;
+    if !in_band(y, top, params.underline_thickness_phys) {
+        return base;
+    }
+    return paint_line(base, fg);
+}
+
+// Whether the cell belongs to the hyperlink the pointer hovers while the
+// activation modifier is held.
+fn is_hovered_link(cell_hyperlink_id: u32) -> bool {
+    return cell_hyperlink_id != 0u
+        && params.hover_active != 0u
+        && cell_hyperlink_id == params.hover_hyperlink_id;
+}
+
+// Whether `y` lies in the horizontal band `thickness` tall whose top edge
+// is `top`.
+fn in_band(y: f32, top: f32, thickness: f32) -> bool {
+    return y >= top && y < top + thickness;
+}
+
+// `base` under a decoration line painted in `line_color`.
+fn paint_line(base: vec4<f32>, line_color: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(line_color.rgb, max(base.a, line_color.a));
 }
 
 // Whether the cursor covers (row, col): the cursor's own cell, the right
@@ -332,29 +370,15 @@ fn cursor_covers(row: u32, col: u32) -> bool {
     if col == params.cursor_pos.x {
         return true;
     }
-    let base = row * params.grid_size.x;
-    if col == params.cursor_pos.x + 1u {
-        let idx = base + col;
-        if idx < arrayLength(&cells)
-            && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u {
-            return true;
-        }
+    if col == params.cursor_pos.x + 1u && wide_right_half_at(row, col) {
+        return true;
     }
-    if col + 1u == params.cursor_pos.x {
-        let idx = base + params.cursor_pos.x;
-        if idx < arrayLength(&cells)
-            && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u {
-            return true;
-        }
-    }
-    return false;
+    return col + 1u == params.cursor_pos.x && wide_right_half_at(row, params.cursor_pos.x);
 }
 
 // Whether the cursor sits on the right half of a wide glyph.
 fn cursor_on_wide_right_half() -> bool {
-    let idx = params.cursor_pos.y * params.grid_size.x + params.cursor_pos.x;
-    return idx < arrayLength(&cells)
-        && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u;
+    return wide_right_half_at(params.cursor_pos.y, params.cursor_pos.x);
 }
 
 // The column holding the caret's left edge: the body cell when the cursor
@@ -370,10 +394,7 @@ fn cursor_span_left() -> u32 {
 // cursor sits on a wide glyph's body.
 fn cursor_span_right() -> u32 {
     let next = params.cursor_pos.x + 1u;
-    let idx = params.cursor_pos.y * params.grid_size.x + next;
-    if next < params.grid_size.x
-        && idx < arrayLength(&cells)
-        && (cells[idx].style_flags & STYLE_WIDE_RIGHT_HALF) != 0u {
+    if next < params.grid_size.x && wide_right_half_at(params.cursor_pos.y, next) {
         return next;
     }
     return params.cursor_pos.x;
@@ -391,23 +412,26 @@ fn cursor_is_lit() -> bool {
     return (params.cursor_style & CURSOR_VISIBLE) != 0u;
 }
 
+// The caret shape the cursor style packs: one of the `CURSOR_SHAPE_*`
+// constants.
+fn cursor_shape() -> u32 {
+    return (params.cursor_style >> 1u) & 3u;
+}
+
+// Whether the caret is drawn as a hollow outline rather than filled.
+fn cursor_is_hollow() -> bool {
+    return (params.cursor_style & CURSOR_HOLLOW) != 0u;
+}
+
 // Whether a lit, filled block cursor covers (row, col). Runs for every
 // fragment, so the checks that read no cell come first. A hollow caret is
 // drawn as an outline instead, so it never takes over the cell's colors.
 fn block_cursor_covers(row: u32, col: u32) -> bool {
-    if row != params.cursor_pos.y {
-        return false;
-    }
-    if ((params.cursor_style >> 1u) & 3u) != CURSOR_SHAPE_BLOCK {
-        return false;
-    }
-    if (params.cursor_style & CURSOR_HOLLOW) != 0u {
-        return false;
-    }
-    if !cursor_is_lit() {
-        return false;
-    }
-    return cursor_covers(row, col);
+    return row == params.cursor_pos.y
+        && cursor_shape() == CURSOR_SHAPE_BLOCK
+        && !cursor_is_hollow()
+        && cursor_is_lit()
+        && cursor_covers(row, col);
 }
 
 // The color the cursor is painted in: the OSC 12 color when one is set,
@@ -449,20 +473,26 @@ fn guarded_fill(fill: vec4<f32>, ground: vec4<f32>) -> vec4<f32> {
 }
 
 // The colors (row, col) is painted in: the cell's own, or, under a lit
-// block cursor, the guarded fill as background and the cell's background
-// as the glyph color. A glyph that does not stand out from that
-// background takes the fill instead, so a full block of one color still
-// shows the cursor. Concealment applies last, so a concealed glyph
-// stays hidden inside the block.
+// block cursor, the colors under_block_cursor turns them into.
+// Concealment applies last, so a concealed glyph stays hidden inside the
+// block.
 fn resolve_painted_colors(cell: Cell, row: u32, col: u32) -> CellColors {
     var colors = resolve_visible_colors(cell);
     if block_cursor_covers(row, col) {
-        let ground = materialize_default_bg(colors.bg);
-        let fill = guarded_fill(cursor_fill(colors.fg), ground);
-        let glyph_melts = contrast_ratio(colors.fg.rgb, ground.rgb) < MIN_CURSOR_CONTRAST;
-        colors = CellColors(select(ground, fill, glyph_melts), fill);
+        colors = under_block_cursor(colors);
     }
     return conceal(cell, colors);
+}
+
+// `colors` under a lit block cursor: the guarded fill as background and
+// the cell's background as the glyph color. A glyph that does not stand
+// out from that background takes the fill instead, so a full block of
+// one color still shows the cursor.
+fn under_block_cursor(colors: CellColors) -> CellColors {
+    let ground = materialize_default_bg(colors.bg);
+    let fill = guarded_fill(cursor_fill(colors.fg), ground);
+    let glyph_melts = contrast_ratio(colors.fg.rgb, ground.rgb) < MIN_CURSOR_CONTRAST;
+    return CellColors(select(ground, fill, glyph_melts), fill);
 }
 
 // Paints the cursors drawn as strokes clear of the glyph: the bar, the
@@ -475,69 +505,78 @@ fn paint_cursor(
     cell: Cell,
     base: vec4<f32>,
 ) -> vec4<f32> {
-    // NOTE: cursor_covers and bar_covers both read the cell buffer, and
-    // select evaluates both arms, so this uniform test must stay ahead of
-    // them: a blinking caret packs an invisible style on every dark phase,
-    // and without the early return every fragment pays those loads.
+    // NOTE: stroked_cursor_covers reads the cell buffer, so this uniform
+    // test must stay ahead of it: a blinking caret packs an invisible
+    // style on every dark phase, and without the early return every
+    // fragment pays those loads.
     if !cursor_is_lit() {
         return base;
     }
-    let cursor_hollow = (params.cursor_style & CURSOR_HOLLOW) != 0u;
-    let cursor_shape = (params.cursor_style >> 1u) & 3u;
-    // NOTE: cursor_shape comes from the uniform, so this branch is
-    // wave-uniform and runs one arm; `select` would evaluate both, and
-    // each arm reads the cell buffer.
-    var on_cursor_cell: bool;
-    if cursor_shape == CURSOR_SHAPE_BAR {
-        on_cursor_cell = bar_covers(row, col);
-    } else {
-        on_cursor_cell = cursor_covers(row, col);
-    }
-    if !on_cursor_cell {
+    if !stroked_cursor_covers(row, col) || !on_cursor_stroke(col, in_cell_px) {
         return base;
     }
+    return cursor_stroke_fill(cell);
+}
 
-    let thickness = params.cursor_thickness_phys;
-    // NOTE: paint_right_strip calls this with in_cell_px.x past the cell
+// Whether a stroked caret is drawn in (row, col): a bar in the cell holding
+// its left edge, any other shape in every cell the cursor covers.
+fn stroked_cursor_covers(row: u32, col: u32) -> bool {
+    // NOTE: cursor_shape() reads only the uniform, so this branch is
+    // wave-uniform and runs one arm; `select` would evaluate both, and
+    // each arm reads the cell buffer.
+    if cursor_shape() == CURSOR_SHAPE_BAR {
+        return bar_covers(row, col);
+    }
+    return cursor_covers(row, col);
+}
+
+// Whether the fragment at `in_cell_px` of column `col` lies on the caret's
+// stroke: the hollow outline, the underline, or the bar. A filled block
+// has no stroke.
+fn on_cursor_stroke(col: u32, in_cell_px: vec2<f32>) -> bool {
+    // NOTE: paint_right_strip reaches this with in_cell_px.x past the cell
     // width, so every branch that is not already bounded on x must test
     // this or its stroke strays outside the cell.
     let inside_cell = in_cell_px.x < params.cell_size_px.x;
+    if cursor_is_hollow() {
+        return inside_cell && on_hollow_outline(col, in_cell_px);
+    }
+    let thickness = params.cursor_thickness_phys;
+    if cursor_shape() == CURSOR_SHAPE_UNDERLINE {
+        return inside_cell && in_cell_px.y >= params.cell_size_px.y - thickness;
+    }
+    return cursor_shape() == CURSOR_SHAPE_BAR && in_cell_px.x < thickness;
+}
+
+// Whether the fragment at `in_cell_px` of column `col` lies on the hollow
+// caret's outline. The outline wraps both halves of a wide pair as one
+// box, so the edges between the halves are left out.
+fn on_hollow_outline(col: u32, in_cell_px: vec2<f32>) -> bool {
+    let thickness = params.cursor_thickness_phys;
+    // NOTE: thickness is a fraction of the cell WIDTH, so an outline
+    // that took it unbounded would have its two opposite edges meet
+    // and fill the cell — a hollow caret that reads as a filled one.
+    // Each axis keeps its stroke under half of its own extent.
+    let edge_x = min(thickness, (params.cell_size_px.x - 1.0) * 0.5);
+    let edge_y = min(thickness, (params.cell_size_px.y - 1.0) * 0.5);
+    // NOTE: the in-cell tests come first on purpose. `&&` short
+    // circuits left to right, and the span helpers read the cell
+    // buffer, so testing them first would pay that read for every
+    // interior fragment the comparison then rejects.
+    return in_cell_px.y < edge_y
+        || in_cell_px.y >= params.cell_size_px.y - edge_y
+        || (in_cell_px.x < edge_x && col == cursor_span_left())
+        || (in_cell_px.x >= params.cell_size_px.x - edge_x
+            && col == cursor_span_right());
+}
+
+// The color a stroked caret is painted in over `cell`: the guarded fill,
+// taken from the cell's colors before concealment and compared against
+// the tinted ground.
+fn cursor_stroke_fill(cell: Cell) -> vec4<f32> {
     let visible = resolve_visible_colors(cell);
     let ground = tint_bg(materialize_default_bg(visible.bg));
-    let fill = guarded_fill(cursor_fill(visible.fg), ground);
-    if cursor_hollow {
-        if !inside_cell {
-            return base;
-        }
-        // NOTE: thickness is a fraction of the cell WIDTH, so an outline
-        // that took it unbounded would have its two opposite edges meet
-        // and fill the cell — a hollow caret that reads as a filled one.
-        // Each axis keeps its stroke under half of its own extent.
-        let edge_x = min(thickness, (params.cell_size_px.x - 1.0) * 0.5);
-        let edge_y = min(thickness, (params.cell_size_px.y - 1.0) * 0.5);
-        // NOTE: the in-cell tests come first on purpose. `&&` short
-        // circuits left to right, and the span helpers read the cell
-        // buffer, so testing them first would pay that read for every
-        // interior fragment the comparison then rejects.
-        let on_edge = in_cell_px.y < edge_y
-            || in_cell_px.y >= params.cell_size_px.y - edge_y
-            || (in_cell_px.x < edge_x && col == cursor_span_left())
-            || (in_cell_px.x >= params.cell_size_px.x - edge_x
-                && col == cursor_span_right());
-        if on_edge {
-            return fill;
-        }
-        return base;
-    }
-    if cursor_shape == CURSOR_SHAPE_UNDERLINE
-        && inside_cell
-        && in_cell_px.y >= params.cell_size_px.y - thickness {
-        return fill;
-    }
-    if cursor_shape == CURSOR_SHAPE_BAR && in_cell_px.x < thickness {
-        return fill;
-    }
-    return base;
+    return guarded_fill(cursor_fill(visible.fg), ground);
 }
 
 fn paint_selection(row: u32, col: u32, base: vec4<f32>) -> vec4<f32> {
@@ -625,7 +664,7 @@ fn sample_overlay_slot(
 
 fn paint_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     var color = base;
-    let p_px = vec2<f32>(f32(hit.col), f32(hit.row)) * params.cell_size_px + hit.in_cell_px;
+    let p_px = cell_origin_px(hit.row, hit.col) + hit.in_cell_px;
     color = sample_overlay_slot(params.overlay_rects[0], overlay0_tex, overlay_samp, p_px, hit, color);
     color = sample_overlay_slot(params.overlay_rects[1], overlay1_tex, overlay_samp, p_px, hit, color);
     color = sample_overlay_slot(params.overlay_rects[2], overlay2_tex, overlay_samp, p_px, hit, color);
@@ -678,14 +717,12 @@ fn blend_premultiplied_over(dst: vec4<f32>, src: vec4<f32>) -> vec4<f32> {
 // cell index would overflow the `cells` storage buffer.
 fn locate_cell(p_px: vec2<f32>) -> CellHit {
     let invalid = CellHit(false, 0u, 0u, Cell(0u, 0u, 0u, 0u, 0u), vec2<f32>(0.0, 0.0));
-    let cell_pitch = params.cell_size_px;
-    let grid_w_px = cell_pitch.x * f32(params.grid_size.x);
-    let grid_h_px = cell_pitch.y * f32(params.grid_size.y);
-    if p_px.x >= grid_w_px || p_px.y >= grid_h_px {
+    let grid_px = grid_extent_px();
+    if p_px.x >= grid_px.x || p_px.y >= grid_px.y {
         return invalid;
     }
-    let col_f = p_px.x / cell_pitch.x;
-    let row_f = p_px.y / cell_pitch.y;
+    let col_f = p_px.x / params.cell_size_px.x;
+    let row_f = p_px.y / params.cell_size_px.y;
     if col_f < 0.0 || row_f < 0.0 {
         return invalid;
     }
@@ -694,12 +731,39 @@ fn locate_cell(p_px: vec2<f32>) -> CellHit {
     if col >= params.grid_size.x || row >= params.grid_size.y {
         return invalid;
     }
-    let idx = row * params.grid_size.x + col;
+    let idx = cell_index(row, col);
     if idx >= arrayLength(&cells) {
         return invalid;
     }
-    let cell_origin = vec2<f32>(f32(col), f32(row)) * cell_pitch;
-    return CellHit(true, row, col, cells[idx], p_px - cell_origin);
+    return CellHit(true, row, col, cells[idx], p_px - cell_origin_px(row, col));
+}
+
+// The grid's extent in physical px.
+fn grid_extent_px() -> vec2<f32> {
+    return params.cell_size_px * vec2<f32>(params.grid_size);
+}
+
+// The top-left corner of cell (row, col) in physical px.
+fn cell_origin_px(row: u32, col: u32) -> vec2<f32> {
+    return vec2<f32>(f32(col), f32(row)) * params.cell_size_px;
+}
+
+// The index of cell (row, col) in the `cells` storage buffer.
+fn cell_index(row: u32, col: u32) -> u32 {
+    return row * params.grid_size.x + col;
+}
+
+// Whether `style` marks the right half of a wide glyph.
+fn is_wide_right_half(style: u32) -> bool {
+    return (style & STYLE_WIDE_RIGHT_HALF) != 0u;
+}
+
+// Whether the `cells` storage buffer holds (row, col) as the right half of
+// a wide glyph. Only the style flags are read, and only when the index is
+// in range.
+fn wide_right_half_at(row: u32, col: u32) -> bool {
+    let idx = cell_index(row, col);
+    return idx < arrayLength(&cells) && is_wide_right_half(cells[idx].style_flags);
 }
 
 // ============================================================================
@@ -724,22 +788,25 @@ fn materialize_default_bg(c: vec4<f32>) -> vec4<f32> {
 
 // Reverse video and dim applied; concealment is not.
 fn resolve_visible_colors(cell: Cell) -> CellColors {
-    let style = cell.style_flags;
-    let reverse = (style & STYLE_REVERSE) != 0u;
-    let dim = (style & STYLE_DIM) != 0u;
-
-    var fg = unpack_rgba(cell.fg_packed);
-    var bg = unpack_rgba(cell.bg_packed);
-
-    if reverse {
-        let tmp = fg;
-        fg = materialize_default_bg(bg);
-        bg = tmp;
+    var colors = CellColors(unpack_rgba(cell.fg_packed), unpack_rgba(cell.bg_packed));
+    if (cell.style_flags & STYLE_REVERSE) != 0u {
+        colors = reverse_video(colors);
     }
-    if dim {
-        fg = vec4<f32>(fg.rgb * 0.66, fg.a);
+    if (cell.style_flags & STYLE_DIM) != 0u {
+        colors = faint(colors);
     }
-    return CellColors(fg, bg);
+    return colors;
+}
+
+// `colors` swapped for reverse video: the glyph takes the color the
+// background paints, and the background takes the glyph's color.
+fn reverse_video(colors: CellColors) -> CellColors {
+    return CellColors(materialize_default_bg(colors.bg), colors.fg);
+}
+
+// `colors` with the glyph faded for faint (STYLE_DIM) text.
+fn faint(colors: CellColors) -> CellColors {
+    return CellColors(vec4<f32>(colors.fg.rgb * 0.66, colors.fg.a), colors.bg);
 }
 
 // `colors` with the glyph taking the color the background is painted in

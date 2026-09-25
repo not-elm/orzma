@@ -607,15 +607,21 @@ mod tests {
     fn wgsl_cursor_covers_both_halves_of_a_wide_glyph() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         let body = wgsl_fn_body(src, "cursor_covers");
-        assert!(body.contains("col == params.cursor_pos.x + 1u"));
-        assert!(body.contains("col + 1u == params.cursor_pos.x"));
-        let painter = wgsl_fn_body(src, "paint_cursor");
-        assert!(painter.contains("cursor_covers(row, col)"));
-        assert!(painter.contains("bar_covers(row, col)"));
-        assert!(src.contains("fn bar_covers("));
-        assert!(painter.contains("if cursor_shape == CURSOR_SHAPE_BAR"));
-        assert!(painter.contains("on_cursor_cell = bar_covers(row, col);"));
-        assert!(painter.contains("on_cursor_cell = cursor_covers(row, col);"));
+        assert!(body.contains("col == params.cursor_pos.x + 1u && wide_right_half_at(row, col)"));
+        assert!(body.contains(
+            "col + 1u == params.cursor_pos.x && wide_right_half_at(row, params.cursor_pos.x)"
+        ));
+        assert!(
+            wgsl_fn_body(src, "wide_right_half_at")
+                .contains("is_wide_right_half(cells[idx].style_flags)")
+        );
+        assert!(wgsl_fn_body(src, "is_wide_right_half").contains("STYLE_WIDE_RIGHT_HALF"));
+        assert!(wgsl_fn_body(src, "paint_cursor").contains("stroked_cursor_covers(row, col)"));
+        let covers = wgsl_fn_body(src, "stroked_cursor_covers");
+        assert!(covers.contains("if cursor_shape() == CURSOR_SHAPE_BAR"));
+        assert!(covers.contains("return bar_covers(row, col);"));
+        assert!(covers.contains("return cursor_covers(row, col);"));
+        assert!(wgsl_fn_body(src, "bar_covers").contains("col == cursor_span_left()"));
     }
 
     /// The text of WGSL function `name`, from the end of its name to its
@@ -676,8 +682,11 @@ mod tests {
     fn wgsl_reverse_video_materializes_the_default_background_through_the_helper() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         let visible = wgsl_fn_body(src, "resolve_visible_colors");
-        assert!(visible.contains("materialize_default_bg("));
+        assert!(visible.contains("reverse_video(colors)"));
         assert!(!visible.contains("bg_padding_color"));
+        let reverse = wgsl_fn_body(src, "reverse_video");
+        assert!(reverse.contains("materialize_default_bg("));
+        assert!(!reverse.contains("bg_padding_color"));
         assert!(wgsl_fn_body(src, "materialize_default_bg").contains("params.bg_padding_color"));
     }
 
@@ -712,7 +721,8 @@ mod tests {
     #[test]
     fn wgsl_a_hollow_block_caret_does_not_fill_the_cell() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
-        assert!(wgsl_fn_body(src, "block_cursor_covers").contains("CURSOR_HOLLOW"));
+        assert!(wgsl_fn_body(src, "block_cursor_covers").contains("!cursor_is_hollow()"));
+        assert!(wgsl_fn_body(src, "cursor_is_hollow").contains("CURSOR_HOLLOW"));
     }
 
     /// Asserts that every stroked cursor — the bar, the underline and the
@@ -726,10 +736,16 @@ mod tests {
     fn wgsl_cursor_strips_take_the_guarded_fill_color() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         let painter = wgsl_fn_body(src, "paint_cursor");
-        assert!(painter.contains("let visible = resolve_visible_colors(cell);"));
-        assert!(painter.contains("let ground = tint_bg(materialize_default_bg(visible.bg));"));
-        assert!(painter.contains("let fill = guarded_fill(cursor_fill(visible.fg), ground);"));
-        assert_eq!(painter.matches("return fill;").count(), 3);
+        assert!(painter.contains("!on_cursor_stroke(col, in_cell_px)"));
+        assert!(painter.contains("return cursor_stroke_fill(cell);"));
+        let stroke = wgsl_fn_body(src, "on_cursor_stroke");
+        assert!(stroke.contains("on_hollow_outline(col, in_cell_px)"));
+        assert!(stroke.contains("CURSOR_SHAPE_UNDERLINE"));
+        assert!(stroke.contains("CURSOR_SHAPE_BAR"));
+        let fill = wgsl_fn_body(src, "cursor_stroke_fill");
+        assert!(fill.contains("let visible = resolve_visible_colors(cell);"));
+        assert!(fill.contains("let ground = tint_bg(materialize_default_bg(visible.bg));"));
+        assert!(fill.contains("return guarded_fill(cursor_fill(visible.fg), ground);"));
         assert!(wgsl_fn_body(src, "cursor_fill").contains("params.cursor_packed"));
         assert!(!src.contains("1.0 - base.rgb"));
     }
@@ -744,7 +760,11 @@ mod tests {
     #[test]
     fn wgsl_cursor_fill_is_guarded_against_the_ground() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
-        let block = wgsl_fn_body(src, "resolve_painted_colors");
+        assert!(
+            wgsl_fn_body(src, "resolve_painted_colors")
+                .contains("colors = under_block_cursor(colors);")
+        );
+        let block = wgsl_fn_body(src, "under_block_cursor");
         assert!(block.contains("let ground = materialize_default_bg(colors.bg);"));
         assert!(block.contains("let fill = guarded_fill(cursor_fill(colors.fg), ground);"));
         let guard = wgsl_fn_body(src, "guarded_fill");
@@ -765,7 +785,7 @@ mod tests {
     #[test]
     fn wgsl_block_cursor_paints_a_glyph_that_melts_into_its_ground_in_the_fill() {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
-        let block = wgsl_fn_body(src, "resolve_painted_colors");
+        let block = wgsl_fn_body(src, "under_block_cursor");
         assert!(block.contains(
             "let glyph_melts = contrast_ratio(colors.fg.rgb, ground.rgb) < MIN_CURSOR_CONTRAST;"
         ));
@@ -783,9 +803,9 @@ mod tests {
         let src = include_str!("shaders/terminal_ui_material.wgsl");
         assert!(src.contains("fn cursor_span_left("));
         assert!(src.contains("fn cursor_span_right("));
-        let painter = wgsl_fn_body(src, "paint_cursor");
-        assert!(painter.contains("col == cursor_span_left()"));
-        assert!(painter.contains("col == cursor_span_right()"));
+        let outline = wgsl_fn_body(src, "on_hollow_outline");
+        assert!(outline.contains("col == cursor_span_left()"));
+        assert!(outline.contains("col == cursor_span_right()"));
     }
 
     const SEEDED_ATLAS: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000003");
