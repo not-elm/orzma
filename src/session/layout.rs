@@ -5,7 +5,7 @@
 use crate::surface::geometry::{cell_pitch_phys, cells_for};
 use bevy::ecs::schedule::common_conditions::on_message;
 use bevy::prelude::*;
-use bevy::window::{PrimaryWindow, WindowResized};
+use bevy::window::{PrimaryWindow, WindowResized, WindowScaleFactorChanged};
 use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::{OrzmuxConnection, PaneGeometry};
 use orzma_tty::CellPixels;
@@ -19,6 +19,7 @@ impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastGeometry>()
             .add_message::<WindowResized>()
+            .add_message::<WindowScaleFactorChanged>()
             .add_systems(
                 Update,
                 send_window_geometry
@@ -27,7 +28,8 @@ impl Plugin for LayoutPlugin {
                     .run_if(
                         not(resource_exists::<PaneGeometry>)
                             .or_else(resource_exists_and_changed::<TerminalCellMetricsResource>)
-                            .or_else(on_message::<WindowResized>),
+                            .or_else(on_message::<WindowResized>)
+                            .or_else(on_message::<WindowScaleFactorChanged>),
                     ),
             );
     }
@@ -363,5 +365,55 @@ mod tests {
         app.update();
 
         assert!(!app.world().contains_resource::<PaneGeometry>());
+    }
+
+    /// Asserts that a scale-factor change alone refreshes the scale factor
+    /// `PaneGeometry` records, while the cell grid stays as it was.
+    ///
+    /// Case: the user drags the window to a display with a different scale
+    /// factor, and neither the rounded font size nor the window's physical
+    /// size changes.
+    #[test]
+    fn a_scale_factor_change_alone_updates_pane_geometry() {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(metrics(8.0, 16.0));
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: WindowResolution::new(800, 600),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<PaneGeometry>().scale_factor, 1.0);
+        assert_eq!(
+            commands.try_iter().count(),
+            1,
+            "the initial geometry is sent once"
+        );
+
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the primary window")
+            .resolution
+            .set_scale_factor(1.25);
+        app.world_mut().write_message(WindowScaleFactorChanged {
+            window,
+            scale_factor: 1.25,
+        });
+        app.update();
+        assert_eq!(app.world().resource::<PaneGeometry>().scale_factor, 1.25);
+        assert!(
+            commands.try_iter().next().is_none(),
+            "an unchanged cell grid sends no Resize"
+        );
     }
 }
