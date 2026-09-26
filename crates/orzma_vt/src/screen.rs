@@ -857,8 +857,10 @@ impl Screen {
     /// cell, since the rows moved under it.
     ///
     /// A vi cursor inside the shifted rows moves up with them, stopping at
-    /// the first shifted row, or at the viewport's top row when the shift
-    /// feeds history, and stays inside the viewport.
+    /// the first shifted row. When the shift feeds history, a vi cursor on
+    /// a history row the viewport shows moves up as well, and the vi cursor
+    /// stops at the viewport's top row instead. The vi cursor stays inside
+    /// the viewport.
     fn shift_rows_up(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
@@ -1286,7 +1288,8 @@ impl Screen {
         self.grid.size()
     }
 
-    /// Number of history rows this screen retains.
+    /// Number of history rows this screen retains, saturating at
+    /// `u32::MAX`.
     pub fn history_len(&self) -> u32 {
         u32::try_from(self.grid.history_len()).unwrap_or(u32::MAX)
     }
@@ -1599,7 +1602,8 @@ impl Screen {
     /// stops resolving so the next [`Self::evict_lost_anchors`] names it,
     /// and a viewport whose top row is dropped moves to the oldest history
     /// row. A vi cursor whose row is dropped moves to the viewport's
-    /// top-left cell.
+    /// top-left cell, and a vi cursor that followed its text is then
+    /// pulled back inside the viewport.
     ///
     /// # Invariants
     ///
@@ -1945,8 +1949,9 @@ impl Screen {
 /// its rows.
 impl Screen {
     /// Anchors a new selection at `cell`, replacing any active one;
-    /// returns whether the state changed. A cell outside the grid is
-    /// rejected and leaves the current selection untouched.
+    /// returns whether the selection state changed or, in vi mode, whether
+    /// the vi cursor moved. A cell outside the grid is rejected and leaves
+    /// the current selection untouched.
     ///
     /// In vi mode the vi cursor also moves to `cell`.
     pub fn start_selection(
@@ -1965,8 +1970,9 @@ impl Screen {
     }
 
     /// Moves the active selection's moving end to `cell`; returns
-    /// whether it moved. It is a no-op without an active selection or for
-    /// a cell outside the grid.
+    /// whether the selection changed or, in vi mode, whether the vi cursor
+    /// moved. It is a no-op without an active selection or for a cell
+    /// outside the grid.
     ///
     /// In vi mode the vi cursor also moves to `cell`, and the selection
     /// covers both of its end cells.

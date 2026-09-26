@@ -192,20 +192,30 @@ pub trait Vt {
     fn resize(&mut self, size: GridSize) -> Option<ResizeChanged>;
 
     /// Applies the viewport motion; returns whether the viewport moved, or
-    /// in vi mode whether the viewport or the vi cursor moved. Only a real
-    /// move of the viewport stages (full) damage.
+    /// in vi mode whether the viewport or the vi cursor moved or the
+    /// selection followed the vi cursor. Only a real move of the viewport
+    /// stages (full) damage.
     ///
-    /// In vi mode a line motion keeps the vi cursor's row and pushes it
-    /// back inside the viewport; a page or half-page motion moves it by the
-    /// same number of rows onto that row's first non-blank cell; `Top` and
-    /// `Bottom` move it to the first non-blank cell of the oldest row and
-    /// of the bottom row.
+    /// In vi mode a line motion leaves the vi cursor on its line and
+    /// column, pulling it onto the nearest viewport edge row when that line
+    /// scrolls out of view. A page or half-page motion moves the vi cursor
+    /// by the same number of rows onto that row's first non-blank cell, or
+    /// onto its first column when the row is blank. `Top` and `Bottom` put
+    /// the vi cursor on the oldest row and on the bottom row and apply
+    /// [`ViMotion::FirstOccupied`] there, `Bottom` twice: the vi cursor
+    /// lands on the row's first non-blank cell, on the last column when the
+    /// row is blank, and, for `Bottom`, on the first non-blank cell of the
+    /// logical line when the bottom row continues a wrapped line.
+    ///
+    /// In vi mode a selection that covers a cell then moves its moving end
+    /// onto the vi cursor's cell, covering both of its end cells.
     fn scroll(&mut self, scroll: Scroll) -> bool;
 
     /// Anchors a new selection at `cell`, replacing any active one;
-    /// returns whether the selection state changed. A cell outside the
-    /// grid (a line already evicted from history, or a column past the
-    /// width) is rejected, leaving the current selection untouched.
+    /// returns whether the selection state changed or, in vi mode, whether
+    /// the vi cursor moved. A cell outside the grid (a line already evicted
+    /// from history, or a column past the width) is rejected, leaving the
+    /// current selection untouched.
     ///
     /// The return value reports the stored state, not the projection:
     /// a start whose projection is empty still returns `true`, and it
@@ -215,11 +225,13 @@ pub trait Vt {
     fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool;
 
     /// Moves the active selection's moving end to `cell`; returns
-    /// whether the moving end changed. It is a no-op returning `false`
-    /// when there is no active selection or `cell` is outside the grid.
+    /// whether the selection changed or, in vi mode, whether the vi cursor
+    /// moved. It is a no-op returning `false` when there is no active
+    /// selection or `cell` is outside the grid.
     ///
-    /// Two cells naming the same boundary — the right half of one and
-    /// the left half of the next — are the same moving end.
+    /// Outside vi mode, two cells naming the same boundary — the right
+    /// half of one and the left half of the next — are the same moving
+    /// end.
     ///
     /// In vi mode the vi cursor also moves to `cell`, and the selection
     /// covers both of its end cells.
@@ -264,19 +276,19 @@ pub trait Vt {
     /// enough to show it; returns whether anything changed. Returns
     /// `false` outside vi mode.
     ///
-    /// Only a move of the viewport stages (full) damage.
+    /// A selection that covers a cell then moves its moving end onto the
+    /// vi cursor's cell, covering both of its end cells. Only a move of the
+    /// viewport stages (full) damage.
     fn vi_motion(&mut self, motion: ViMotion) -> bool;
 
     /// Starts, re-kinds, or clears a selection of `kind` at the vi cursor;
     /// returns whether the selection changed. Returns `false` outside vi
     /// mode.
     ///
-    /// A selection of the same kind that covers a cell is cleared; one of
-    /// another kind switches to `kind` and keeps its anchor; otherwise a
-    /// new selection starts on the vi cursor's cell, which it covers at
-    /// once. In vi mode a selection covers both of its end cells, and after
-    /// every motion or scroll a selection that covers a cell moves its far
-    /// end onto the vi cursor.
+    /// A selection of the same kind that covers a cell is cleared. One of
+    /// another kind switches to `kind`, keeping its anchor and its moving
+    /// end, and covers both of its end cells. Otherwise a new selection
+    /// starts on the vi cursor's cell, which it covers at once.
     fn toggle_vi_selection(&mut self, kind: SelectionKind) -> bool;
 
     /// The vi cursor; `None` outside vi mode.

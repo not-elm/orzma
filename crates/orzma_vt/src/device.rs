@@ -129,8 +129,14 @@ impl DeviceState {
         self.active_screen_mut().scroll(scroll)
     }
 
-    /// Enters or leaves vi mode on the screen on show, as
-    /// [`Screen::enter_vi_mode`] and [`Screen::exit_vi_mode`] do.
+    /// Enters or leaves vi mode on the screen on show; returns what the
+    /// next frame owes for it, [`ViewChange::Unchanged`] when that mode was
+    /// already in force.
+    ///
+    /// Entering drops the selection and seats the vi cursor on the write
+    /// cursor, or on the viewport's top-left cell when the viewport is
+    /// scrolled back past the write cursor. Leaving drops the vi cursor and
+    /// the selection and returns the viewport to the live tail.
     pub fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> ViewChange {
         let screen = self.active_screen_mut();
         match switch {
@@ -149,22 +155,36 @@ impl DeviceState {
         self.active_screen().vi_cursor()
     }
 
-    /// Moves the vi cursor of the screen on show by `motion`, as
-    /// [`Screen::vi_motion`] does, against the device's word separators.
+    /// Moves the vi cursor of the screen on show by `motion`, against the
+    /// device's word separators, and scrolls the viewport just far enough
+    /// to show it; returns what the next frame owes for it,
+    /// [`ViewChange::Unchanged`] outside vi mode.
+    ///
+    /// A selection that covers a cell then moves its moving end onto the vi
+    /// cursor's cell, covering both of its end cells.
     pub fn vi_motion(&mut self, motion: ViMotion) -> ViewChange {
         let screen = self.screens.get_mut(self.modes.active_screen);
         screen.vi_motion(motion, &self.semantic_escape_chars)
     }
 
-    /// Applies a viewport motion in vi mode to the screen on show, as
-    /// [`Screen::vi_scroll`] does.
+    /// Applies a viewport motion to the screen on show; returns what the
+    /// next frame owes for it.
+    ///
+    /// In vi mode the vi cursor moves with the viewport, and a selection
+    /// that covers a cell then moves its moving end onto the vi cursor's
+    /// cell, covering both of its end cells.
     pub fn vi_scroll(&mut self, scroll: Scroll) -> ViewChange {
         let screen = self.screens.get_mut(self.modes.active_screen);
         screen.vi_scroll(scroll, &self.semantic_escape_chars)
     }
 
-    /// Toggles a vi-mode selection of `kind` on the screen on show, as
-    /// [`Screen::toggle_vi_selection`] does.
+    /// Starts, re-kinds, or clears a selection of `kind` at the vi cursor
+    /// of the screen on show; returns whether the selection changed, and
+    /// `false` outside vi mode.
+    ///
+    /// A selection of the same kind that covers a cell is cleared, and one
+    /// of another kind switches to `kind`. Otherwise a new selection starts
+    /// on the vi cursor's cell.
     pub fn toggle_vi_selection(&mut self, kind: SelectionKind) -> bool {
         self.active_screen_mut().toggle_vi_selection(kind)
     }
@@ -747,7 +767,8 @@ impl DeviceState {
     ///
     /// Vi mode stays on across the flip: the vi cursor leaves the screen
     /// that was shown and is seated on the screen now shown, on its write
-    /// cursor.
+    /// cursor, or on its viewport's top-left cell when that screen is
+    /// scrolled back past the write cursor.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
         let vi_mode = self.active_screen_mut().drop_vi_cursor();
         self.modes.active_screen = to;

@@ -559,17 +559,22 @@ feature. `toggle-rect-selection` (`Ctrl+V`) currently toggles a line-wise
 selection, because rectangular selection is not implemented yet. Every other
 action works.
 
-The mouse keeps working in vi mode: a click moves the vi cursor, a drag
-selects text (and moves the vi cursor to where the drag ends), and the wheel
-scrolls the scrollback, even while a program such as nvim tracks the mouse.
-A selection started with the mouse can be extended with the motion keys, and
-the other way round.
+The mouse keeps working in vi mode, even while a program such as nvim tracks
+the mouse: a click moves the vi cursor, and a drag selects text (and moves
+the vi cursor to where the drag ends). On the primary screen (the shell), the
+wheel scrolls the scrollback. On the alternate screen, where full-screen
+programs such as nvim and less run, the wheel sends arrow keys to the program
+(with alternate scroll on, the default), as it does outside vi mode for a
+program that does not track the mouse. A selection started with the mouse can
+be extended with the motion keys.
 
 ### Escape semantics
 
 By default, `Escape` is bound to the `exit` action, which leaves vi mode
-entirely. To deselect a selection in orzma without leaving vi mode, press `v`
-(toggle-selection is a toggle: with a selection active, it clears it).
+entirely. To deselect a selection in orzma without leaving vi mode, press the
+toggle key that matches its kind: `v` clears a character-wise selection and
+`V` a line-wise one. The other key switches the selection to that key's kind
+instead of clearing it.
 
 Keys not bound to any `[vi-mode]` action are swallowed while vi mode is
 active (they never reach the pane) — this includes stock `copy-mode-vi` keys

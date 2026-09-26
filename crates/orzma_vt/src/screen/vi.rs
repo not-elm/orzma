@@ -267,9 +267,10 @@ impl Screen {
         (GridLine(-offset), GridLine(rows - 1 - offset))
     }
 
-    /// Enters vi mode: drops the selection and seats the vi cursor as
-    /// [`Self::seat_vi_cursor`] does; returns `false` when already in vi
-    /// mode.
+    /// Enters vi mode: drops the selection and seats the vi cursor on the
+    /// write cursor, or on the viewport's top-left cell when the viewport
+    /// is scrolled back past the write cursor. Returns `true` when it
+    /// entered vi mode and `false` when vi mode was already on.
     pub fn enter_vi_mode(&mut self) -> bool {
         if self.is_vi_mode() {
             return false;
@@ -321,12 +322,17 @@ impl Screen {
     /// Applies a viewport motion in vi mode and moves the vi cursor with
     /// it.
     ///
-    /// A line motion keeps the vi cursor's row and pushes the cursor back
-    /// inside the viewport. A page or half-page motion moves the vi cursor
-    /// by the same number of rows onto that row's first non-blank cell.
-    /// `Top` and `Bottom` move it to the first non-blank cell of the oldest
-    /// row and of the bottom row. Outside vi mode it moves only the
-    /// viewport.
+    /// A line motion leaves the vi cursor on its line and column, pulling
+    /// it onto the nearest viewport edge row when that line scrolls out of
+    /// view. A page or half-page motion moves the vi cursor by the same
+    /// number of rows onto that row's first non-blank cell, or onto its
+    /// first column when the row is blank. `Top` and `Bottom` put the vi
+    /// cursor on the oldest row and on the bottom row and apply
+    /// [`ViMotion::FirstOccupied`] there, `Bottom` twice: the vi cursor
+    /// lands on the row's first non-blank cell, on the last column when the
+    /// row is blank, and, for `Bottom`, on the first non-blank cell of the
+    /// logical line when the bottom row continues a wrapped line. Outside
+    /// vi mode it moves only the viewport.
     ///
     /// A selection that covers a cell follows the vi cursor, covering both
     /// of its end cells. The damage is [`DamageSpan::Full`] exactly when

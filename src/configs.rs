@@ -104,7 +104,8 @@ pub(crate) fn cursor_policy(config: &CursorConfig) -> CursorPolicy {
 }
 
 /// The word separators the `[selection]` section selects for the semantic
-/// vi-mode motions.
+/// vi-mode motions; a missing `semantic_escape_chars` key gives the
+/// terminal's default separators.
 pub(crate) fn semantic_escape_chars(config: &SelectionConfig) -> SemanticEscapeChars {
     config
         .semantic_escape_chars()
