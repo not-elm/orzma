@@ -1,12 +1,29 @@
 <body style="margin:0;padding:10px;background:#13131a;color:#8be9fd;font:14px sans-serif">
-  <div id="tick">waiting for tick…</div>
+  <div id="sum">add: waiting…</div>
+  <div id="quotient">divide: waiting…</div>
   <script>
-    window.orzma.on('tick', function (n) {
-      document.getElementById('tick').textContent = 'tick #' + n;
-    });
-    var i = 0;
-    setInterval(function () {
-      window.orzma.emit('hello', { message: 'from page #' + (++i) });
-    }, 1000);
+    const sum = document.getElementById('sum');
+    const quotient = document.getElementById('quotient');
+    let n = 0;
+
+    const tick = () => {
+      n += 1;
+      const a = n;
+      window.orzma.call('add', { a, b: 2 }).then((value) => {
+        sum.textContent = `add(${a}, 2) = ${value}`;
+      });
+      const b = a % 3;
+      window.orzma.call('divide', { a, b }).then(
+        (value) => {
+          quotient.textContent = `divide(${a}, ${b}) = ${value}`;
+        },
+        (error) => {
+          quotient.textContent = `divide(${a}, ${b}) failed: ${error.message}`;
+        },
+      );
+    };
+
+    tick();
+    setInterval(tick, 1000);
   </script>
 </body>

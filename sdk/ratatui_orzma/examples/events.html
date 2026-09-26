@@ -1,0 +1,13 @@
+<body style="margin:0;padding:10px;background:#13131a;color:#8be9fd;font:14px sans-serif">
+  <div id="tick">waiting for tick…</div>
+  <script>
+    window.orzma.on('tick', (n) => {
+      document.getElementById('tick').textContent = `tick #${n}`;
+    });
+    let i = 0;
+    setInterval(() => {
+      i += 1;
+      window.orzma.emit('hello', { message: `from page #${i}` });
+    }, 1000);
+  </script>
+</body>
