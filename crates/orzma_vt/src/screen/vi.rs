@@ -459,9 +459,10 @@ impl Screen {
         let Some(end) = self.selection_end(point, CellSide::Left) else {
             return false;
         };
-        let extended = self.selection.extend(end);
-        let included = self.include_selection_cells();
-        extended || included
+        let before = self.selection.ends();
+        let _ = self.selection.extend(end);
+        let _ = self.include_selection_cells();
+        self.selection.ends() != before
     }
 }
 

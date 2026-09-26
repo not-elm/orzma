@@ -621,6 +621,23 @@ fn a_motion_extends_the_selection_to_the_vi_cursor() {
     assert_eq!(screen.selection_text().as_deref(), Some("ello"));
 }
 
+/// Asserts that a motion that cannot move the vi cursor leaves the
+/// selection as it was and reports no change.
+///
+/// Case: the user starts a selection on the first column and presses `h`,
+/// which cannot move.
+#[test]
+fn a_motion_that_cannot_move_leaves_the_selection_unchanged() {
+    let mut screen = hello_screen();
+    screen.vi.set(point(0, 0));
+    screen.toggle_vi_selection(SelectionKind::Simple);
+    assert_eq!(
+        screen.vi_motion(ViMotion::Left, &chars()),
+        ViewChange::Unchanged
+    );
+    assert_eq!(screen.selection_text().as_deref(), Some("h"));
+}
+
 /// Asserts that a backward motion keeps the anchor's cell in the
 /// selection.
 ///
