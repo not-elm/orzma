@@ -365,6 +365,39 @@ pub enum WebviewCommand {
         /// The mount the user focused.
         mount: Option<MountId>,
     },
+    /// The webview of `mount` produced its first frame on screen.
+    Composited {
+        /// The mount that composited.
+        mount: MountId,
+    },
+    /// The page of `mount` called `window.orzma.call(method, params)` as
+    /// `page_req`. The host answers with a `PageReply`, now or later.
+    PageCall {
+        /// The mount whose page called.
+        mount: MountId,
+        /// The page's own id for the call.
+        page_req: String,
+        /// The method name.
+        method: String,
+        /// The call parameters.
+        params: Value,
+    },
+    /// The page of `mount` called `window.orzma.emit(event, payload)`.
+    PageEmit {
+        /// The mount whose page emitted.
+        mount: MountId,
+        /// The event name.
+        event: String,
+        /// The event payload.
+        payload: Value,
+    },
+    /// The top-level URL of the webview of `mount` changed to `url`.
+    UrlChanged {
+        /// The mount whose webview navigated.
+        mount: MountId,
+        /// The new URL.
+        url: String,
+    },
 }
 
 #[cfg(test)]

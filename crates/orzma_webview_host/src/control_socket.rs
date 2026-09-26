@@ -1,13 +1,14 @@
 //! The channel the control socket's listener feeds the host through: the
 //! events it sends, the id of each connection, and the socket's path.
 
-use crate::boundary::HandleId;
+use crate::boundary::{ForwardChord, HandleId};
 use crate::error::RegisterError;
 use crate::host::ValidatedRegistration;
-use crate::protocol::ServerMsg;
+use crate::protocol::{NavAction, ServerMsg};
 #[cfg(any(test, feature = "test-support"))]
 use crossbeam_channel::unbounded;
 use crossbeam_channel::{Receiver, Sender};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// The id the listener gives one accepted connection. Never reused within
@@ -98,6 +99,48 @@ pub enum ControlEvent {
         connection: ConnectionId,
         /// The instance to focus in its wire spelling, or `None` to blur.
         instance: Option<String>,
+    },
+    /// A program's reply to a host-initiated `call`.
+    Reply {
+        /// The connection that sent the line.
+        connection: ConnectionId,
+        /// The global reqId the host assigned to the call.
+        req_id: String,
+        /// Whether the call succeeded.
+        ok: bool,
+        /// The success value.
+        value: Value,
+        /// The error message when `ok` is false.
+        error: Option<String>,
+    },
+    /// A program-initiated event for the mounted pages of `handle`.
+    Emit {
+        /// The connection that sent the line.
+        connection: ConnectionId,
+        /// The handle whose pages receive the event.
+        handle: HandleId,
+        /// The event name.
+        event: String,
+        /// The event payload.
+        payload: Value,
+    },
+    /// A socket `navigate`.
+    Navigate {
+        /// The connection that sent the line.
+        connection: ConnectionId,
+        /// The instance, in its wire spelling.
+        instance: String,
+        /// What to do.
+        action: NavAction,
+    },
+    /// A `set_forward_keys`.
+    SetForwardKeys {
+        /// The connection that sent the line.
+        connection: ConnectionId,
+        /// The handle whose chords are replaced.
+        handle: HandleId,
+        /// The complete new chord list.
+        keys: Vec<ForwardChord>,
     },
 }
 

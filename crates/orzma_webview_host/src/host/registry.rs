@@ -1,7 +1,7 @@
 //! The registrations the host holds: each handle's content and owner, and
 //! every instance minted for it.
 
-use crate::boundary::HandleId;
+use crate::boundary::{ForwardChord, HandleId};
 use crate::control_socket::ConnectionId;
 use crate::error::{Refusal, WebviewHostError, WebviewHostResult};
 use crate::host::PaneKey;
@@ -128,6 +128,14 @@ impl<P: PaneKey> Registry<P> {
         registration.instances.push(instance);
         self.by_instance.insert(instance, handle.clone());
         Ok(())
+    }
+
+    /// Replaces the forward-key chords of `handle`; an unknown handle is
+    /// left alone.
+    pub fn replace_forward_keys(&mut self, handle: &HandleId, keys: Vec<ForwardChord>) {
+        if let Some(registration) = self.by_handle.get_mut(handle) {
+            registration.content.set_forward_keys(keys);
+        }
     }
 
     /// Removes the registration of `handle`, and every instance with it.

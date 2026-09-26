@@ -3,7 +3,7 @@
 use super::*;
 use crate::boundary::{ForwardChord, MountSpec, WebviewAsset};
 use crate::error::WebviewHostError;
-use crate::protocol::RegisterKind;
+use crate::protocol::{NavAction, RegisterKind};
 use crossbeam_channel::{Receiver, bounded, unbounded};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -177,6 +177,33 @@ fn focused_fixture() -> (Fixture, HandleId, InstanceId, MountId) {
     let (handle, instance) = fixture.registered(1, inline());
     let mount = fixture.mounted(1, instance);
     (fixture, handle, instance, mount)
+}
+
+fn command(fixture: &mut Fixture, command: WebviewCommand) -> WebviewHostResult<HostOutput<u32>> {
+    fixture.host.command(command)
+}
+
+fn page_call(mount: MountId) -> WebviewCommand {
+    WebviewCommand::PageCall {
+        mount,
+        page_req: "p0".into(),
+        method: "save".into(),
+        params: json!([1, 2]),
+    }
+}
+
+fn reply(from: u64, req_id: &str, value: Value) -> ControlEvent {
+    ControlEvent::Reply {
+        connection: connection(from),
+        req_id: req_id.into(),
+        ok: true,
+        value,
+        error: None,
+    }
+}
+
+fn compositing(handle: &HandleId, instance: InstanceId, active: bool) -> Value {
+    json!({"op": "compositing", "handle": handle.as_str(), "instance": instance.to_string(), "active": active})
 }
 
 /// Asserts that a bound pane's environment carries the socket path and a
@@ -1174,4 +1201,536 @@ fn a_display_only_url_view_gets_focus_pushes() {
     let mount = fixture.mounted(1, instance);
     let _ = gui_focus(&mut fixture, Some(mount));
     assert_eq!(fixture.pushes(1), [focus_changed(&handle, instance, true)]);
+}
+
+/// Asserts that a page call is forwarded to the owner under a fresh global
+/// reqId, and that the owner's reply settles it for the page of that mount.
+///
+/// Case: a page calls `save` and its program answers with a value.
+#[test]
+fn a_page_call_is_forwarded_and_its_reply_settles_it() {
+    let (mut fixture, handle, instance, mount) = focused_fixture();
+    let output = command(&mut fixture, page_call(mount)).expect("a page call never fails");
+    assert_eq!(output, HostOutput::default());
+    assert_eq!(
+        fixture.pushes(1),
+        [
+            json!({"op": "call", "handle": handle.as_str(), "instance": instance.to_string(), "reqId": "0", "method": "save", "params": [1, 2]})
+        ]
+    );
+    let settled = fixture
+        .control(reply(1, "0", json!(7)))
+        .expect("a reply never fails");
+    assert_eq!(
+        settled.events(),
+        [WebviewEvent::PageReply {
+            mount,
+            page_req: "p0".into(),
+            outcome: Ok(json!(7)),
+        }]
+    );
+}
+
+/// Asserts that a reply from a connection that does not own the call
+/// settles nothing and leaves the call pending for its owner.
+///
+/// Case: a hostile program replays another program's guessable reqId before
+/// the real reply arrives.
+#[test]
+fn a_foreign_reply_leaves_the_call_pending() {
+    let (mut fixture, _, _, mount) = focused_fixture();
+    fixture.connect_pane(2, 2);
+    let _ = command(&mut fixture, page_call(mount));
+    let foreign = fixture
+        .control(reply(2, "0", json!("forged")))
+        .expect("never fails");
+    assert_eq!(foreign, HostOutput::default());
+    let owner = fixture
+        .control(reply(1, "0", json!(7)))
+        .expect("never fails");
+    assert_eq!(owner.events().len(), 1);
+}
+
+/// Asserts that a page call from a mount without the bridge is refused with
+/// `no_owner`, and one whose program cannot be written to with
+/// `owner_unavailable`.
+///
+/// Case: a remote page without the bridge calls `window.orzma`, and a page
+/// calls while its program's connection is going away.
+#[test]
+fn a_page_call_without_a_bridge_or_writer_is_refused_locally() {
+    let mut fixture = Fixture::new();
+    fixture.connect_pane(1, 1);
+    let (_, remote) = fixture.registered(1, url(false));
+    let remote_mount = fixture.mounted(1, remote);
+    let output = command(&mut fixture, page_call(remote_mount)).expect("never fails");
+    assert_eq!(
+        output.events(),
+        [WebviewEvent::PageReply {
+            mount: remote_mount,
+            page_req: "p0".into(),
+            outcome: Err("no_owner".into()),
+        }]
+    );
+    let (_, inline_instance) = fixture.registered(1, inline());
+    let inline_mount = fixture.mounted(1, inline_instance);
+    drop(fixture.lines.remove(&1));
+    let output = command(&mut fixture, page_call(inline_mount)).expect("never fails");
+    assert_eq!(
+        output.events(),
+        [WebviewEvent::PageReply {
+            mount: inline_mount,
+            page_req: "p0".into(),
+            outcome: Err("owner_unavailable".into()),
+        }]
+    );
+}
+
+/// Asserts that a reply to a call made by a mount that has since ended is
+/// dropped, even after the same placement is mounted again.
+///
+/// Case: the program unmounts and re-mounts its placement while the old
+/// page's call is still in flight, then answers it.
+#[test]
+fn a_reply_for_an_ended_mount_is_dropped() {
+    let (mut fixture, _, instance, mount) = focused_fixture();
+    let _ = command(&mut fixture, page_call(mount));
+    let _ = fixture.host.placement_signal(
+        1,
+        PlacementSignal::Unmounted {
+            instance: Some(instance),
+        },
+    );
+    let remounted = fixture.mounted(1, instance);
+    assert_ne!(remounted, mount);
+    let late = fixture
+        .control(reply(1, "0", json!(7)))
+        .expect("never fails");
+    assert_eq!(late, HostOutput::default());
+}
+
+/// Asserts that a page call carrying a mount that has ended is refused with
+/// `no_owner` and never reaches the program, even though the placement is
+/// mounted again.
+///
+/// Case: the old page's call leaves the GUI just before the unmount and
+/// re-mount reach the host.
+#[test]
+fn a_call_from_an_ended_mount_is_refused() {
+    let (mut fixture, _, instance, mount) = focused_fixture();
+    let _ = fixture.host.placement_signal(
+        1,
+        PlacementSignal::Unmounted {
+            instance: Some(instance),
+        },
+    );
+    let _ = fixture.mounted(1, instance);
+    let output = command(&mut fixture, page_call(mount)).expect("never fails");
+    assert_eq!(
+        output.events(),
+        [WebviewEvent::PageReply {
+            mount,
+            page_req: "p0".into(),
+            outcome: Err("no_owner".into()),
+        }]
+    );
+    assert!(fixture.pushes(1).is_empty());
+}
+
+/// Asserts that a disconnect rejects every call pending for that connection
+/// with `owner_disconnected` before ending its mounts.
+///
+/// Case: a program exits while its page waits on a call.
+#[test]
+fn a_disconnect_rejects_pending_calls_first() {
+    let (mut fixture, handle, _, mount) = focused_fixture();
+    let _ = command(&mut fixture, page_call(mount));
+    let output = fixture
+        .control(ControlEvent::Disconnect {
+            connection: connection(1),
+        })
+        .expect("never fails");
+    assert_eq!(
+        output.events(),
+        [
+            WebviewEvent::PageReply {
+                mount,
+                page_req: "p0".into(),
+                outcome: Err("owner_disconnected".into()),
+            },
+            WebviewEvent::Unmounted {
+                mounts: vec![mount]
+            },
+            WebviewEvent::AssetReleased { handle },
+        ]
+    );
+}
+
+/// Asserts that a program's `emit` reaches every mounted page of its handle
+/// and no unmounted placement, and is refused for an unbridged or foreign
+/// handle.
+///
+/// Case: a program pushes a tick to its two visible pages while a third
+/// placement is off screen, and another program tries the same handle.
+#[test]
+fn a_program_emit_reaches_every_mounted_page_of_its_handle() {
+    let (mut fixture, handle, _, first) = focused_fixture();
+    fixture.connect_pane(2, 2);
+    let ServerMsg::Instanced { instance, .. } = fixture.new_instance(1, &handle) else {
+        panic!("expected Instanced");
+    };
+    let second = fixture.mounted(1, instance.parse().unwrap());
+    let _ = fixture.new_instance(1, &handle);
+    let emit = |from: u64, handle: &HandleId| ControlEvent::Emit {
+        connection: connection(from),
+        handle: handle.clone(),
+        event: "tick".into(),
+        payload: json!({"n": 1}),
+    };
+    let output = fixture
+        .control(emit(1, &handle))
+        .expect("an owned emit is accepted");
+    let mut mounts: Vec<MountId> = output
+        .events()
+        .iter()
+        .map(|event| match event {
+            WebviewEvent::PageEvent {
+                mount,
+                event,
+                payload,
+            } => {
+                assert_eq!((event.as_str(), payload), ("tick", &json!({"n": 1})));
+                *mount
+            }
+            other => panic!("expected PageEvent, got {other:?}"),
+        })
+        .collect();
+    mounts.sort();
+    assert_eq!(mounts, [first, second]);
+    assert_eq!(
+        refusal(fixture.control(emit(2, &handle))),
+        Refusal::NotOwner
+    );
+    let (remote, _) = fixture.registered(1, url(false));
+    assert_eq!(
+        refusal(fixture.control(emit(1, &remote))),
+        Refusal::NotBridged
+    );
+}
+
+/// Asserts that a page's `emit` is forwarded to its program, and refused
+/// when its name is empty or the page has no bridge.
+///
+/// Case: a page emits `hello`, a buggy page emits an empty name, and a
+/// remote page without the bridge emits anything.
+#[test]
+fn a_page_emit_is_forwarded_to_its_program() {
+    let (mut fixture, handle, _, mount) = focused_fixture();
+    let page_emit = |mount: MountId, event: &str| WebviewCommand::PageEmit {
+        mount,
+        event: event.into(),
+        payload: json!({"message": "hi"}),
+    };
+    let output = command(&mut fixture, page_emit(mount, "hello")).expect("forwarded");
+    assert_eq!(output, HostOutput::default());
+    assert_eq!(
+        fixture.pushes(1),
+        [
+            json!({"op": "event", "handle": handle.as_str(), "event": "hello", "payload": {"message": "hi"}})
+        ]
+    );
+    assert!(matches!(
+        command(&mut fixture, page_emit(mount, "")),
+        Err(WebviewHostError::Refused(Refusal::EmptyEventName))
+    ));
+    let (_, remote) = fixture.registered(1, url(false));
+    let remote_mount = fixture.mounted(1, remote);
+    assert!(matches!(
+        command(&mut fixture, page_emit(remote_mount, "hello")),
+        Err(WebviewHostError::Refused(Refusal::NotBridged))
+    ));
+}
+
+/// Asserts that a URL change of a bridged remote page is reported to its
+/// program as a `urlChanged` call whose reply settles nothing.
+///
+/// Case: the user follows a link inside an embedded browser page.
+#[test]
+fn a_url_change_of_a_bridged_remote_page_is_reported() {
+    let mut fixture = Fixture::new();
+    fixture.connect_pane(1, 1);
+    let (handle, instance) = fixture.registered(1, url(true));
+    let mount = fixture.mounted(1, instance);
+    let output = command(
+        &mut fixture,
+        WebviewCommand::UrlChanged {
+            mount,
+            url: "https://example.com/next".into(),
+        },
+    )
+    .expect("reported");
+    assert_eq!(output, HostOutput::default());
+    assert_eq!(
+        fixture.pushes(1),
+        [
+            json!({"op": "call", "handle": handle.as_str(), "instance": instance.to_string(), "reqId": "0", "method": "urlChanged", "params": {"url": "https://example.com/next"}})
+        ]
+    );
+    let answer = fixture
+        .control(reply(1, "0", Value::Null))
+        .expect("never fails");
+    assert_eq!(answer, HostOutput::default());
+}
+
+/// Asserts that a URL change of an `orzma://` page is not reported.
+///
+/// Case: an inline page jumps to an anchor inside itself.
+#[test]
+fn a_url_change_of_an_orzma_page_is_not_reported() {
+    let (mut fixture, _, _, mount) = focused_fixture();
+    assert!(matches!(
+        command(
+            &mut fixture,
+            WebviewCommand::UrlChanged {
+                mount,
+                url: "orzma://h/index.html#section".into(),
+            },
+        ),
+        Err(WebviewHostError::Refused(Refusal::NotUrlView))
+    ));
+    assert!(fixture.pushes(1).is_empty());
+}
+
+/// Asserts that a navigation reaches the mounted page after validation:
+/// history actions for any page, a normalized `To` for a remote page, and a
+/// refusal for anything else.
+///
+/// Case: an embedded browser UI goes back, reloads, and loads a typed
+/// address, and a buggy program navigates an inline page, a bad URL, an
+/// unmounted placement, and another program's page.
+#[test]
+fn a_navigation_reaches_the_mounted_page_after_validation() {
+    let mut fixture = Fixture::new();
+    fixture.connect_pane(1, 1);
+    fixture.connect_pane(2, 2);
+    let (handle, instance) = fixture.registered(1, url(false));
+    let mount = fixture.mounted(1, instance);
+    let navigate = |from: u64, instance: InstanceId, action: NavAction| ControlEvent::Navigate {
+        connection: connection(from),
+        instance: instance.to_string(),
+        action,
+    };
+    let to = fixture
+        .control(navigate(
+            1,
+            instance,
+            NavAction::To("HTTPS://Example.com/next".into()),
+        ))
+        .expect("a valid navigation");
+    assert_eq!(
+        to.events(),
+        [WebviewEvent::Navigate {
+            mount,
+            navigation: Navigation::To("https://example.com/next".into()),
+        }]
+    );
+    let back = fixture
+        .control(navigate(1, instance, NavAction::Back))
+        .expect("valid");
+    assert_eq!(
+        back.events(),
+        [WebviewEvent::Navigate {
+            mount,
+            navigation: Navigation::Back
+        }]
+    );
+    assert_eq!(
+        refusal(fixture.control(navigate(
+            1,
+            instance,
+            NavAction::To("ftp://example.com".into())
+        ))),
+        Refusal::InvalidNavigation
+    );
+    assert_eq!(
+        refusal(fixture.control(navigate(2, instance, NavAction::Reload))),
+        Refusal::NotOwner
+    );
+    let ServerMsg::Instanced {
+        instance: spare, ..
+    } = fixture.new_instance(1, &handle)
+    else {
+        panic!("expected Instanced");
+    };
+    assert_eq!(
+        refusal(fixture.control(navigate(1, spare.parse().unwrap(), NavAction::Reload))),
+        Refusal::NotMounted
+    );
+    let (_, page) = fixture.registered(1, inline());
+    let _ = fixture.mounted(1, page);
+    assert_eq!(
+        refusal(fixture.control(navigate(
+            1,
+            page,
+            NavAction::To("https://example.com".into())
+        ))),
+        Refusal::NotUrlView
+    );
+}
+
+/// Asserts that `set_forward_keys` reports the new chords and that later
+/// mounts carry them, while another connection is refused.
+///
+/// Case: a TUI browser enters insert mode, replacing its forward keys with
+/// Esc alone, and then shows a second placement.
+#[test]
+fn set_forward_keys_replaces_the_chords() {
+    let mut fixture = Fixture::new();
+    fixture.connect_pane(1, 1);
+    fixture.connect_pane(2, 2);
+    let (handle, _) = fixture.registered(1, inline());
+    let keys = vec![ForwardChord::new(vec![], "esc")];
+    let set = |from: u64| ControlEvent::SetForwardKeys {
+        connection: connection(from),
+        handle: handle.clone(),
+        keys: keys.clone(),
+    };
+    assert_eq!(refusal(fixture.control(set(2))), Refusal::NotOwner);
+    let output = fixture
+        .control(set(1))
+        .expect("the owner replaces its chords");
+    assert_eq!(
+        output.events(),
+        [WebviewEvent::ForwardKeysChanged {
+            handle: handle.clone(),
+            keys: keys.clone(),
+        }]
+    );
+    let ServerMsg::Instanced { instance, .. } = fixture.new_instance(1, &handle) else {
+        panic!("expected Instanced");
+    };
+    let mounted = fixture.host.placement_signal(
+        1,
+        PlacementSignal::Mounted {
+            instance: instance.parse().unwrap(),
+            size: SIZE,
+        },
+    );
+    let [WebviewEvent::Mounted { spec, .. }] = mounted.events() else {
+        panic!("expected one Mounted");
+    };
+    assert_eq!(spec.forward_keys(), keys.as_slice());
+}
+
+/// Asserts that the first composite of a bridged mount is reported once, and
+/// a mount without the bridge is never reported.
+///
+/// Case: a page paints its first frame and keeps painting, next to a
+/// read-only remote page.
+#[test]
+fn the_first_composite_of_a_bridged_mount_is_reported_once() {
+    let (mut fixture, handle, instance, mount) = focused_fixture();
+    let composited = |mount| WebviewCommand::Composited { mount };
+    let _ = command(&mut fixture, composited(mount)).expect("accepted");
+    let _ = command(&mut fixture, composited(mount)).expect("accepted");
+    assert_eq!(fixture.pushes(1), [compositing(&handle, instance, true)]);
+    let (_, remote) = fixture.registered(1, url(false));
+    let remote_mount = fixture.mounted(1, remote);
+    let _ = command(&mut fixture, composited(remote_mount)).expect("accepted");
+    assert!(fixture.pushes(1).is_empty());
+}
+
+/// Asserts that ending a mount that composited reports compositing stopped,
+/// while ending one that never composited reports nothing.
+///
+/// Case: a program unmounts a page that painted, then one that was never on
+/// screen long enough to paint.
+#[test]
+fn ending_a_composited_mount_reports_compositing_stopped() {
+    let (mut fixture, handle, instance, mount) = focused_fixture();
+    let _ = command(&mut fixture, WebviewCommand::Composited { mount });
+    let _ = fixture.pushes(1);
+    let _ = fixture.host.placement_signal(
+        1,
+        PlacementSignal::Unmounted {
+            instance: Some(instance),
+        },
+    );
+    assert_eq!(fixture.pushes(1), [compositing(&handle, instance, false)]);
+    let _ = fixture.mounted(1, instance);
+    let _ = fixture.host.placement_signal(
+        1,
+        PlacementSignal::Unmounted {
+            instance: Some(instance),
+        },
+    );
+    assert!(fixture.pushes(1).is_empty());
+}
+
+/// Asserts that closing a pane whose composited page holds focus tells the
+/// still-connected program that compositing stopped and focus was lost, in
+/// that order, and reports the focus release before the unmount.
+///
+/// Case: the user closes a pane while typing into a page, and the program's
+/// process outlives the pane for a moment.
+#[test]
+fn closing_a_pane_with_a_focused_composited_page_notifies_its_program() {
+    let (mut fixture, handle, instance, mount) = focused_fixture();
+    let _ = gui_focus(&mut fixture, Some(mount));
+    let _ = command(&mut fixture, WebviewCommand::Composited { mount });
+    let _ = fixture.pushes(1);
+    let output = fixture.host.pane_closed(1);
+    assert_eq!(
+        fixture.pushes(1),
+        [
+            compositing(&handle, instance, false),
+            focus_changed(&handle, instance, false),
+        ]
+    );
+    assert_eq!(
+        output.events(),
+        [
+            WebviewEvent::FocusChanged { focused: None },
+            WebviewEvent::Unmounted {
+                mounts: vec![mount]
+            },
+            WebviewEvent::AssetReleased { handle },
+        ]
+    );
+}
+
+/// Asserts that per-mount reports naming an ended mount are refused as
+/// stale and push nothing, even after the placement is mounted again under a
+/// new mount.
+///
+/// Case: the GUI reports a first frame, a page event, and a URL change for a
+/// page that its program unmounted and mounted again in the meantime.
+#[test]
+fn reports_for_an_ended_mount_are_refused() {
+    let (mut fixture, _, instance, mount) = focused_fixture();
+    let _ = fixture.host.placement_signal(
+        1,
+        PlacementSignal::Unmounted {
+            instance: Some(instance),
+        },
+    );
+    assert_ne!(fixture.mounted(1, instance), mount);
+    for stale in [
+        WebviewCommand::Composited { mount },
+        WebviewCommand::PageEmit {
+            mount,
+            event: "hello".into(),
+            payload: Value::Null,
+        },
+        WebviewCommand::UrlChanged {
+            mount,
+            url: "https://example.com".into(),
+        },
+    ] {
+        assert!(matches!(
+            command(&mut fixture, stale),
+            Err(WebviewHostError::Refused(Refusal::StaleMount))
+        ));
+    }
+    assert!(fixture.pushes(1).is_empty());
 }

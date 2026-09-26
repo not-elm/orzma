@@ -2,23 +2,28 @@
 //! driven by control-socket events, VT placement signals, and pane
 //! lifecycle changes.
 
-use crate::boundary::{HandleId, MountId, WebviewCommand, WebviewEvent};
+use crate::boundary::{ForwardChord, HandleId, MountId, Navigation, WebviewCommand, WebviewEvent};
 use crate::control_socket::{ConnectionId, ControlEvent, ControlSocket};
 use crate::error::{Refusal, RegisterError, WebviewHostResult};
+use crate::host::calls::InFlightCalls;
 use crate::host::connections::Connections;
 use crate::host::focus::{FocusRoute, FocusState, FocusTransition};
 use crate::host::mint::mint_instance_id;
 use crate::host::mounts::{MountChange, MountState, Mounts};
 use crate::host::registry::{Registration, Registry};
 use crate::host::tokens::Tokens;
-use crate::protocol::{PushMsg, ServerMsg};
+use crate::host::validation::validate_url;
+use crate::protocol::{NavAction, PushMsg, ServerMsg};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use orzma_vt::prelude::{
     GridColumn, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize, ScreenLine, VtSignal,
 };
+use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
 
+mod calls;
 mod connections;
 mod focus;
 pub(crate) mod mint;
@@ -165,6 +170,8 @@ pub struct WebviewHost<P> {
     mounts: Mounts<P>,
     focus: FocusState<P>,
     active: Option<P>,
+    calls: InFlightCalls,
+    composited: HashMap<MountId, CompositeRoute>,
 }
 
 impl<P: PaneKey> WebviewHost<P> {
@@ -288,15 +295,34 @@ impl<P: PaneKey> WebviewHost<P> {
     /// Applies one command the GUI sent.
     ///
     /// A `Focus` is always answered with a `FocusChanged` carrying the
-    /// resulting focus, including when the focus it asked for is refused
-    /// because the mount ended or takes no input.
+    /// resulting focus. A `PageCall` is answered with a `PageReply` at once
+    /// when it cannot be forwarded: `no_owner` when its mount has ended or
+    /// has no bridge, and `owner_unavailable` when its program cannot be
+    /// written to.
     ///
     /// # Errors
     ///
-    /// Never fails for `Focus`.
+    /// Returns [`WebviewHostError::Refused`](crate::error::WebviewHostError::Refused)
+    /// for a `Composited`, `PageEmit`, or `UrlChanged` naming an ended
+    /// mount, a `PageEmit` with an empty name or from a page without the
+    /// bridge, and a `UrlChanged` of a page that is not a bridged remote
+    /// page; a push that cannot reach its program fails the same way.
     pub fn command(&mut self, command: WebviewCommand) -> WebviewHostResult<HostOutput<P>> {
         match command {
             WebviewCommand::Focus { mount } => Ok(self.gui_focus(mount)),
+            WebviewCommand::Composited { mount } => self.composited(mount),
+            WebviewCommand::PageCall {
+                mount,
+                page_req,
+                method,
+                params,
+            } => Ok(self.page_call(mount, page_req, method, params)),
+            WebviewCommand::PageEmit {
+                mount,
+                event,
+                payload,
+            } => self.page_emit(mount, event, payload),
+            WebviewCommand::UrlChanged { mount, url } => self.url_changed(mount, url),
         }
     }
 
@@ -312,7 +338,11 @@ impl<P: PaneKey> WebviewHost<P> {
     /// when a request without a reply names a handle or instance its
     /// connection does not own, an instance not spelled as 32 hex digits, a
     /// mount size out of range, or a `focus` of a placement that is not
-    /// mounted or takes no input. Nothing changes then.
+    /// mounted or takes no input, an `emit`, `navigate`, or
+    /// `set_forward_keys` of a handle or instance the connection does not
+    /// own, an `emit` of a handle without the bridge, and a `navigate` to an
+    /// invalid URL or of an unmounted placement or of a page that is not a
+    /// remote page. Nothing changes then.
     pub fn control(&mut self, event: ControlEvent) -> WebviewHostResult<HostOutput<P>> {
         match event {
             ControlEvent::Hello {
@@ -361,6 +391,29 @@ impl<P: PaneKey> WebviewHost<P> {
                 connection,
                 instance,
             } => self.socket_focus(connection, instance),
+            ControlEvent::Reply {
+                connection,
+                req_id,
+                ok,
+                value,
+                error,
+            } => Ok(self.reply(connection, &req_id, ok, value, error)),
+            ControlEvent::Emit {
+                connection,
+                handle,
+                event,
+                payload,
+            } => self.emit(connection, &handle, event, payload),
+            ControlEvent::Navigate {
+                connection,
+                instance,
+                action,
+            } => self.navigate(connection, &instance, action),
+            ControlEvent::SetForwardKeys {
+                connection,
+                handle,
+                keys,
+            } => self.set_forward_keys(connection, &handle, keys),
         }
     }
 
@@ -373,6 +426,8 @@ impl<P: PaneKey> WebviewHost<P> {
             mounts: Mounts::new(),
             focus: FocusState::new(),
             active: None,
+            calls: InFlightCalls::new(),
+            composited: HashMap::new(),
         }
     }
 
@@ -482,6 +537,13 @@ impl<P: PaneKey> WebviewHost<P> {
     fn disconnect(&mut self, connection: ConnectionId) -> HostOutput<P> {
         self.connections.remove(connection);
         let mut output = HostOutput::default();
+        for (mount, page_req) in self.calls.drain_connection(connection) {
+            output.push_event(WebviewEvent::PageReply {
+                mount,
+                page_req,
+                outcome: Err("owner_disconnected".into()),
+            });
+        }
         let released = self.registry.remove_by_connection(connection);
         self.release(&mut output, released, Reservations::Held);
         output
@@ -646,6 +708,247 @@ impl<P: PaneKey> WebviewHost<P> {
         }
     }
 
+    fn composited(&mut self, mount: MountId) -> WebviewHostResult<HostOutput<P>> {
+        let route = {
+            let (instance, handle, registration) = self.mount_owner(mount)?;
+            if !registration.content().is_bridged() || self.composited.contains_key(&mount) {
+                return Ok(HostOutput::default());
+            }
+            CompositeRoute {
+                handle: handle.clone(),
+                instance,
+                connection: registration.connection(),
+            }
+        };
+        self.push_compositing(&route, true);
+        self.composited.insert(mount, route);
+        Ok(HostOutput::default())
+    }
+
+    fn page_call(
+        &mut self,
+        mount: MountId,
+        page_req: String,
+        method: String,
+        params: Value,
+    ) -> HostOutput<P> {
+        let mut output = HostOutput::default();
+        let target = self.bridged_owner(mount);
+        let refusal = match target {
+            Err(_) => Some("no_owner"),
+            Ok((instance, handle, connection)) => {
+                let global = self.calls.mint();
+                let call = PushMsg::Call {
+                    handle,
+                    instance: instance.to_string(),
+                    req_id: global.clone(),
+                    method,
+                    params,
+                };
+                match self.connections.push(connection, &call) {
+                    Ok(()) => {
+                        self.calls.note(global, mount, page_req.clone(), connection);
+                        None
+                    }
+                    Err(_) => Some("owner_unavailable"),
+                }
+            }
+        };
+        if let Some(error) = refusal {
+            output.push_event(WebviewEvent::PageReply {
+                mount,
+                page_req,
+                outcome: Err(error.into()),
+            });
+        }
+        output
+    }
+
+    fn page_emit(
+        &mut self,
+        mount: MountId,
+        event: String,
+        payload: Value,
+    ) -> WebviewHostResult<HostOutput<P>> {
+        if event.is_empty() {
+            return Err(Refusal::EmptyEventName.into());
+        }
+        let (_, handle, connection) = self.bridged_owner(mount)?;
+        self.connections.push(
+            connection,
+            &PushMsg::Event {
+                handle,
+                event,
+                payload,
+            },
+        )?;
+        Ok(HostOutput::default())
+    }
+
+    fn url_changed(&mut self, mount: MountId, url: String) -> WebviewHostResult<HostOutput<P>> {
+        let (instance, handle, connection) = self.bridged_owner(mount)?;
+        let is_url = self
+            .registry
+            .get(&handle)
+            .is_some_and(|registration| registration.content().is_url());
+        if !is_url {
+            return Err(Refusal::NotUrlView.into());
+        }
+        let call = PushMsg::Call {
+            handle,
+            instance: instance.to_string(),
+            req_id: self.calls.mint(),
+            method: "urlChanged".into(),
+            params: json!({ "url": url }),
+        };
+        self.connections.push(connection, &call)?;
+        Ok(HostOutput::default())
+    }
+
+    fn reply(
+        &mut self,
+        connection: ConnectionId,
+        req_id: &str,
+        ok: bool,
+        value: Value,
+        error: Option<String>,
+    ) -> HostOutput<P> {
+        let mut output = HostOutput::default();
+        // NOTE: take_for_connection drops a reply whose sending connection
+        // is not the one that originated the call, WITHOUT consuming the
+        // pending entry — a foreign program replaying another connection's
+        // (monotonic, guessable) global reqId must not settle or drop its call.
+        if let Some((mount, page_req)) = self.calls.take_for_connection(req_id, connection) {
+            let outcome = if ok {
+                Ok(value)
+            } else {
+                Err(error.unwrap_or_default())
+            };
+            output.push_event(WebviewEvent::PageReply {
+                mount,
+                page_req,
+                outcome,
+            });
+        }
+        output
+    }
+
+    fn emit(
+        &mut self,
+        connection: ConnectionId,
+        handle: &HandleId,
+        event: String,
+        payload: Value,
+    ) -> WebviewHostResult<HostOutput<P>> {
+        let registration = self.owned_registration(connection, handle)?;
+        if !registration.content().is_bridged() {
+            return Err(Refusal::NotBridged.into());
+        }
+        let mounts: Vec<MountId> = registration
+            .instances()
+            .iter()
+            .filter_map(|instance| self.mounts.get(*instance))
+            .map(MountState::mount)
+            .collect();
+        let mut output = HostOutput::default();
+        for mount in mounts {
+            output.push_event(WebviewEvent::PageEvent {
+                mount,
+                event: event.clone(),
+                payload: payload.clone(),
+            });
+        }
+        Ok(output)
+    }
+
+    fn navigate(
+        &mut self,
+        connection: ConnectionId,
+        instance: &str,
+        action: NavAction,
+    ) -> WebviewHostResult<HostOutput<P>> {
+        let (instance, _) = self.owned_instance(connection, instance)?;
+        let mount = self
+            .mounts
+            .get(instance)
+            .map(MountState::mount)
+            .ok_or(Refusal::NotMounted)?;
+        let navigation = match action {
+            NavAction::To(url) => {
+                let is_url = self
+                    .registry
+                    .resolve_instance(instance)
+                    .is_some_and(|(_, registration)| registration.content().is_url());
+                if !is_url {
+                    return Err(Refusal::NotUrlView.into());
+                }
+                Navigation::To(validate_url(&url).map_err(|_| Refusal::InvalidNavigation)?)
+            }
+            NavAction::Back => Navigation::Back,
+            NavAction::Forward => Navigation::Forward,
+            NavAction::Reload => Navigation::Reload,
+        };
+        let mut output = HostOutput::default();
+        output.push_event(WebviewEvent::Navigate { mount, navigation });
+        Ok(output)
+    }
+
+    fn set_forward_keys(
+        &mut self,
+        connection: ConnectionId,
+        handle: &HandleId,
+        keys: Vec<ForwardChord>,
+    ) -> WebviewHostResult<HostOutput<P>> {
+        self.owned_registration(connection, handle)?;
+        self.registry.replace_forward_keys(handle, keys.clone());
+        let mut output = HostOutput::default();
+        output.push_event(WebviewEvent::ForwardKeysChanged {
+            handle: handle.clone(),
+            keys,
+        });
+        Ok(output)
+    }
+
+    /// The placement, handle, and registration of `mount`, when `mount` is
+    /// its placement's current mount.
+    fn mount_owner(
+        &self,
+        mount: MountId,
+    ) -> WebviewHostResult<(InstanceId, &HandleId, &Registration<P>)> {
+        let (instance, _) = self.mounts.resolve(mount).ok_or(Refusal::StaleMount)?;
+        let (handle, registration) = self
+            .registry
+            .resolve_instance(instance)
+            .ok_or(Refusal::UnknownInstance)?;
+        Ok((instance, handle, registration))
+    }
+
+    /// The placement, handle, and owning connection of `mount`, when it is
+    /// current and its page has the bridge.
+    fn bridged_owner(
+        &self,
+        mount: MountId,
+    ) -> WebviewHostResult<(InstanceId, HandleId, ConnectionId)> {
+        let (instance, handle, registration) = self.mount_owner(mount)?;
+        if !registration.content().is_bridged() {
+            return Err(Refusal::NotBridged.into());
+        }
+        Ok((instance, handle.clone(), registration.connection()))
+    }
+
+    /// Pushes a `compositing` for `route` to its program; a closed
+    /// connection drops it.
+    fn push_compositing(&self, route: &CompositeRoute, active: bool) {
+        let message = PushMsg::Compositing {
+            handle: route.handle.clone(),
+            instance: route.instance.to_string(),
+            active,
+        };
+        if let Err(error) = self.connections.push(route.connection, &message) {
+            tracing::debug!(%error, "a compositing push was dropped");
+        }
+    }
+
     fn placement_mounted(
         &mut self,
         output: &mut HostOutput<P>,
@@ -690,8 +993,10 @@ impl<P: PaneKey> WebviewHost<P> {
         self.end_mounts(output, &in_pane);
     }
 
-    /// Ends the mounts of `instances` that are mounted: releases focus first
-    /// when one of them holds it, then reports them in one `Unmounted`.
+    /// Ends the mounts of `instances` that are mounted: forgets their
+    /// pending page calls, reports compositing stopped for those that
+    /// composited, releases focus when one of them holds it, then reports
+    /// them in one `Unmounted`.
     fn end_mounts(&mut self, output: &mut HostOutput<P>, instances: &[InstanceId]) {
         let ended: Vec<MountId> = instances
             .iter()
@@ -700,6 +1005,12 @@ impl<P: PaneKey> WebviewHost<P> {
             .collect();
         if ended.is_empty() {
             return;
+        }
+        for mount in &ended {
+            self.calls.drain_mount(*mount);
+            if let Some(route) = self.composited.remove(mount) {
+                self.push_compositing(&route, false);
+            }
         }
         let focused_ended = self
             .focus
@@ -778,6 +1089,15 @@ impl<P: PaneKey> WebviewHost<P> {
         }
         Ok((instance, registration.owner_pane()))
     }
+}
+
+/// Where a composited bridged mount's `compositing` pushes go, kept from its
+/// first composite so the `active: false` push still reaches the program
+/// after its registration is released.
+struct CompositeRoute {
+    handle: HandleId,
+    instance: InstanceId,
+    connection: ConnectionId,
 }
 
 /// Whether the pane of a released registration still holds its

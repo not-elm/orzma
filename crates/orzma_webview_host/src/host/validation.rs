@@ -120,6 +120,21 @@ impl ValidatedRegistration {
     pub(crate) fn interactive(&self) -> bool {
         self.interactive
     }
+
+    /// Whether a page of this content gets the `window.orzma` bridge.
+    pub(crate) fn is_bridged(&self) -> bool {
+        self.source.is_bridged()
+    }
+
+    /// Whether this content is a remote `http(s)` URL.
+    pub(crate) fn is_url(&self) -> bool {
+        matches!(self.source, Source::Url { .. })
+    }
+
+    /// Replaces the forward-key chords.
+    pub(crate) fn set_forward_keys(&mut self, keys: Vec<ForwardChord>) {
+        self.forward_keys = keys;
+    }
 }
 
 /// Validates a URL a program asked to load: parses it, requires an `http`
