@@ -101,6 +101,41 @@ fn a_drag_in_vi_mode_selects_while_the_app_tracks_the_mouse() {
     assert_eq!(sink.contents(), b"");
 }
 
+/// Asserts that an unmoved double click in vi mode copies nothing and
+/// leaves no selection that covers a cell.
+///
+/// Case: the user enters vi mode at a shell prompt showing a word and
+/// double-clicks that word without moving the pointer.
+#[test]
+fn an_unmoved_double_click_in_vi_mode_copies_nothing() {
+    let (mut term, _sink) = real_term(3);
+    term.feed_bytes(b"hello")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    let press = pointer(
+        PointerKind::Press,
+        Some(PointerButton::Left),
+        3,
+        CellSide::Left,
+    );
+    let release = pointer(
+        PointerKind::Release,
+        Some(PointerButton::Left),
+        3,
+        CellSide::Left,
+    );
+    for click_count in [1, 2] {
+        term.send_pointer(PointerInput {
+            click_count,
+            ..press
+        })
+        .expect("send_pointer");
+        let copied = term.send_pointer(release).expect("send_pointer");
+        assert_eq!(copied, None, "click {click_count}");
+    }
+    assert_eq!(term.vt.selection_text(), None);
+}
+
 /// Asserts that the wheel in vi mode scrolls the scrollback and reports
 /// nothing, even while the application tracks the mouse.
 ///
