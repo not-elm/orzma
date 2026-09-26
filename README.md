@@ -32,6 +32,10 @@ brew install --cask not-elm/orzma/orzma
 Windows 10 1809 or later, and Windows 11 (x64): download `orzma-<version>-x64.msi` from the
 [latest release](https://github.com/not-elm/orzma/releases/latest) and run it.
 
+Linux (x86_64) with glibc 2.35 or later: download the `.deb` for Ubuntu or
+Debian, or the tarball for other distributions, from the
+[latest release](https://github.com/not-elm/orzma/releases/latest).
+
 See [Getting Started](https://not-elm.github.io/orzma/) for details.
 
 ## Companion apps

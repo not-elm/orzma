@@ -61,6 +61,12 @@ shell within the window re-fires the action instead of reaching the terminal.
 If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 `:r` marker from that binding.
 
+In vi mode a repeatable binding fires only on the key pressed right after the
+leader: the window closes on the next key event, and holding the key does not
+keep firing. A second press or an auto-repeat is read as a `[vi-mode]` key
+instead — with the stock bindings, `Shift+H` and `Shift+L` jump to the top and
+bottom visible line, and `Shift+J` and `Shift+K` do nothing.
+
 ## Platform defaults
 
 Seven defaults differ by platform, because macOS has a `Cmd` key and the other
@@ -107,10 +113,10 @@ the seven that differ elsewhere.
 | `select-down-pane` | `<Leader>j` | Focus the pane below. |
 | `select-up-pane` | `<Leader>k` | Focus the pane above. |
 | `select-right-pane` | `<Leader>l` | Focus the pane to the right. |
-| `resize-left-pane` | `<Leader:r>Shift+H` | Resize the active pane's border left by 5 cells, repeatable (not implemented yet). |
-| `resize-down-pane` | `<Leader:r>Shift+J` | Resize the active pane's border down by 5 cells, repeatable (not implemented yet). |
-| `resize-up-pane` | `<Leader:r>Shift+K` | Resize the active pane's border up by 5 cells, repeatable (not implemented yet). |
-| `resize-right-pane` | `<Leader:r>Shift+L` | Resize the active pane's border right by 5 cells, repeatable (not implemented yet). |
+| `resize-left-pane` | `<Leader:r>Shift+H` | Move a divider of the active pane 5 cells left, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
+| `resize-down-pane` | `<Leader:r>Shift+J` | Move a divider of the active pane 5 cells down, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
+| `resize-up-pane` | `<Leader:r>Shift+K` | Move a divider of the active pane 5 cells up, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
+| `resize-right-pane` | `<Leader:r>Shift+L` | Move a divider of the active pane 5 cells right, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side by side (vertical divider); the new pane becomes active. |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (horizontal divider); the new pane becomes active. |
 | `kill-pane` | `<Leader>p` | Kill the active pane; its shell is terminated. |
