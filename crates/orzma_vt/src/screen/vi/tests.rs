@@ -555,3 +555,107 @@ fn a_reflow_keeps_a_right_side_selection_end_on_its_blank_line() {
     assert!(screen.selection.include_both_cells(true, 3));
     assert_eq!(screen.selection_text().as_deref(), Some("abcdefgh\n"));
 }
+
+/// A 10×3 screen reading `hello` on its top row, in vi mode with the vi
+/// cursor on `e`.
+fn hello_screen() -> Screen {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "hello");
+    assert!(screen.enter_vi_mode());
+    screen.vi.set(point(0, 1));
+    screen
+}
+
+/// Asserts that `v` selects the cell under the vi cursor at once.
+///
+/// Case: the user presses `v` on a letter and yanks without moving.
+#[test]
+fn v_selects_the_cell_under_the_vi_cursor() {
+    let mut screen = hello_screen();
+    assert!(screen.toggle_vi_selection(SelectionKind::Simple));
+    assert_eq!(screen.selection_text().as_deref(), Some("e"));
+}
+
+/// Asserts that a second `v` clears the selection.
+///
+/// Case: the user presses `v` twice to cancel a selection.
+#[test]
+fn a_second_v_clears_the_selection() {
+    let mut screen = hello_screen();
+    screen.toggle_vi_selection(SelectionKind::Simple);
+    assert!(screen.toggle_vi_selection(SelectionKind::Simple));
+    assert_eq!(screen.selection_range(), None);
+}
+
+/// Asserts that `V` after `v` switches the selection to whole lines.
+///
+/// Case: the user starts a character selection and widens it to lines.
+#[test]
+fn v_then_shift_v_switches_to_lines() {
+    let mut screen = hello_screen();
+    screen.toggle_vi_selection(SelectionKind::Simple);
+    assert!(screen.toggle_vi_selection(SelectionKind::Lines));
+    assert_eq!(screen.selection_text().as_deref(), Some("hello"));
+}
+
+/// Asserts that a toggle outside vi mode changes nothing.
+///
+/// Case: a toggle request arrives just after the terminal left vi mode.
+#[test]
+fn a_toggle_outside_vi_mode_changes_nothing() {
+    let mut screen = screen(10, 3, 10);
+    assert!(!screen.toggle_vi_selection(SelectionKind::Simple));
+}
+
+/// Asserts that a motion extends a selection to the vi cursor's cell,
+/// inclusive.
+///
+/// Case: the user presses `v` and then `l` three times.
+#[test]
+fn a_motion_extends_the_selection_to_the_vi_cursor() {
+    let mut screen = hello_screen();
+    screen.toggle_vi_selection(SelectionKind::Simple);
+    for _ in 0..3 {
+        let _ = screen.vi_motion(ViMotion::Right, &chars());
+    }
+    assert_eq!(screen.selection_text().as_deref(), Some("ello"));
+}
+
+/// Asserts that a backward motion keeps the anchor's cell in the
+/// selection.
+///
+/// Case: the user presses `v` on the second `l` and then `h` twice.
+#[test]
+fn a_backward_motion_keeps_the_anchor_cell() {
+    let mut screen = hello_screen();
+    screen.vi.set(point(0, 3));
+    screen.toggle_vi_selection(SelectionKind::Simple);
+    for _ in 0..2 {
+        let _ = screen.vi_motion(ViMotion::Left, &chars());
+    }
+    assert_eq!(screen.selection_text().as_deref(), Some("ell"));
+}
+
+/// Asserts that an empty selection does not follow the vi cursor.
+///
+/// Case: the user clicks once in vi mode, leaving an empty selection, and
+/// then moves with `l`.
+#[test]
+fn an_empty_selection_does_not_follow_the_vi_cursor() {
+    let mut screen = hello_screen();
+    screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
+    let _ = screen.vi_motion(ViMotion::Right, &chars());
+    assert_eq!(screen.selection_range(), None);
+}
+
+/// Asserts that a page scroll extends a selection to the moved vi cursor.
+///
+/// Case: the user presses `v` on the last output line and then `Ctrl+B`.
+#[test]
+fn a_page_scroll_extends_the_selection() {
+    let mut screen = scrolled_screen();
+    screen.vi.set(point(2, 0));
+    screen.toggle_vi_selection(SelectionKind::Simple);
+    let _ = screen.vi_scroll(Scroll::PageUp, &chars());
+    assert_eq!(screen.selection_text().as_deref(), Some("3\n4\n5\n6"));
+}

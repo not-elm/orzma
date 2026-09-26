@@ -8,6 +8,7 @@ use crate::frame::damage::DamageSpan;
 use crate::screen::Screen;
 use crate::screen::cell::CellWidth;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint};
+use crate::screen::selection::{CellSide, Resolved, SelectionKind};
 use crate::screen::viewport::Scroll;
 
 /// Vi-mode cursor position in active-grid coordinates.
@@ -298,7 +299,9 @@ impl Screen {
     /// Moves the vi cursor by `motion` and scrolls the viewport just far
     /// enough to show it. Nothing changes outside vi mode.
     ///
-    /// The damage is [`DamageSpan::Full`] exactly when the viewport moved.
+    /// A selection that covers a cell follows the vi cursor, covering both
+    /// of its end cells. The damage is [`DamageSpan::Full`] exactly when
+    /// the viewport moved.
     pub fn vi_motion(
         &mut self,
         motion: ViMotion,
@@ -311,7 +314,8 @@ impl Screen {
             MotionGrid::new(&self.grid, self.viewport.offset, escape_chars).apply(from, motion);
         let moved = self.vi.set(to);
         let damage = self.scroll_to_vi_cursor();
-        ViewChange::classify(moved, damage)
+        let followed = self.follow_vi_cursor();
+        ViewChange::classify(moved || followed, damage)
     }
 
     /// Applies a viewport motion in vi mode and moves the vi cursor with
@@ -324,7 +328,9 @@ impl Screen {
     /// row and of the bottom row. Outside vi mode it moves only the
     /// viewport.
     ///
-    /// The damage is [`DamageSpan::Full`] exactly when the viewport moved.
+    /// A selection that covers a cell follows the vi cursor, covering both
+    /// of its end cells. The damage is [`DamageSpan::Full`] exactly when
+    /// the viewport moved.
     pub fn vi_scroll(&mut self, scroll: Scroll, escape_chars: &SemanticEscapeChars) -> ViewChange {
         let Some(from) = self.vi.point() else {
             return ViewChange::classify(false, self.scroll(scroll));
@@ -358,7 +364,62 @@ impl Screen {
         let moved = target.is_some_and(|point| self.vi.set(point));
         let damage = self.scroll(scroll);
         let clamped = self.clamp_vi_cursor();
-        ViewChange::classify(moved || clamped, damage)
+        let followed = self.follow_vi_cursor();
+        ViewChange::classify(moved || clamped || followed, damage)
+    }
+
+    /// Starts, re-kinds, or clears a selection of `kind` at the vi cursor;
+    /// returns whether the selection changed. Returns `false` outside vi
+    /// mode.
+    ///
+    /// A selection of the same kind that covers a cell is cleared; one of
+    /// another kind switches to `kind` and keeps its anchor; otherwise a
+    /// new selection starts on the vi cursor's cell. A selection left in
+    /// place covers both of its end cells.
+    pub fn toggle_vi_selection(&mut self, kind: SelectionKind) -> bool {
+        let Some(point) = self.vi_cursor().map(|cursor| cursor.point) else {
+            return false;
+        };
+        let current = self
+            .selection
+            .kind()
+            .filter(|_| self.has_nonempty_selection());
+        match current {
+            Some(current) if current == kind => self.selection.clear(),
+            Some(_) => {
+                let rekinded = self.selection.set_kind(kind);
+                let included = self.include_selection_cells();
+                rekinded || included
+            }
+            None => {
+                let Some(end) = self.selection_end(point, CellSide::Left) else {
+                    return false;
+                };
+                let started = self.selection.start(end, kind);
+                let included = self.include_selection_cells();
+                started || included
+            }
+        }
+    }
+
+    /// Moves each selection end onto the far side of the cell it was set
+    /// from, so the selection covers both end cells; returns whether a
+    /// boundary moved.
+    pub fn include_selection_cells(&mut self) -> bool {
+        let Some((anchor, moving)) = self.selection.ends() else {
+            return false;
+        };
+        let (Some(anchor_line), Some(moving_line)) = (
+            self.grid.grid_line(anchor.line()),
+            self.grid.grid_line(moving.line()),
+        ) else {
+            return false;
+        };
+        let last_column = self.grid.size().cols.saturating_sub(1);
+        let anchor_cell = (anchor_line.0, anchor.column().min(last_column));
+        let moving_cell = (moving_line.0, moving.column().min(last_column));
+        self.selection
+            .include_both_cells(anchor_cell <= moving_cell, last_column)
     }
 
     /// Scrolls the viewport just far enough to show the vi cursor; `None`
@@ -374,6 +435,33 @@ impl Screen {
             return None;
         };
         self.scroll(Scroll::Delta(delta))
+    }
+
+    /// Whether a selection exists that covers at least one cell.
+    fn has_nonempty_selection(&self) -> bool {
+        matches!(
+            self.selection
+                .resolve(|id| self.grid.grid_line(id), self.grid.size().cols),
+            Resolved::Range(_)
+        )
+    }
+
+    /// Moves a selection that covers a cell so its moving end sits on the
+    /// vi cursor's cell and both end cells are covered; returns whether the
+    /// selection changed.
+    fn follow_vi_cursor(&mut self) -> bool {
+        let Some(point) = self.vi_cursor().map(|cursor| cursor.point) else {
+            return false;
+        };
+        if !self.has_nonempty_selection() {
+            return false;
+        }
+        let Some(end) = self.selection_end(point, CellSide::Left) else {
+            return false;
+        };
+        let extended = self.selection.extend(end);
+        let included = self.include_selection_cells();
+        extended || included
     }
 }
 

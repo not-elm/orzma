@@ -290,6 +290,10 @@ impl Vt for FakeVt {
         false
     }
 
+    fn toggle_vi_selection(&mut self, _kind: SelectionKind) -> bool {
+        false
+    }
+
     fn vi_cursor(&self) -> Option<ViCursor> {
         None
     }

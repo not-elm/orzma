@@ -20,6 +20,7 @@ use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::grid::reflow::ScrollbackOnGrow;
 use crate::screen::grid::{GridSize, MIN_COLUMNS};
 use crate::screen::margins::OriginMode;
+use crate::screen::selection::SelectionKind;
 use crate::screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion, ViewChange};
 use crate::screen::viewport::{DisplayOffset, Scroll};
 use crate::screen::{PrintOptions, Screen};
@@ -160,6 +161,12 @@ impl DeviceState {
     pub fn vi_scroll(&mut self, scroll: Scroll) -> ViewChange {
         let screen = self.screens.get_mut(self.modes.active_screen);
         screen.vi_scroll(scroll, &self.semantic_escape_chars)
+    }
+
+    /// Toggles a vi-mode selection of `kind` on the screen on show, as
+    /// [`Screen::toggle_vi_selection`] does.
+    pub fn toggle_vi_selection(&mut self, kind: SelectionKind) -> bool {
+        self.active_screen_mut().toggle_vi_selection(kind)
     }
 
     /// Prints one character at the cursor of the screen on show, shaped by

@@ -262,6 +262,18 @@ pub trait Vt {
     /// Only a move of the viewport stages (full) damage.
     fn vi_motion(&mut self, motion: ViMotion) -> bool;
 
+    /// Starts, re-kinds, or clears a selection of `kind` at the vi cursor;
+    /// returns whether the selection changed. Returns `false` outside vi
+    /// mode.
+    ///
+    /// A selection of the same kind that covers a cell is cleared; one of
+    /// another kind switches to `kind` and keeps its anchor; otherwise a
+    /// new selection starts on the vi cursor's cell, which it covers at
+    /// once. In vi mode a selection covers both of its end cells, and after
+    /// every motion or scroll a selection that covers a cell moves its far
+    /// end onto the vi cursor.
+    fn toggle_vi_selection(&mut self, kind: SelectionKind) -> bool;
+
     /// The vi cursor; `None` outside vi mode.
     fn vi_cursor(&self) -> Option<ViCursor>;
 
@@ -515,6 +527,10 @@ impl Vt for OrzmaVt {
     fn vi_motion(&mut self, motion: ViMotion) -> bool {
         let change = self.device.vi_motion(motion);
         self.settle_view_change(change)
+    }
+
+    fn toggle_vi_selection(&mut self, kind: SelectionKind) -> bool {
+        self.device.toggle_vi_selection(kind)
     }
 
     fn vi_cursor(&self) -> Option<ViCursor> {
@@ -1880,5 +1896,21 @@ mod tests {
         assert!(vt.interpret(b"\x1bc").damaged);
         let frame = vt.frame().expect("the reset moved the vi cursor");
         assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(0, 0)));
+    }
+
+    /// Asserts that a vi-mode selection built from motions reads back as
+    /// the selected word.
+    ///
+    /// Case: the user enters vi mode, jumps to the line start, presses `v`,
+    /// moves to the end of the first word, and yanks.
+    #[test]
+    fn a_vi_selection_reads_back_the_selected_word() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 20, rows: 3 }, 10);
+        vt.interpret(b"hello world");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::First);
+        assert!(vt.toggle_vi_selection(SelectionKind::Simple));
+        vt.vi_motion(ViMotion::SemanticRightEnd);
+        assert_eq!(vt.selection_text().as_deref(), Some("hello"));
     }
 }
