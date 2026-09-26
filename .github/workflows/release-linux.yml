@@ -8,6 +8,8 @@ on:
       - ".github/workflows/release-linux.yml"
       - "scripts/stage_linux.py"
       - "scripts/stage_windows.py"
+      - "scripts/package_deb.py"
+      - "scripts/test_package_deb.py"
       - "scripts/build_linux_icons.py"
       - "scripts/build_icon.py"
       - "build/linux/**"
@@ -31,15 +33,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CEF_VERSION: "152.4.0+152.0.8"
 
 jobs:
-  release:
+  build:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     # Building inside 22.04 keeps the shipped binaries' glibc floor at 2.35 now that
     # the ubuntu-22.04 runner image is being retired.
     container:
@@ -144,7 +148,7 @@ jobs:
 
       # Runs through just so the release builds exactly what `just bundle` builds
       # locally; duplicating the steps here is how local and CI builds drift apart.
-      - name: Build, stage and package
+      - name: Build, stage, archive and package
         env:
           VERSION: ${{ steps.ver.outputs.version }}
           ORZMA_STAGE_CHECK_DEPS: "1"
@@ -155,23 +159,126 @@ jobs:
       - name: Trim the CEF cache
         run: rm -rf "$HOME"/.cache/orzma/cef/*/cef_binary_*.tar.bz2
 
-      - name: Upload the dry-run archive
-        if: github.ref_type != 'tag'
+      # Uploaded on every run: verify-deb installs the .deb from it, and publish
+      # releases exactly the files verify-deb checked.
+      - name: Upload the release files
         uses: actions/upload-artifact@v4
         with:
-          name: orzma-${{ steps.ver.outputs.version }}-x86_64-linux
+          name: orzma-linux-${{ steps.ver.outputs.version }}
           retention-days: 7
+          if-no-files-found: error
           path: |
             target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz
             target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz.sha256
+            target/dist/orzma_${{ steps.ver.outputs.version }}_amd64.deb
+            target/dist/orzma_${{ steps.ver.outputs.version }}_amd64.deb.sha256
+
+  verify-deb:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:22.04", "ubuntu:24.04"]
+    container:
+      image: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      DEB: orzma_${{ needs.build.outputs.version }}_amd64.deb
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: orzma-linux-${{ needs.build.outputs.version }}
+
+      - name: Verify the checksum
+        run: sha256sum -c "$DEB.sha256"
+
+      # --no-install-recommends proves the Depends field alone is enough.
+      - name: Install the package
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends "./$DEB"
+
+      - name: Check that every shipped ELF file resolves its libraries
+        run: |
+          set -euo pipefail
+          checked=0
+          unresolved=""
+          while IFS= read -r -d '' file; do
+            [ "$(od -An -tx1 -N4 "$file" | tr -d ' \n')" = 7f454c46 ] || continue
+            checked=$((checked + 1))
+            missing="$(ldd "$file" | grep 'not found' || true)"
+            if [ -n "$missing" ]; then
+              unresolved+="${file}:"$'\n'"${missing}"$'\n'
+            fi
+          done < <(find /usr/lib/orzma -type f -print0)
+          echo "checked ${checked} ELF files"
+          if [ -n "$unresolved" ]; then
+            printf '%s' "$unresolved" >&2
+            exit 1
+          fi
+          if [ "$checked" -lt 5 ]; then
+            echo "expected at least 5 ELF files under /usr/lib/orzma" >&2
+            exit 1
+          fi
+
+      # winit, wgpu and Bevy dlopen these at runtime, so ldd above cannot see them.
+      - name: Check the dlopen-only libraries
+        run: |
+          set -euo pipefail
+          sonames="$(ldconfig -p | awk '{print $1}')"
+          for soname in libX11.so.6 libX11-xcb.so.1 libXcursor.so.1 libXi.so.6 \
+            libxkbcommon-x11.so.0 libvulkan.so.1 libEGL.so.1; do
+            if ! grep -qxF "$soname" <<<"$sonames"; then
+              echo "${soname} is not installed; add its package to DEPENDS in scripts/package_deb.py" >&2
+              exit 1
+            fi
+          done
+
+      - name: Check the launchers
+        run: |
+          set -euo pipefail
+          for name in orzma orzmd orzbrowser; do
+            target="$(readlink -f "/usr/bin/${name}")"
+            if [ "$target" != "/usr/lib/orzma/${name}" ] || [ ! -x "$target" ]; then
+              echo "/usr/bin/${name} resolves to '${target}'" >&2
+              exit 1
+            fi
+          done
+
+      - name: Validate the desktop entry
+        run: |
+          apt-get install -y --no-install-recommends desktop-file-utils
+          desktop-file-validate /usr/share/applications/orzma.desktop
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [build, verify-deb]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: orzma-linux-${{ needs.build.outputs.version }}
+          path: dist
 
       # action-gh-release (>= 2.5.2) finds the release macOS/Windows may be creating in
       # parallel and retries on a 422 already_exists, so no create/upload fallback is needed.
       - name: Publish GitHub Release
-        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz
-            target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz.sha256
+            dist/orzma-${{ env.VERSION }}-x86_64-linux.tar.gz
+            dist/orzma-${{ env.VERSION }}-x86_64-linux.tar.gz.sha256
+            dist/orzma_${{ env.VERSION }}_amd64.deb
+            dist/orzma_${{ env.VERSION }}_amd64.deb.sha256
+          fail_on_unmatched_files: true
           generate_release_notes: true

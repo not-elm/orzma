@@ -174,13 +174,19 @@ stage *args:
 tarball version="":
     python3 scripts/stage_linux.py --package-only {{ if version == "" { "" } else { "--version " + version } }}
 
-# build, stage and archive the Linux release (e.g. `just bundle 0.2.0`)
+# package the staged Linux tree into target/dist/orzma_<version>_amd64.deb (+ .sha256)
+[linux]
+deb version="":
+    python3 scripts/package_deb.py {{ if version == "" { "" } else { "--version " + version } }}
+
+# build, stage, archive and package the Linux release (e.g. `just bundle 0.2.0`)
 [linux]
 bundle version="":
     pnpm i
     pnpm build
     just stage {{ if version == "" { "" } else { "--version " + version } }}
     just tarball {{ version }}
+    just deb {{ version }}
 
 # stage the Windows distribution tree into target/dist/stage
 [windows]
