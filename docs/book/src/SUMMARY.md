@@ -14,3 +14,7 @@
 
 - [Configuration](configuration.md)
 - [Key Bindings](key-bindings.md)
+
+# Developer Guide
+
+- [Protocol Reference](protocol-reference.md)
