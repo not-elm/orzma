@@ -115,7 +115,7 @@ tempfile = "3"
 toml = "0.8"
 dirs = "5"
 unicode-width = "=0.2.0"
-open = "5"
+open = { version = "5", features = ["shellexecute-on-windows"] }
 bevy_cef = "0.13"
 bevy_cef_core = "0.13"
 bitflags = "2"

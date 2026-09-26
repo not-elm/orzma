@@ -27,9 +27,8 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui_orzma::{Orzma, OrzmaBackend, OrzmaError, RpcError, Webview, WebviewHandle};
 use std::ffi::OsStr;
-use std::io::stdout;
+use std::io::{self, stdout};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -221,15 +220,20 @@ fn allowed_external_url(url: &str) -> bool {
     )
 }
 
-// NOTE: `open` launches each target with the user's own authority — the same as
-// double-clicking it in Finder. Some regular-file types auto-execute or redirect
-// (.command/.terminal/.tool run scripts; .webloc/.fileloc open an embedded URL),
-// so orzmd is for viewing TRUSTED local documents and does not sandbox link
-// targets (see the design's non-goals).
-/// Opens `target` (a URL or absolute path) with the macOS default handler.
-/// No shell is involved, so `target` is not interpreted.
-fn spawn_open(target: impl AsRef<OsStr>) {
-    let _ = Command::new("open").arg(target).spawn();
+// NOTE: the platform opener launches each target with the user's own
+// authority, the same as double-clicking it in Finder or Explorer. Some
+// regular-file types run or redirect when opened (.command/.terminal/.tool
+// scripts and .webloc/.fileloc links on macOS; .exe/.bat/.lnk on Windows), so
+// orzmd is for viewing trusted local documents and does not sandbox link
+// targets.
+/// Opens `target` (a URL or absolute path) with the platform's default
+/// handler. No shell is involved, so `target` is not interpreted.
+///
+/// # Errors
+///
+/// Returns the opener's error when the handler cannot be launched.
+fn spawn_open(target: impl AsRef<OsStr>) -> io::Result<()> {
+    open::that_detached(target)
 }
 
 fn main() {
@@ -346,15 +350,17 @@ fn event_loop(
             session.navigate(request, shared, view, &reload_tx);
         }
         for ext in view.read_events::<OpenExternal>() {
-            if allowed_external_url(&ext.url) {
-                spawn_open(&ext.url);
+            if allowed_external_url(&ext.url) && spawn_open(&ext.url).is_err() {
+                session.flash = Some(format!("cannot open {}", ext.url));
             }
         }
         for op in view.read_events::<OpenPath>() {
             let base = session.base_dir();
-            match document::resolve_link(base, &op.path) {
-                Ok(target) => spawn_open(&target),
-                Err(_) => session.flash = Some(format!("cannot open {}", op.path)),
+            let opened = document::resolve_link(base, &op.path)
+                .ok()
+                .is_some_and(|target| spawn_open(dunce::simplified(&target)).is_ok());
+            if !opened {
+                session.flash = Some(format!("cannot open {}", op.path));
             }
         }
 

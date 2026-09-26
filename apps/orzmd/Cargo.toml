@@ -22,6 +22,8 @@ notify-debouncer-full = "0.3"
 rust-embed = "8"
 tempfile = { workspace = true }
 blake3 = "1"
+open = { workspace = true }
+dunce = "1"
 
 [lints]
 workspace = true
