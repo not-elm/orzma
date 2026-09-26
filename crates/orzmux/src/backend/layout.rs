@@ -66,6 +66,29 @@ struct Rect {
     rows: u16,
 }
 
+/// Where a split's divider may sit within the rectangle the split
+/// divides, measured along the split's axis.
+#[derive(Debug, Clone, Copy)]
+struct DividerRange {
+    /// The cells both children share: the extent minus the divider.
+    avail: u16,
+    /// The rectangle's first cell along the axis.
+    origin: u16,
+    /// The smallest first-child extent the divider may leave.
+    lo: u16,
+    /// The largest first-child extent the divider may leave.
+    hi: u16,
+}
+
+/// One split on the path from a pane up to the root.
+#[derive(Debug, Clone, Copy)]
+struct Ancestor {
+    split: SplitId,
+    orientation: SplitOrientation,
+    /// Whether the pane lies in the split's first child.
+    in_first: bool,
+}
+
 impl LayoutTree {
     /// An empty tree with no active pane.
     pub fn new() -> Self {
@@ -223,56 +246,58 @@ impl LayoutTree {
     /// tree's own minimum. Returns whether the ratio changed; a `split`
     /// that is not in the tree returns `false`.
     pub fn resize_split(&mut self, split: SplitId, position: u16, window: GridSize) -> bool {
-        let Some(root_rect) = self.root_rect(window) else {
+        let Some((node, rect)) = self.split_mut(split, window) else {
             return false;
         };
-        let Some(root) = self.root.as_mut() else {
+        let range = DividerRange::of(node, rect);
+        let first = position
+            .saturating_sub(range.origin)
+            .clamp(range.lo, range.hi);
+        node.set_first_len(first, range.avail)
+    }
+
+    /// Moves one divider of the active pane `cells` cells in `direction`.
+    ///
+    /// The divider comes from the pane's run on `direction`'s axis: the
+    /// nearest split of that orientation above the pane, together with
+    /// each parent of the same orientation above it. Within the run the
+    /// divider after the pane moves when there is one, and otherwise the
+    /// divider before it. The divider stops at the drag minimum, or at
+    /// the tree minimum in a window too small for the drag minimum, and
+    /// never moves against `direction`. Returns whether the ratio
+    /// changed; it is `false` with no active pane, no divider on the
+    /// axis, a zero `cells`, or no room left to move.
+    pub fn resize_direction(
+        &mut self,
+        direction: PaneDirection,
+        cells: u16,
+        window: GridSize,
+    ) -> bool {
+        let Some(active) = self.active() else {
             return false;
         };
-        let Some((node, rect)) = root.find_split_mut(split, root_rect) else {
+        let (orientation, toward_first) = match direction {
+            PaneDirection::Left => (SplitOrientation::Vertical, true),
+            PaneDirection::Right => (SplitOrientation::Vertical, false),
+            PaneDirection::Up => (SplitOrientation::Horizontal, true),
+            PaneDirection::Down => (SplitOrientation::Horizontal, false),
+        };
+        let Some(split) = self.border_split(active, orientation) else {
             return false;
         };
-        let (avail, origin, drag_lo, drag_hi) = match node.orientation {
-            SplitOrientation::Vertical => {
-                let avail = rect.cols - 1;
-                (
-                    avail,
-                    rect.x,
-                    node.first.min_size_for_drag().cols,
-                    avail.saturating_sub(node.second.min_size_for_drag().cols),
-                )
-            }
-            SplitOrientation::Horizontal => {
-                let avail = rect.rows - 1;
-                (
-                    avail,
-                    rect.y,
-                    node.first.min_size_for_drag().rows,
-                    avail.saturating_sub(node.second.min_size_for_drag().rows),
-                )
-            }
+        let Some((node, rect)) = self.split_mut(split, window) else {
+            return false;
         };
-        let (lo, hi) = if drag_lo > drag_hi {
-            match node.orientation {
-                SplitOrientation::Vertical => (
-                    node.first.min_size().cols,
-                    avail - node.second.min_size().cols,
-                ),
-                SplitOrientation::Horizontal => (
-                    node.first.min_size().rows,
-                    avail - node.second.min_size().rows,
-                ),
-            }
+        let range = DividerRange::of(node, rect);
+        let current = node.first_len(rect);
+        let (next, moves) = if toward_first {
+            let next = current.saturating_sub(cells).max(range.lo);
+            (next, next < current)
         } else {
-            (drag_lo, drag_hi)
+            let next = current.saturating_add(cells).min(range.hi);
+            (next, next > current)
         };
-        let first = position.saturating_sub(origin).clamp(lo, hi);
-        let ratio = f32::from(first) / f32::from(avail);
-        if node.ratio == ratio {
-            return false;
-        }
-        node.ratio = ratio;
-        true
+        moves && node.set_first_len(next, range.avail)
     }
 
     #[cfg(test)]
@@ -324,6 +349,29 @@ impl LayoutTree {
             cols: window.cols.max(min.cols),
             rows: window.rows.max(min.rows),
         })
+    }
+
+    /// The split with `id` and the rectangle it divides when the tree is
+    /// solved against `window`, or `None` when it is not in the tree.
+    fn split_mut(&mut self, id: SplitId, window: GridSize) -> Option<(&mut Split, Rect)> {
+        let root_rect = self.root_rect(window)?;
+        self.root.as_mut()?.find_split_mut(id, root_rect)
+    }
+
+    /// The split whose divider a directional resize of `pane` on
+    /// `orientation`'s axis moves, or `None` when no split of that
+    /// orientation sits above `pane`.
+    fn border_split(&self, pane: PaneId, orientation: SplitOrientation) -> Option<SplitId> {
+        let path = self.root.as_ref()?.path_to(pane)?;
+        let run: Vec<&Ancestor> = path
+            .iter()
+            .skip_while(|a| a.orientation != orientation)
+            .take_while(|a| a.orientation == orientation)
+            .collect();
+        run.iter()
+            .find(|a| a.in_first)
+            .or(run.first())
+            .map(|a| a.split)
     }
 }
 
@@ -489,18 +537,63 @@ impl Node {
             }
         }
     }
+
+    /// The splits from `pane` up to this node, nearest first, or `None`
+    /// when `pane` is not in this subtree.
+    fn path_to(&self, pane: PaneId) -> Option<Vec<Ancestor>> {
+        match self {
+            Node::Leaf(id) => (*id == pane).then(Vec::new),
+            Node::Split(s) => {
+                [(&s.first, true), (&s.second, false)]
+                    .into_iter()
+                    .find_map(|(child, in_first)| {
+                        let mut path = child.path_to(pane)?;
+                        path.push(Ancestor {
+                            split: s.id,
+                            orientation: s.orientation,
+                            in_first,
+                        });
+                        Some(path)
+                    })
+            }
+        }
+    }
 }
 
 impl Split {
-    /// The child rectangles `rect` divides into, and the divider between
-    /// them.
-    fn subdivide(&self, rect: Rect) -> (Rect, Separator, Rect) {
+    /// The first child's extent along the split axis when the split
+    /// divides `rect`, clamped so both children keep their tree minimum.
+    fn first_len(&self, rect: Rect) -> u16 {
         let min_first = self.first.min_size();
         let min_second = self.second.min_size();
         match self.orientation {
             SplitOrientation::Vertical => {
+                share(rect.cols - 1, self.ratio, min_first.cols, min_second.cols)
+            }
+            SplitOrientation::Horizontal => {
+                share(rect.rows - 1, self.ratio, min_first.rows, min_second.rows)
+            }
+        }
+    }
+
+    /// Points the ratio at `first` of `avail` cells. Returns whether the
+    /// ratio changed.
+    fn set_first_len(&mut self, first: u16, avail: u16) -> bool {
+        let ratio = f32::from(first) / f32::from(avail);
+        if self.ratio == ratio {
+            return false;
+        }
+        self.ratio = ratio;
+        true
+    }
+
+    /// The child rectangles `rect` divides into, and the divider between
+    /// them.
+    fn subdivide(&self, rect: Rect) -> (Rect, Separator, Rect) {
+        let first = self.first_len(rect);
+        match self.orientation {
+            SplitOrientation::Vertical => {
                 let avail = rect.cols - 1;
-                let first = share(avail, self.ratio, min_first.cols, min_second.cols);
                 (
                     Rect {
                         cols: first,
@@ -522,7 +615,6 @@ impl Split {
             }
             SplitOrientation::Horizontal => {
                 let avail = rect.rows - 1;
-                let first = share(avail, self.ratio, min_first.rows, min_second.rows);
                 (
                     Rect {
                         rows: first,
@@ -542,6 +634,39 @@ impl Split {
                     },
                 )
             }
+        }
+    }
+}
+
+impl DividerRange {
+    /// The divider range `split` allows within `rect`: both children keep
+    /// the drag minimum, or the tree minimum when `rect` is too small for
+    /// the drag minimum.
+    fn of(split: &Split, rect: Rect) -> Self {
+        let axis = |size: GridSize| match split.orientation {
+            SplitOrientation::Vertical => size.cols,
+            SplitOrientation::Horizontal => size.rows,
+        };
+        let (extent, origin) = match split.orientation {
+            SplitOrientation::Vertical => (rect.cols, rect.x),
+            SplitOrientation::Horizontal => (rect.rows, rect.y),
+        };
+        let avail = extent - 1;
+        let drag_lo = axis(split.first.min_size_for_drag());
+        let drag_hi = avail.saturating_sub(axis(split.second.min_size_for_drag()));
+        let (lo, hi) = if drag_lo > drag_hi {
+            (
+                axis(split.first.min_size()),
+                avail - axis(split.second.min_size()),
+            )
+        } else {
+            (drag_lo, drag_hi)
+        };
+        Self {
+            avail,
+            origin,
+            lo,
+            hi,
         }
     }
 }
@@ -1078,5 +1203,262 @@ mod tests {
 
         let solved = tree.solve(narrow);
         assert_eq!(solved.separators[0].x, 7);
+    }
+
+    /// Builds `A | (B | C)` in an 80×24 window with C active: the root
+    /// divider sits at x = 40 and the B|C divider at x = 60.
+    fn three_columns() -> LayoutTree {
+        let mut tree = two_side_by_side();
+        tree.split(PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
+            .unwrap();
+        tree
+    }
+
+    /// Builds `(A | A') | B` in an 80×24 window by splitting A after B,
+    /// with A' active: the A|A' divider sits at x = 20 and the root
+    /// divider at x = 40.
+    fn nested_run() -> LayoutTree {
+        let mut tree = LayoutTree::new();
+        tree.insert_root(PaneId(1)).unwrap();
+        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(3), W)
+            .unwrap();
+        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
+            .unwrap();
+        tree
+    }
+
+    /// Asserts that a pane with a divider after it moves that divider in
+    /// the key's direction by the requested cells.
+    ///
+    /// Case: the user nudges the right border of the middle one of three
+    /// side-by-side panes to the left, then back to the right.
+    #[test]
+    fn a_middle_pane_moves_its_right_border() {
+        let mut tree = three_columns();
+        tree.select(PaneId(2));
+
+        assert!(tree.resize_direction(PaneDirection::Left, 5, W));
+        let solved = tree.solve(W);
+        assert_eq!(solved.separators[0].x, 40);
+        assert_eq!(solved.separators[1].x, 55);
+
+        assert!(tree.resize_direction(PaneDirection::Right, 5, W));
+        assert_eq!(tree.solve(W).separators[1].x, 60);
+    }
+
+    /// Asserts that the last pane of a row, which has no divider after
+    /// it, moves the divider before it.
+    ///
+    /// Case: the user presses resize-left-pane in the rightmost of three
+    /// side-by-side panes to widen it.
+    #[test]
+    fn the_last_pane_of_a_row_moves_its_left_border() {
+        let mut tree = three_columns();
+
+        assert!(tree.resize_direction(PaneDirection::Left, 5, W));
+
+        let solved = tree.solve(W);
+        assert_eq!(solved.separators[0].x, 40);
+        assert_eq!(solved.separators[1].x, 55);
+        assert_eq!(rect_of(&solved, PaneId(3)).cols, 24);
+    }
+
+    /// Asserts that up and down move the divider of a stacked pair: the
+    /// top pane moves the divider below it and the bottom pane the
+    /// divider above it.
+    ///
+    /// Case: the user presses resize-down-pane in the top pane, then
+    /// resize-up-pane twice in the bottom pane.
+    #[test]
+    fn stacked_panes_move_the_horizontal_divider() {
+        let mut tree = LayoutTree::new();
+        tree.insert_root(PaneId(1)).unwrap();
+        tree.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), W)
+            .unwrap();
+        tree.select(PaneId(1));
+
+        assert!(tree.resize_direction(PaneDirection::Down, 5, W));
+        assert_eq!(tree.solve(W).separators[0].y, 17);
+
+        tree.select(PaneId(2));
+        assert!(tree.resize_direction(PaneDirection::Up, 5, W));
+        assert!(tree.resize_direction(PaneDirection::Up, 5, W));
+        assert_eq!(tree.solve(W).separators[0].y, 7);
+    }
+
+    /// Asserts that a pane whose next divider belongs to an outer split
+    /// of the same orientation moves that outer divider, and that the
+    /// inner split keeps its ratio as it widens.
+    ///
+    /// Case: the user split the left of two panes, then presses
+    /// resize-right-pane in the new middle pane.
+    #[test]
+    fn a_nested_pane_moves_the_outer_divider_after_it() {
+        let mut tree = nested_run();
+
+        assert!(tree.resize_direction(PaneDirection::Right, 5, W));
+
+        let solved = tree.solve(W);
+        assert_eq!(solved.separators[1].x, 45);
+        assert_eq!(solved.separators[0].x, 22);
+    }
+
+    /// Asserts that the first pane of a nested run moves the nearest
+    /// divider after it rather than an outer one.
+    ///
+    /// Case: the user presses resize-right-pane in the leftmost of three
+    /// panes whose left two came from splitting one pane.
+    #[test]
+    fn the_first_pane_of_a_nested_run_moves_the_nearest_divider() {
+        let mut tree = nested_run();
+        tree.select(PaneId(1));
+
+        assert!(tree.resize_direction(PaneDirection::Right, 5, W));
+
+        let solved = tree.solve(W);
+        assert_eq!(solved.separators[0].x, 25);
+        assert_eq!(solved.separators[1].x, 40);
+    }
+
+    /// Asserts that the search for a divider crosses a split of the
+    /// other orientation to reach the nearest one on the key's axis.
+    ///
+    /// Case: the right column is split into a top and a bottom pane, and
+    /// the user presses resize-left-pane in the bottom one.
+    #[test]
+    fn a_stacked_pane_moves_the_column_divider_beside_it() {
+        let mut tree = two_side_by_side();
+        tree.split(PaneId(2), SplitOrientation::Horizontal, PaneId(3), W)
+            .unwrap();
+
+        assert!(tree.resize_direction(PaneDirection::Left, 5, W));
+
+        assert_eq!(tree.solve(W).separators[0].x, 35);
+    }
+
+    /// Asserts that the run of same-orientation splits stops at a split
+    /// of the other orientation, so the pane moves the divider inside
+    /// its own row rather than the outer divider on its right.
+    ///
+    /// Case: the left column holds A above a B|C row, D sits to the
+    /// right, and the user presses resize-left-pane in C.
+    #[test]
+    fn the_run_stops_at_a_split_of_the_other_orientation() {
+        let mut tree = LayoutTree::new();
+        tree.insert_root(PaneId(1)).unwrap();
+        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(4), W)
+            .unwrap();
+        tree.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), W)
+            .unwrap();
+        tree.split(PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
+            .unwrap();
+
+        assert!(tree.resize_direction(PaneDirection::Left, 5, W));
+
+        let solved = tree.solve(W);
+        assert_eq!(solved.separators[1].x, 15);
+        assert_eq!(solved.separators[2].x, 40);
+    }
+
+    /// Asserts that a resize with no divider on the key's axis, with a
+    /// lone pane, or with no pane at all is refused and changes nothing.
+    ///
+    /// Case: the user presses resize-up-pane with only side-by-side panes
+    /// open, then resize-left-pane with a single pane, and a press also
+    /// arrives before the first pane has opened.
+    #[test]
+    fn a_resize_without_a_divider_on_the_axis_is_refused() {
+        let mut tree = two_side_by_side();
+        let before = tree.solve(W);
+        assert!(!tree.resize_direction(PaneDirection::Up, 5, W));
+        assert_eq!(tree.solve(W), before);
+
+        let mut single = LayoutTree::new();
+        single.insert_root(PaneId(1)).unwrap();
+        assert!(!single.resize_direction(PaneDirection::Left, 5, W));
+
+        assert!(!LayoutTree::new().resize_direction(PaneDirection::Left, 5, W));
+    }
+
+    /// Asserts that repeated presses stop the divider at the drag
+    /// minimum, the last step moving only as far as the minimum allows,
+    /// and that a press at the minimum is refused.
+    ///
+    /// Case: the user holds resize-left-pane until the left pane cannot
+    /// shrink any further.
+    #[test]
+    fn repeated_resizes_stop_at_the_drag_minimum() {
+        let mut tree = two_side_by_side();
+
+        for expected in [35, 30, 25, 20, 15, 10, 5, 4] {
+            assert!(tree.resize_direction(PaneDirection::Left, 5, W));
+            assert_eq!(tree.solve(W).separators[0].x, expected);
+        }
+        assert!(!tree.resize_direction(PaneDirection::Left, 5, W));
+        assert_eq!(tree.solve(W).separators[0].x, 4);
+    }
+
+    /// Asserts that a press whose clamp would move the divider against
+    /// the key's direction is refused, while the opposite key still
+    /// moves it.
+    ///
+    /// Case: the left pane is two columns wide, narrower than the drag
+    /// minimum, and the user presses resize-left-pane and then
+    /// resize-right-pane.
+    #[test]
+    fn a_resize_never_moves_the_divider_against_the_key() {
+        let mut tree = two_side_by_side();
+        tree.set_root_ratio_for_test(0.03);
+        assert_eq!(tree.solve(W).separators[0].x, 2);
+
+        assert!(!tree.resize_direction(PaneDirection::Left, 5, W));
+        assert_eq!(tree.solve(W).separators[0].x, 2);
+
+        assert!(tree.resize_direction(PaneDirection::Right, 5, W));
+        assert_eq!(tree.solve(W).separators[0].x, 7);
+    }
+
+    /// Asserts that a press toward a side already narrower than the drag
+    /// minimum moves the divider exactly the requested cells.
+    ///
+    /// Case: the right pane has been squeezed to two columns and the user
+    /// presses resize-left-pane to widen it.
+    #[test]
+    fn a_resize_toward_a_squeezed_side_moves_exactly_the_requested_cells() {
+        let mut tree = two_side_by_side();
+        tree.set_root_ratio_for_test(0.98);
+        assert_eq!(tree.solve(W).separators[0].x, 77);
+
+        assert!(tree.resize_direction(PaneDirection::Left, 5, W));
+
+        assert_eq!(tree.solve(W).separators[0].x, 72);
+    }
+
+    /// Asserts that a zero-cell resize is refused.
+    ///
+    /// Case: a caller sends a directional resize with a zero step.
+    #[test]
+    fn a_zero_cell_resize_is_refused() {
+        let mut tree = two_side_by_side();
+
+        assert!(!tree.resize_direction(PaneDirection::Left, 0, W));
+    }
+
+    /// Asserts that in a window too small for the drag minimum the
+    /// divider still moves, stopping at the tree's own leaf minimum.
+    ///
+    /// Case: the user shrinks the window until two side-by-side panes no
+    /// longer fit their drag minimum, then presses resize-left-pane.
+    #[test]
+    fn a_cramped_window_resizes_down_to_the_tree_minimum() {
+        let narrow = GridSize { cols: 8, rows: 24 };
+        let mut tree = LayoutTree::new();
+        tree.insert_root(PaneId(1)).unwrap();
+        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), narrow)
+            .unwrap();
+
+        assert!(tree.resize_direction(PaneDirection::Left, 5, narrow));
+
+        assert_eq!(tree.solve(narrow).separators[0].x, 2);
     }
 }
