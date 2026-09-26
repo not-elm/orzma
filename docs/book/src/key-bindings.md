@@ -14,8 +14,9 @@ Holding the modifier works as usual, so `Alt+h` still reaches the shell as a
 meta-prefixed key.
 
 After a tap, the next keystroke either runs a `<Leader>` action or is
-swallowed if no action matches; the leader does not time out while it waits.
-Switching to another window cancels a tap.
+swallowed if no action matches; the leader does not time out while it waits,
+even if you switch to another window and back. Switching windows before you
+release the modifier cancels the tap.
 
 - `leader` sets the leader: a modifier to tap (`"Cmd"`, `"Ctrl"`, or
   `"Alt"`; `"Shift"` is not allowed), a chord such as `"Ctrl+A"` (press the
@@ -31,9 +32,10 @@ A chord is zero or more modifiers followed by exactly one key, joined with `+`.
 
 - **Modifiers** (case-insensitive): `Cmd` (also `Command` / `Meta` / `Super`),
   `Ctrl`, `Shift`, `Alt` (also `Opt` / `Option`).
-- **Keys**: any single character (letters are case-insensitive), or a named key:
-  `Escape` `Space` `Enter` `Tab` `Backspace` `ArrowUp` `ArrowDown` `ArrowLeft`
-  `ArrowRight` `Plus`.
+- **Keys**: a letter or a digit (letters are case-insensitive), `[`, `]`, `-`,
+  `=`, or a named key: `Escape` `Space` `Enter` `Tab` `Backspace` `ArrowUp`
+  `ArrowDown` `ArrowLeft` `ArrowRight` `Plus`. Any other character is accepted
+  but never fires.
 - For the `+` key itself, use the token `Plus` (e.g. `Cmd+Plus`).
 
 Examples: `Cmd+Shift+Q`, `Ctrl+Alt+ArrowLeft`, `Cmd+Plus`.

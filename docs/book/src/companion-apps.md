@@ -50,8 +50,8 @@ orzmd · README.md    ● live    42%
 switches to `○ missing` and the last rendered content stays on screen.
 
 On Windows, local images referenced by a document are staged as symlinks when
-Developer Mode is on and copied otherwise; a copied image does not refresh
-until orzmd is restarted.
+Windows allows it (Developer Mode is on, or orzmd runs as administrator) and
+copied otherwise; a copied image does not refresh until orzmd is restarted.
 
 ### Keyboard shortcuts
 

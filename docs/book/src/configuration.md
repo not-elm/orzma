@@ -47,9 +47,10 @@ and the `[vi-mode]` table in [Vi Mode](vi-mode.md).
 
 ```toml
 [orzma]
-# Shell launched in new panes. Default: $SHELL when it is set; otherwise
-# /bin/sh on macOS, and on Windows the first of pwsh, powershell,
-# %COMSPEC%, and cmd.exe that is available. No ~ expansion.
+# Shell launched in new panes. Default: $SHELL when it is set (on Windows,
+# only when that program exists); otherwise /bin/sh on macOS, and on Windows
+# pwsh or powershell if installed, then %COMSPEC% when it is set, then
+# cmd.exe. No ~ expansion.
 # shell = "/bin/zsh"
 # Whether orzma injects a prompt hook into a recognized shell (pwsh,
 # powershell, cmd) so a split pane inherits its working directory. Has
@@ -122,13 +123,14 @@ option_as_alt = "none"   # "none" | "left" | "right" | "both"
 ```toml
 [mouse]
 lines_per_notch = 3              # u32. Lines scrolled per wheel notch.
-fine_modifier = "alt"            # "alt" | "ctrl" | "shift" | "none". Modifier for fine (slow) scroll.
+fine_modifier = "alt"            # "alt" | "ctrl" | "shift" | "none". Modifier for fine (slow) scroll; "shift" has no effect on macOS.
 fine_lines = 1                   # u32. Lines per notch while fine_modifier is held.
 max_protocol_events_per_frame = 8  # u32. Most wheel notches one routing call turns into mouse reports or alternate-scroll cursor keys, per axis; excess notches are dropped, and cursor keys additionally stop at 240 per call.
 cells_per_notch = 0.5            # f32. Wheel accumulation threshold per notch, on both axes.
 axis_lock_ratio = 0.9            # f32, clamped to 0.0..=1.0; a non-finite value reverts to 0.9. Trackpad dominant-axis lock: horizontal scroll kept only when |x|/hypot(x,y) >= this. 0.0 disables; 1.0 = pure-horizontal only.
 double_click_timeout_ms = 400    # u32. Max ms between clicks to count as double/triple.
 click_drift_px = 8.0             # f32. Max pointer drift (logical px) between clicks of a multi-click.
+# The five keys below are accepted but not used yet: changing them has no effect.
 drag_threshold_px = 4.0          # f32. Pointer travel (logical px) before a press becomes a drag.
 divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divider grab zone.
 # --- advanced drag-autoscroll tuning (rarely changed) ---
