@@ -375,10 +375,13 @@ mod tests {
     use crate::error::RegisterError;
     use crate::protocol::NavAction;
     use orzma_vt::prelude::InstanceId;
-    use std::io::Read;
+    use std::io::{ErrorKind, Read};
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
     use tempfile::TempDir;
+
+    /// How long a test client's read waits before it fails.
+    const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
     /// A listener on a socket in a fresh temp directory.
     fn listen() -> (TempDir, PathBuf, Receiver<ControlEvent>) {
@@ -386,6 +389,14 @@ mod tests {
         let sock = dir.path().join("ctl.sock");
         let events = spawn_listener(&sock).expect("the socket binds");
         (dir, sock, events)
+    }
+
+    /// A client of `sock` whose reads fail after `READ_TIMEOUT` instead of
+    /// blocking.
+    fn connect(sock: &Path) -> UnixStream {
+        let client = UnixStream::connect(sock).unwrap();
+        client.set_read_timeout(Some(READ_TIMEOUT)).unwrap();
+        client
     }
 
     fn next_event(events: &Receiver<ControlEvent>) -> ControlEvent {
@@ -424,10 +435,21 @@ mod tests {
 
     fn read_line(client: &UnixStream) -> String {
         let mut line = String::new();
-        BufReader::new(client.try_clone().unwrap())
-            .read_line(&mut line)
-            .unwrap();
+        BufReader::new(client).read_line(&mut line).unwrap();
         line
+    }
+
+    /// Reads `client` until the listener closes it and returns what it read.
+    /// A reset counts as a close; a read that times out fails the test.
+    fn read_until_closed(client: &mut UnixStream) -> Vec<u8> {
+        let mut rest = Vec::new();
+        if let Err(error) = client.read_to_end(&mut rest) {
+            assert!(
+                !matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
+                "the listener kept the connection open"
+            );
+        }
+        rest
     }
 
     /// Asserts that a `hello` reaches the host with the connection's writer,
@@ -438,7 +460,7 @@ mod tests {
     #[test]
     fn a_hello_hands_the_host_the_connections_writer() {
         let (_dir, sock, events) = listen();
-        let mut client = UnixStream::connect(&sock).unwrap();
+        let mut client = connect(&sock);
         let writer = hello(&events, &mut client, true);
         writer
             .send(r#"{"op":"call","handle":"H","reqId":"0","method":"m","params":null}"#.into())
@@ -454,12 +476,11 @@ mod tests {
     #[test]
     fn a_refused_hello_closes_the_connection() {
         let (_dir, sock, events) = listen();
-        let mut client = UnixStream::connect(&sock).unwrap();
+        let mut client = connect(&sock);
         drop(hello(&events, &mut client, false));
         let _ = writeln!(client, r#"{{"op":"unregister","handle":"h"}}"#);
         assert!(events.recv_timeout(Duration::from_millis(300)).is_err());
-        let mut rest = Vec::new();
-        assert_eq!(client.read_to_end(&mut rest).unwrap_or(0), 0);
+        assert!(read_until_closed(&mut client).is_empty());
     }
 
     /// Asserts that a first line other than `hello` closes the connection
@@ -469,12 +490,13 @@ mod tests {
     #[test]
     fn a_first_line_other_than_hello_produces_no_event() {
         let (_dir, sock, events) = listen();
-        let mut client = UnixStream::connect(&sock).unwrap();
+        let mut client = connect(&sock);
         send_line(
             &mut client,
             r#"{"op":"register","kind":"inline","html":"x"}"#,
         );
         assert!(events.recv_timeout(Duration::from_millis(300)).is_err());
+        assert!(read_until_closed(&mut client).is_empty());
     }
 
     /// Asserts that a `register` reaches the host already validated and that
@@ -486,7 +508,7 @@ mod tests {
     #[test]
     fn a_register_is_validated_and_its_reply_relayed() {
         let (_dir, sock, events) = listen();
-        let mut client = UnixStream::connect(&sock).unwrap();
+        let mut client = connect(&sock);
         let _writer = hello(&events, &mut client, true);
         send_line(
             &mut client,
@@ -530,7 +552,7 @@ mod tests {
     #[test]
     fn each_request_line_becomes_its_event() {
         let (_dir, sock, events) = listen();
-        let mut client = UnixStream::connect(&sock).unwrap();
+        let mut client = connect(&sock);
         let _writer = hello(&events, &mut client, true);
         for line in [
             r#"{"op":"reply","reqId":"g1","ok":true,"value":7}"#,
@@ -549,38 +571,40 @@ mod tests {
             matches!(next_event(&events), ControlEvent::Reply { connection: c, ref req_id, ok: true, .. } if c == connection && req_id == "g1")
         );
         assert!(
-            matches!(next_event(&events), ControlEvent::Emit { ref event, .. } if event == "tick")
+            matches!(next_event(&events), ControlEvent::Emit { connection: c, ref event, .. } if c == connection && event == "tick")
         );
         assert!(
-            matches!(next_event(&events), ControlEvent::Focus { instance: Some(ref i), .. } if i == "3f5a")
+            matches!(next_event(&events), ControlEvent::Focus { connection: c, instance: Some(ref i) } if c == connection && i == "3f5a")
         );
         assert!(matches!(
             next_event(&events),
             ControlEvent::Navigate {
+                connection: c,
                 action: NavAction::Reload,
                 ..
-            }
+            } if c == connection
         ));
         assert!(matches!(
             next_event(&events),
             ControlEvent::Mount {
+                connection: c,
                 row: 2,
                 col: 3,
                 rows: 12,
                 cols: 48,
                 ..
-            }
+            } if c == connection
         ));
         assert!(
-            matches!(next_event(&events), ControlEvent::Unmount { ref instance, .. } if instance == "3f5a")
+            matches!(next_event(&events), ControlEvent::Unmount { connection: c, ref instance } if c == connection && instance == "3f5a")
         );
         assert!(matches!(
             next_event(&events),
-            ControlEvent::SetForwardKeys { ref keys, .. } if *keys == vec![ForwardChord::new(vec![], "esc")]
+            ControlEvent::SetForwardKeys { connection: c, ref keys, .. } if c == connection && *keys == vec![ForwardChord::new(vec![], "esc")]
         ));
         assert!(matches!(
             next_event(&events),
-            ControlEvent::Unregister { ref handle, .. } if *handle == HandleId::from("H")
+            ControlEvent::Unregister { connection: c, ref handle } if c == connection && *handle == HandleId::from("H")
         ));
     }
 
@@ -593,7 +617,7 @@ mod tests {
     #[test]
     fn a_disconnect_arrives_while_the_host_holds_the_writer() {
         let (_dir, sock, events) = listen();
-        let mut client = UnixStream::connect(&sock).unwrap();
+        let mut client = connect(&sock);
         let writer = hello(&events, &mut client, true);
         drop(client);
         assert!(matches!(
@@ -610,26 +634,28 @@ mod tests {
         }
     }
 
-    /// Asserts that closing the connection delivers `Disconnect` even while
-    /// the writer thread is blocked on a peer that stopped reading.
+    /// Asserts that `Disconnect` arrives when the peer stops sending, even
+    /// while the writer thread is blocked on that peer because it never
+    /// reads.
     ///
-    /// Case: a program hangs without reading its socket while its page
-    /// floods it with events, and the user then kills the program.
+    /// Case: a program stops reading its socket while its page floods it
+    /// with events, then closes its sending side and hangs without exiting.
     #[test]
     fn a_disconnect_arrives_while_the_writer_is_blocked() {
         let (_dir, sock, events) = listen();
-        let mut client = UnixStream::connect(&sock).unwrap();
+        let mut client = connect(&sock);
         let writer = hello(&events, &mut client, true);
         let chunk = "x".repeat(64 * 1024);
         for _ in 0..64 {
             writer.send(chunk.clone()).unwrap();
         }
         thread::sleep(Duration::from_millis(100));
-        drop(client);
+        client.shutdown(Shutdown::Write).unwrap();
         assert!(matches!(
             next_event(&events),
             ControlEvent::Disconnect { .. }
         ));
+        drop(client);
         drop(writer);
     }
 
