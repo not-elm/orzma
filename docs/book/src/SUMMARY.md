@@ -5,6 +5,7 @@
 # User Guide
 
 - [Multiplexer](multiplexer.md)
+- [Webviews](webviews.md)
 - [Terminal Features](terminal-features.md)
 - [Vi Mode](vi-mode.md)
 
