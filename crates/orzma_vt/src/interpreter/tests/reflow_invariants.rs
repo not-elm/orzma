@@ -319,7 +319,8 @@ proptest! {
     /// policy, each row is as wide as the grid with its wide pairs intact,
     /// no row id repeats or comes back once gone, the history index stays
     /// in step, the bottom row ends its line, and the cursor and the saved
-    /// cursor sit on the screen.
+    /// cursor sit on the screen, and that a shrink of the alternate screen
+    /// keeps its top rows under their ids.
     ///
     /// Case: shells and full-screen programs print, move the cursor, erase,
     /// edit, set margins, scroll, save the cursor, and flip screens between
@@ -346,7 +347,18 @@ proptest! {
                 vt.interpret(&bytes_of(piece));
             }
             ledger.observe(&vt)?;
+            let alternate_shrink = vt.device.modes().active_screen == ScreenKind::Alternate
+                && *rows < vt.device.active_screen().grid().size().rows;
+            let ids_before = ring_ids(vt.device.active_screen().grid());
             let _ = vt.resize(GridSize { cols: *cols, rows: *rows });
+            if alternate_shrink {
+                prop_assert_eq!(
+                    ring_ids(vt.device.active_screen().grid()),
+                    ids_before[..usize::from(*rows)].to_vec(),
+                    "an alternate-screen shrink to {} rows moved the rows it kept",
+                    rows
+                );
+            }
             ledger.observe(&vt)?;
             check_structure(&vt)?;
         }
