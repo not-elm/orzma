@@ -134,6 +134,11 @@ ico *args:
 ico *args:
     python scripts/build_ico.py {{ args }}
 
+# regenerate the Linux hicolor icons (build/linux/icons/) from the master SVG
+[unix]
+linux-icons *args:
+    python3 scripts/build_linux_icons.py {{ args }}
+
 # build and package the orzma .app (extra args pass through, e.g. --version 1.2.3)
 [macos]
 bundle *args: orzmd-web

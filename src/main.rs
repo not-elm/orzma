@@ -123,6 +123,7 @@ fn fatal(message: impl Display) -> ! {
 fn primary_window() -> Window {
     Window {
         title: "orzma".to_string(),
+        name: cfg!(target_os = "linux").then(|| "orzma".to_string()),
         ime_enabled: false,
         ..default()
     }
@@ -239,6 +240,19 @@ mod tests {
         // calls `set_ime_allowed` only on a live `false -> true` change. Starting
         // `true` means that transition never fires and the OS IME never arms.
         assert!(!primary_window().ime_enabled);
+    }
+
+    /// Asserts that the primary window is named `orzma` on Linux, where the
+    /// name becomes the Wayland app ID and the X11 `WM_CLASS`, and is left
+    /// unnamed on other platforms, where Windows would take it as the window
+    /// class name.
+    ///
+    /// Case: a user installs orzma with `install.sh` and launches it from the
+    /// desktop's app grid, whose dock matches the window to `orzma.desktop`.
+    #[test]
+    fn primary_window_is_named_orzma_only_on_linux() {
+        let expected = cfg!(target_os = "linux").then(|| "orzma".to_string());
+        assert_eq!(primary_window().name, expected);
     }
 
     #[test]
