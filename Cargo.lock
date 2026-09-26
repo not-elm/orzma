@@ -2264,6 +2264,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cef_render_process"
+version = "0.2.0-dev"
+dependencies = [
+ "bevy_cef_core",
+]
+
+[[package]]
 name = "cesu8"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
