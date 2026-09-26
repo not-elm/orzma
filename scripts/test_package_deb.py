@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import sys
 import tempfile
@@ -181,6 +182,16 @@ class AssembleDebRoot(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 pd.assemble_deb_root(tree, root)
             self.assertIn("@ORZMA_EXEC@", str(ctx.exception))
+
+    def test_missing_icons_dir_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = _make_stage_tree(Path(tmp))
+            shutil.rmtree(tree / "share" / "icons")
+            root = Path(tmp) / "root"
+            root.mkdir()
+            with self.assertRaises(SystemExit) as ctx:
+                pd.assemble_deb_root(tree, root)
+            self.assertIn("icons", str(ctx.exception))
 
 
 class NormalizeModes(unittest.TestCase):

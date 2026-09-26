@@ -110,6 +110,8 @@ def installed_size_kib(root: Path) -> int:
 
 def assemble_deb_root(tree: Path, root: Path) -> None:
     missing = [name for name in (*LAUNCHERS, LICENSE_FILE) if not (tree / name).is_file()]
+    if not (tree / "share" / "icons").is_dir():
+        missing.append("share/icons")
     if missing:
         raise SystemExit(f"stage tree {tree} lacks {', '.join(missing)}; rerun `just stage`")
     for entry in sorted(tree.iterdir()):
