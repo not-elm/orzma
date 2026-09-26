@@ -155,6 +155,13 @@ impl DeviceState {
         screen.vi_motion(motion, &self.semantic_escape_chars)
     }
 
+    /// Applies a viewport motion in vi mode to the screen on show, as
+    /// [`Screen::vi_scroll`] does.
+    pub fn vi_scroll(&mut self, scroll: Scroll) -> ViewChange {
+        let screen = self.screens.get_mut(self.modes.active_screen);
+        screen.vi_scroll(scroll, &self.semantic_escape_chars)
+    }
+
     /// Prints one character at the cursor of the screen on show, shaped by
     /// the device's `IRM` and `DECAWM` modes and its open hyperlink, after
     /// mapping it through that screen's character set mapping.

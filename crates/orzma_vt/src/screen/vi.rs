@@ -287,6 +287,53 @@ impl Screen {
         ViewChange::classify(moved, damage)
     }
 
+    /// Applies a viewport motion in vi mode and moves the vi cursor with
+    /// it.
+    ///
+    /// A line motion keeps the vi cursor's row and pushes the cursor back
+    /// inside the viewport. A page or half-page motion moves the vi cursor
+    /// by the same number of rows onto that row's first non-blank cell.
+    /// `Top` and `Bottom` move it to the first non-blank cell of the oldest
+    /// row and of the bottom row. Outside vi mode it moves only the
+    /// viewport.
+    ///
+    /// The damage is [`DamageSpan::Full`] exactly when the viewport moved.
+    pub fn vi_scroll(&mut self, scroll: Scroll, escape_chars: &SemanticEscapeChars) -> ViewChange {
+        let Some(from) = self.vi.point() else {
+            return ViewChange::classify(false, self.scroll(scroll));
+        };
+        let rows = i32::from(self.grid.size().rows);
+        let target = {
+            let grid = MotionGrid::new(&self.grid, self.viewport.offset, escape_chars);
+            match scroll {
+                Scroll::Delta(_) => None,
+                Scroll::PageUp => Some(grid.scroll_target(from, rows)),
+                Scroll::PageDown => Some(grid.scroll_target(from, -rows)),
+                Scroll::HalfPageUp => Some(grid.scroll_target(from, rows / 2)),
+                Scroll::HalfPageDown => Some(grid.scroll_target(from, -(rows / 2))),
+                Scroll::Top => {
+                    let top = GridPoint {
+                        line: grid.topmost(),
+                        column: from.column,
+                    };
+                    Some(grid.apply(top, ViMotion::FirstOccupied))
+                }
+                Scroll::Bottom => {
+                    let bottom = GridPoint {
+                        line: grid.bottommost(),
+                        column: from.column,
+                    };
+                    let once = grid.apply(bottom, ViMotion::FirstOccupied);
+                    Some(grid.apply(once, ViMotion::FirstOccupied))
+                }
+            }
+        };
+        let moved = target.is_some_and(|point| self.vi.set(point));
+        let damage = self.scroll(scroll);
+        let clamped = self.clamp_vi_cursor();
+        ViewChange::classify(moved || clamped, damage)
+    }
+
     /// Scrolls the viewport just far enough to show the vi cursor; `None`
     /// when it was already shown.
     fn scroll_to_vi_cursor(&mut self) -> Option<DamageSpan> {

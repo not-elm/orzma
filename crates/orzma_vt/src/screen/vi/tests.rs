@@ -244,3 +244,86 @@ fn a_motion_outside_vi_mode_changes_nothing() {
         ViewChange::Unchanged
     );
 }
+
+/// A 10×3 screen whose rows read `4` / `5` / `6` over three rows of
+/// history, `1` / `2` / `3`, in vi mode with the vi cursor on the write
+/// cursor at (2, 1).
+fn scrolled_screen() -> Screen {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "1\n2\n3\n4\n5\n6");
+    assert!(screen.enter_vi_mode());
+    screen
+}
+
+/// Asserts that a line scroll keeps the vi cursor's row and pushes it back
+/// inside the viewport.
+///
+/// Case: the user turns the wheel up two notches in vi mode.
+#[test]
+fn a_line_scroll_pushes_the_vi_cursor_into_the_viewport() {
+    let mut screen = scrolled_screen();
+    assert_eq!(
+        screen.vi_scroll(Scroll::Delta(2), &chars()),
+        ViewChange::Repainted
+    );
+    assert_eq!(vi_point(&screen), Some(point(0, 1)));
+}
+
+/// Asserts that a line scroll that leaves the vi cursor inside the
+/// viewport still repaints every row.
+///
+/// Case: the user turns the wheel up one notch while the vi cursor sits on
+/// the top row of the screen.
+#[test]
+fn a_line_scroll_that_keeps_the_vi_cursor_in_view_repaints() {
+    let mut screen = scrolled_screen();
+    screen.vi.set(point(0, 0));
+    assert_eq!(
+        screen.vi_scroll(Scroll::Delta(1), &chars()),
+        ViewChange::Repainted
+    );
+    assert_eq!(screen.display_offset(), DisplayOffset(1));
+    assert_eq!(vi_point(&screen), Some(point(0, 0)));
+}
+
+/// Asserts that a page scroll moves the vi cursor by a screenful onto the
+/// first non-blank cell of its new row.
+///
+/// Case: the user presses `Ctrl+B` in vi mode.
+#[test]
+fn a_page_scroll_moves_the_vi_cursor_by_a_screenful() {
+    let mut screen = scrolled_screen();
+    let _ = screen.vi_scroll(Scroll::PageUp, &chars());
+    assert_eq!(screen.display_offset(), DisplayOffset(3));
+    assert_eq!(vi_point(&screen), Some(point(-1, 0)));
+}
+
+/// Asserts that `Top` and `Bottom` move the vi cursor to the first
+/// non-blank cell of the oldest row and of the bottom row.
+///
+/// Case: the user presses `g` and then `G` in vi mode.
+#[test]
+fn top_and_bottom_move_the_vi_cursor_to_the_grid_ends() {
+    let mut screen = scrolled_screen();
+    let _ = screen.vi_scroll(Scroll::Top, &chars());
+    assert_eq!(vi_point(&screen), Some(point(-3, 0)));
+    let _ = screen.vi_scroll(Scroll::Bottom, &chars());
+    assert_eq!(screen.display_offset(), DisplayOffset(0));
+    assert_eq!(vi_point(&screen), Some(point(2, 0)));
+}
+
+/// Asserts that a page scroll on a screen without history moves only the
+/// vi cursor and owes no damage.
+///
+/// Case: the user presses `Ctrl+B` in vi mode over a full-screen program.
+#[test]
+fn a_page_scroll_without_history_moves_only_the_vi_cursor() {
+    let mut screen = screen(10, 3, 0);
+    print_text(&mut screen, "a\nb\nc");
+    assert!(screen.enter_vi_mode());
+    assert_eq!(
+        screen.vi_scroll(Scroll::PageUp, &chars()),
+        ViewChange::Carried
+    );
+    assert_eq!(vi_point(&screen), Some(point(0, 0)));
+}

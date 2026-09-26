@@ -191,8 +191,15 @@ pub trait Vt {
     #[must_use = "the evicted placements must reach the owner's signal queue"]
     fn resize(&mut self, size: GridSize) -> Option<ResizeChanged>;
 
-    /// Applies the viewport motion; returns whether the viewport
-    /// moved. Only a real move stages (full) damage.
+    /// Applies the viewport motion; returns whether the viewport moved, or
+    /// in vi mode whether the viewport or the vi cursor moved. Only a real
+    /// move of the viewport stages (full) damage.
+    ///
+    /// In vi mode a line motion keeps the vi cursor's row and pushes it
+    /// back inside the viewport; a page or half-page motion moves it by the
+    /// same number of rows onto that row's first non-blank cell; `Top` and
+    /// `Bottom` move it to the first non-blank cell of the oldest row and
+    /// of the bottom row.
     fn scroll(&mut self, scroll: Scroll) -> bool;
 
     /// Anchors a new selection at `cell`, replacing any active one;
@@ -463,6 +470,10 @@ impl Vt for OrzmaVt {
     }
 
     fn scroll(&mut self, scroll: Scroll) -> bool {
+        if self.device.is_vi_mode() {
+            let change = self.device.vi_scroll(scroll);
+            return self.settle_view_change(change);
+        }
         self.tracker.stage_if_changed(self.device.scroll(scroll))
     }
 
@@ -1823,5 +1834,21 @@ mod tests {
         vt.vi_motion(ViMotion::First);
         vt.vi_motion(ViMotion::SemanticRight);
         assert_eq!(vt.vi_cursor().map(|cursor| cursor.point), Some(cell(0, 2)));
+    }
+
+    /// Asserts that a scroll in vi mode that moves only the vi cursor still
+    /// returns `true` and emits a frame.
+    ///
+    /// Case: the user presses `g` in vi mode on a terminal without
+    /// scrollback.
+    #[test]
+    fn a_vi_scroll_that_moves_only_the_vi_cursor_returns_true() {
+        let mut vt = filled();
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.frame();
+        assert!(vt.scroll(Scroll::Top));
+        let frame = vt.frame().expect("the vi cursor moved");
+        assert!(frame.rows.is_empty());
+        assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(0, 0)));
     }
 }
