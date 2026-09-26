@@ -2,7 +2,7 @@
 
 - [x] orzmux
 - [x] bevy_orzma_tty_renderer
-- [ ] bevy_orzma_webview_host
+- [ ] orzma_webview_host
 - [ ] bevy_orzma_webview
 - [ ] bevy_orzmux
 - [ ] orzma

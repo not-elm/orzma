@@ -5,7 +5,7 @@ use crate::requests::{
     copy::CopyPlugin, key_input::KeyInputPlugin, pane::PaneActionPlugin, paste::PastePlugin,
     pointer::PointerPlugin, scroll::ScrollPlugin, selection::SelectionPlugin,
     split_resize::SplitResizePlugin, vi_mode::ViModePlugin, vi_motion::ViMotionPlugin,
-    webview_mount::WebviewMountPlugin, webview_remove::WebviewRemovePlugin, wheel::WheelPlugin,
+    wheel::WheelPlugin,
 };
 use crate::{OrzmuxConnection, OrzmuxPane};
 use bevy::ecs::system::SystemParam;
@@ -22,8 +22,6 @@ mod selection;
 mod split_resize;
 mod vi_mode;
 mod vi_motion;
-mod webview_mount;
-mod webview_remove;
 mod wheel;
 
 pub use copy::RequestTtyCopySelection;
@@ -39,8 +37,6 @@ pub use selection::{
 pub use split_resize::RequestSplitResize;
 pub use vi_mode::{RequestTtyViMode, ViModeSwitch};
 pub use vi_motion::{RequestTtyViMotion, ViMotion};
-pub use webview_mount::RequestTtyWebviewMount;
-pub use webview_remove::RequestTtyWebviewRemove;
 pub use wheel::RequestTtyWheel;
 
 pub(crate) struct OrzmaEventRequestPlugin;
@@ -58,8 +54,6 @@ impl Plugin for OrzmaEventRequestPlugin {
             SplitResizePlugin,
             ViModePlugin,
             ViMotionPlugin,
-            WebviewMountPlugin,
-            WebviewRemovePlugin,
             WheelPlugin,
         ));
     }
@@ -150,7 +144,7 @@ mod tests {
         CellCoord, KeyText, PointerButton, PointerInput, PointerKind, ProtocolModifiers,
         TerminalKey, TerminalModifiers, WheelInput, WheelModifiers,
     };
-    use orzma_vt::prelude::{GridColumn, InstanceId, PlacementSize, ScreenLine, Scroll};
+    use orzma_vt::prelude::Scroll;
     use orzmux::prelude::{PaneId, SplitId};
 
     /// Asserts that no request observer runs once the connection is
@@ -164,9 +158,6 @@ mod tests {
         let pane = spawn_pane(&mut app, PaneId(1));
         app.world_mut().remove_resource::<OrzmuxConnection>();
         let key = TerminalKey::Character(KeyText::new("x").unwrap());
-        let instance: InstanceId = "3f5a9c02d1e84b7690ab3cde12f45678"
-            .parse()
-            .expect("valid id");
 
         let world = app.world_mut();
         world.trigger(RequestTtyKeyInput {
@@ -210,17 +201,6 @@ mod tests {
             scroll: Scroll::Delta(1),
         });
         world.trigger(RequestTtySelectionClear { terminal: pane });
-        world.trigger(RequestTtyWebviewMount {
-            terminal: pane,
-            instance,
-            row: ScreenLine(0),
-            column: GridColumn(0),
-            size: PlacementSize { rows: 1, cols: 1 },
-        });
-        world.trigger(RequestTtyWebviewRemove {
-            terminal: pane,
-            instances: vec![instance],
-        });
         world.trigger(RequestPaneAction {
             action: PaneAction::Kill,
         });

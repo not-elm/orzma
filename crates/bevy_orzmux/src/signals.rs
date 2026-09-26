@@ -66,48 +66,6 @@ pub struct TtyCwdChangedSignal {
     pub path: PathBuf,
 }
 
-/// Fired for a webview the PTY mounted inline and the VT registered.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct TtyWebviewMountSignal {
-    #[event_target]
-    pub terminal: Entity,
-    /// The host-minted instance this mount registered.
-    pub instance: InstanceId,
-    /// The cell rectangle the mount reserved.
-    pub size: PlacementSize,
-}
-
-/// Fired for a mount the VT refused because the placement cap was full;
-/// nothing was registered, so consumers only report it.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct TtyWebviewMountRejectedSignal {
-    #[event_target]
-    pub terminal: Entity,
-    /// The instance the refused mount named.
-    pub instance: InstanceId,
-}
-
-/// Fired for webview placements the PTY unmounted.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct TtyWebviewUnmountSignal {
-    #[event_target]
-    pub terminal: Entity,
-    /// The instance to unmount; `None` unmounts every placement.
-    pub instance: Option<InstanceId>,
-}
-
-/// Fired when the VT drops placements without the host naming them
-/// (history trim, reset, alternate-screen teardown, resize); consumers
-/// despawn the matching webviews by id and ignore unknown ids.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct TtyWebviewEvictedSignal {
-    #[event_target]
-    pub terminal: Entity,
-    /// The instances the VT evicted. It has already dropped them, so no
-    /// removal needs to be sent back.
-    pub placements: Vec<InstanceId>,
-}
-
 /// Fired when the terminal emits a frame; a full repaint carries every
 /// viewport row, and the changed-only sections (`placements`,
 /// `palette`) are `None` when unchanged since the previous frame.
@@ -141,20 +99,14 @@ pub(crate) fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signa
             terminal,
             path: path_buf,
         }),
-        VtSignal::WebviewMount { instance, size } => commands.trigger(TtyWebviewMountSignal {
-            terminal,
-            instance,
-            size,
-        }),
-        VtSignal::WebviewMountRejected { instance } => {
-            commands.trigger(TtyWebviewMountRejectedSignal { terminal, instance })
+        VtSignal::WebviewMount { .. }
+        | VtSignal::WebviewMountRejected { .. }
+        | VtSignal::WebviewUnmount { .. }
+        | VtSignal::WebviewEvicted { .. } => {
+            tracing::debug!(
+                ?terminal,
+                "webview placement signal dropped; the webview host owns placements"
+            );
         }
-        VtSignal::WebviewUnmount { instance } => {
-            commands.trigger(TtyWebviewUnmountSignal { terminal, instance })
-        }
-        VtSignal::WebviewEvicted { placements } => commands.trigger(TtyWebviewEvictedSignal {
-            terminal,
-            placements,
-        }),
     }
 }

@@ -11,7 +11,7 @@ use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::{Receiver, Select, TryRecvError};
 use orzma_tty::prelude::{PointerInput, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
-use orzma_vt::prelude::{GridColumn, GridSize, InstanceId, PlacementSize, ScreenLine, Scroll};
+use orzma_vt::prelude::{GridSize, Scroll};
 use orzma_webview_host::prelude::WebviewCommand;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -122,13 +122,6 @@ pub enum OrzmuxCommand {
         /// The pane to read the selection from.
         pane: PaneTarget,
     },
-    /// Release webview placement instances a pane no longer displays.
-    RemovePlacements {
-        /// The pane the placements belong to.
-        pane: PaneId,
-        /// The placement instances to release.
-        instances: Vec<InstanceId>,
-    },
     /// Move a split's divider.
     ResizeSplit {
         /// The split whose divider moves.
@@ -136,21 +129,6 @@ pub enum OrzmuxCommand {
         /// The whole-window cell boundary to put the divider on: `x` for
         /// a vertical split, `y` for a horizontal one.
         position: u16,
-    },
-    /// Register a host-driven webview placement at a visible cell of a
-    /// pane — the socket-op counterpart of the APC `mount` for PTYs that
-    /// drop APC (ConPTY).
-    MountPlacement {
-        /// The pane the placement belongs to.
-        pane: PaneId,
-        /// The host-minted instance the mount registers.
-        instance: InstanceId,
-        /// The visible row the rect's top edge sits on.
-        row: ScreenLine,
-        /// The column the rect's left edge sits on.
-        column: GridColumn,
-        /// The rect's extent in cells.
-        size: PlacementSize,
     },
     /// A report the GUI sends the webview host: a focus change, a first
     /// frame, or a page's call, event, or URL change.
@@ -176,11 +154,7 @@ impl OrzmuxCommand {
             Self::Scroll { pane, .. } => ("Scroll", Some(PaneTarget::Id(*pane))),
             Self::SelectionClear { pane } => ("SelectionClear", Some(PaneTarget::Id(*pane))),
             Self::CopySelection { pane } => ("CopySelection", Some(*pane)),
-            Self::RemovePlacements { pane, .. } => {
-                ("RemovePlacements", Some(PaneTarget::Id(*pane)))
-            }
             Self::ResizeSplit { .. } => ("ResizeSplit", None),
-            Self::MountPlacement { pane, .. } => ("MountPlacement", Some(PaneTarget::Id(*pane))),
             Self::Webview(_) => ("Webview", None),
         }
     }
@@ -391,18 +365,6 @@ impl EventLoop {
                 self.backend.copy_selection(pane);
                 Ok(())
             }
-            OrzmuxCommand::RemovePlacements { pane, instances } => {
-                self.backend.remove_placements(pane, instances)
-            }
-            OrzmuxCommand::MountPlacement {
-                pane,
-                instance,
-                row,
-                column,
-                size,
-            } => self
-                .backend
-                .mount_placement(pane, instance, row, column, size),
             OrzmuxCommand::Webview(command) => self.backend.webview_command(command),
         }
     }
