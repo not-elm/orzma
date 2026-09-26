@@ -132,12 +132,9 @@ the seven that differ elsewhere.
 | `rename-window` | `<Leader>r` | Open the rename prompt for the active window (not implemented yet). |
 
 > [!NOTE]
-> `zoom-pane`, the four `resize-*-pane` actions, and the window actions
-> (`new-window`, `kill-window`, `next-window`, `previous-window`,
-> `select-window-0` to `select-window-9`, and `rename-window`) are not
-> implemented yet. Their bindings are accepted and validated at startup, but
-> pressing them does nothing, whether they are bound directly or behind the
-> leader.
+> The actions marked "not implemented yet" are accepted and validated at
+> startup, but pressing them does nothing, whether they are bound directly or
+> behind the leader.
 
 ## Conflicts and turning the leader off
 

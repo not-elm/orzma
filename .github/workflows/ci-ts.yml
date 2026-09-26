@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - "sdk/orzma-web/**"
-      - "sdk/ratatui_orzma/examples/**"
+      - "sdk/ratatui_orzma/examples/**/*.html"
       - "apps/*/web/**"
       - "apps/*/package.json"
       - "apps/*/tsconfig.json"
@@ -21,7 +21,7 @@ on:
   pull_request:
     paths:
       - "sdk/orzma-web/**"
-      - "sdk/ratatui_orzma/examples/**"
+      - "sdk/ratatui_orzma/examples/**/*.html"
       - "apps/*/web/**"
       - "apps/*/package.json"
       - "apps/*/tsconfig.json"

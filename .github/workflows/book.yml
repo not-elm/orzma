@@ -18,6 +18,13 @@ jobs:
     name: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      LYCHEE_LINK_ARGS: >-
+        --exclude-path '404\.html$'
+        --remap 'https://github\.com/not-elm/orzma/(blob|tree|edit|raw)/(main|HEAD)/(.*) file://${{ github.workspace }}/$3'
+        --remap 'https://raw\.githubusercontent\.com/not-elm/orzma/(main|HEAD)/(.*) file://${{ github.workspace }}/$2'
+        --remap 'https://not-elm\.github\.io/orzma/?(.*) file://${{ github.workspace }}/target/book/$1'
+        target/book README.md CONTRIBUTING.md apps/orzmd/README.md apps/orzbrowser/README.md sdk/ratatui_orzma/README.md sdk/orzma-web/README.md
     steps:
       - uses: actions/checkout@v5
 
@@ -52,24 +59,12 @@ jobs:
         with:
           lycheeVersion: v0.24.2
           fail: true
-          args: >-
-            --offline --include-fragments --no-progress
-            --exclude-path '404\.html$'
-            --remap 'https://github\.com/not-elm/orzma/(blob|tree|edit|raw)/(main|HEAD)/(.*) file://${{ github.workspace }}/$3'
-            --remap 'https://raw\.githubusercontent\.com/not-elm/orzma/(main|HEAD)/(.*) file://${{ github.workspace }}/$2'
-            --remap 'https://not-elm\.github\.io/orzma/?(.*) file://${{ github.workspace }}/target/book/$1'
-            target/book README.md CONTRIBUTING.md apps/orzmd/README.md apps/orzbrowser/README.md sdk/ratatui_orzma/README.md sdk/orzma-web/README.md
+          args: --offline --include-fragments --no-progress ${{ env.LYCHEE_LINK_ARGS }}
 
       - name: Fail on repository links that no remap rule covers
         shell: bash
         run: |
-          lychee --dump \
-            --exclude-path '404\.html$' \
-            --remap 'https://github\.com/not-elm/orzma/(blob|tree|edit|raw)/(main|HEAD)/(.*) file://${{ github.workspace }}/$3' \
-            --remap 'https://raw\.githubusercontent\.com/not-elm/orzma/(main|HEAD)/(.*) file://${{ github.workspace }}/$2' \
-            --remap 'https://not-elm\.github\.io/orzma/?(.*) file://${{ github.workspace }}/target/book/$1' \
-            target/book README.md CONTRIBUTING.md apps/orzmd/README.md apps/orzbrowser/README.md sdk/ratatui_orzma/README.md sdk/orzma-web/README.md \
-            > links.txt
+          lychee --dump ${{ env.LYCHEE_LINK_ARGS }} > links.txt
           if grep -E '^https://(github\.com/not-elm/orzma/(blob|tree|edit|raw)/|raw\.githubusercontent\.com/not-elm/orzma/|not-elm\.github\.io/orzma)' links.txt; then
             echo "These links point into this repository or its site but match no --remap rule." >&2
             exit 1
