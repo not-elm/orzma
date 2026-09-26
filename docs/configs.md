@@ -12,7 +12,7 @@ orzma resolves the config path in this order:
 3. `~/.config/orzma/config.toml` — the default.
 
 Unknown sections are rejected at startup, as are unknown keys in `[cursor]`,
-`[orzma]`, `[keyboard]`, `[shortcuts]`, `[vi-mode]`, and `[font]`. Unknown keys in
+`[orzma]`, `[keyboard]`, `[shortcuts]`, `[vi-mode]`, `[selection]`, and `[font]`. Unknown keys in
 `[mouse]` and `[inactive_pane]` are silently ignored. Most invalid values are
 startup errors too; the few that are silently clamped or reverted are noted
 inline below.
@@ -44,6 +44,11 @@ thickness = 0.15          # f32 0..=1, fraction of the cell width. Out-of-range 
 unfocused_hollow = true
 # The caret starts blinking. DECSCUSR and DECSET 12 / DECRST 12 both
 # change it from there, and a DECSCUSR 0 or 7 restores the blink.
+
+[selection]
+# Characters that end a word for the vi-mode `w` / `b` / `e` motions,
+# besides whitespace. Read at startup. Omit the key to keep this default.
+semantic_escape_chars = ",│`|:\"' ()[]{}<>\t"
 
 [font]
 size = 11.25              # f32, logical px. Must be 0 < size <= 200, else startup error.
