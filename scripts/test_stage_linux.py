@@ -199,6 +199,12 @@ class ElfChecks(unittest.TestCase):
     def test_fully_resolved_ldd_output_yields_nothing(self):
         self.assertEqual(sl.unresolved_libraries("\tlibc.so.6 => /lib/libc.so.6 (0x1)\n"), [])
 
+    def test_capture_runs_with_a_c_locale(self):
+        with mock.patch.object(sl.subprocess, "run") as run:
+            run.return_value = mock.Mock(stdout="output")
+            sl._capture(["readelf", "-d", "/tmp/bin"])
+            self.assertEqual(run.call_args.kwargs["env"]["LC_ALL"], "C")
+
 
 def _make_linux_dir(root: Path) -> Path:
     linux = root / "linux"

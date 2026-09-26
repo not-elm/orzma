@@ -9,6 +9,7 @@ on:
       - "scripts/stage_linux.py"
       - "scripts/stage_windows.py"
       - "scripts/build_linux_icons.py"
+      - "scripts/build_icon.py"
       - "build/linux/**"
       - "apps/cef_render_process/**"
       - "build.rs"
@@ -68,9 +69,12 @@ jobs:
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
             libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 \
             libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 \
-            libpango-1.0-0 libcairo2 libgtk-3-0 libasound2 libdbus-1-3 libglib2.0-0
+            libpango-1.0-0 libcairo2 libgtk-3-0 libasound2 libdbus-1-3 libglib2.0-0 \
+            libudev1 libwayland-client0 libfontconfig1
 
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -156,6 +160,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: orzma-${{ steps.ver.outputs.version }}-x86_64-linux
+          retention-days: 7
           path: |
             target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz
             target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz.sha256

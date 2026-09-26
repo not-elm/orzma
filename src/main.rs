@@ -242,10 +242,8 @@ mod tests {
         assert!(!primary_window().ime_enabled);
     }
 
-    /// Asserts that the primary window is named `orzma` on Linux, where the
-    /// name becomes the Wayland app ID and the X11 `WM_CLASS`, and is left
-    /// unnamed on other platforms, where Windows would take it as the window
-    /// class name.
+    /// Asserts that the primary window is named `orzma` on Linux and left
+    /// unnamed elsewhere.
     ///
     /// Case: a user installs orzma with `install.sh` and launches it from the
     /// desktop's app grid, whose dock matches the window to `orzma.desktop`.

@@ -39,14 +39,26 @@ Download `orzma-<version>-x64.msi` from the [latest release](https://github.com/
 
 ### Linux (x86_64)
 
-Requires glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36, or newer).
+Requires glibc 2.35 or later (for example Ubuntu 22.04 / Debian 12 or newer).
 
-Install the system libraries the embedded Chromium needs (Ubuntu / Debian):
+Install the system libraries the embedded Chromium and orzma itself need:
+
+Ubuntu 22.04 / Debian 12:
 
 ```bash
 sudo apt install libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
   libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 \
-  libpango-1.0-0 libcairo2 libgtk-3-0 libasound2 libdbus-1-3 libglib2.0-0
+  libpango-1.0-0 libcairo2 libgtk-3-0 libasound2 libdbus-1-3 libglib2.0-0 \
+  libudev1 libwayland-client0 libfontconfig1
+```
+
+Ubuntu 24.04+ / Debian 13+ (where `libasound2` is renamed `libasound2t64`):
+
+```bash
+sudo apt install libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+  libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 \
+  libpango-1.0-0 libcairo2 libgtk-3-0 libasound2t64 libdbus-1-3 libglib2.0-0 \
+  libudev1 libwayland-client0 libfontconfig1
 ```
 
 Download `orzma-<version>-x86_64-linux.tar.gz` from the [latest release](https://github.com/not-elm/orzma/releases/latest), then:

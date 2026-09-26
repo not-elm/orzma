@@ -44,7 +44,7 @@ if ! { [ -d "$app_dir" ] && [ "$src_dir" -ef "$app_dir" ]; }; then
     staging=$app_dir.tmp.$$
     rm -rf "$staging"
     mkdir -p "$staging"
-    cp -R "$src_dir/." "$staging/"
+    cp -R "$src_dir/." "$staging/" || { rm -rf "$staging"; fail "copying the release into $staging failed"; }
     rm -rf "$app_dir"
     mv "$staging" "$app_dir"
 fi

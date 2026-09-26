@@ -332,7 +332,9 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _capture(argv: list[str]) -> str:
-    return subprocess.run(argv, capture_output=True, text=True, check=True).stdout
+    return subprocess.run(
+        argv, capture_output=True, text=True, check=True, env={**os.environ, "LC_ALL": "C"}
+    ).stdout
 
 
 def _cargo_build() -> None:
