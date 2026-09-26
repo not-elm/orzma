@@ -272,11 +272,14 @@ impl Harness {
     }
 
     /// The value of `key` in the environment of the latest spawn request, or
-    /// `None` when there was no spawn or it carried no such variable.
+    /// `None` when there was no spawn or it carried no such variable. When
+    /// `key` appears more than once, its last entry wins, as it does for the
+    /// spawned shell.
     pub fn last_spawn_env_var(&self, key: &str) -> Option<String> {
         let envs = self.log.envs.lock().unwrap();
         envs.last()?
             .iter()
+            .rev()
             .find(|(k, _)| k.0 == key)
             .map(|(_, v)| v.0.clone())
     }

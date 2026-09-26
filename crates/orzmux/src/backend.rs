@@ -752,10 +752,11 @@ impl Backend {
     /// Tells every pane whether it holds focus, then re-solves the tree,
     /// resizes every pane whose applied geometry differs, flushes those
     /// panes, and emits their signals followed by one `Layout` carrying
-    /// their frames. Everything after the focus update is a no-op without
-    /// geometry. A pane whose resize is refused keeps its old size while
-    /// the remaining panes are still resized and the `Layout` still
-    /// publishes.
+    /// their frames. Last, it tells the webview host which pane is active,
+    /// so the release of a webview focus held in another pane follows the
+    /// `Layout`. Without geometry, only the first and last steps run. A
+    /// pane whose resize is refused keeps its old size while the remaining
+    /// panes are still resized and the `Layout` still publishes.
     fn publish_layout(&mut self) {
         self.refresh_focus();
         let Some(geometry) = self.geometry else {

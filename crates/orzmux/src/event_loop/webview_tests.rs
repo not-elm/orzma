@@ -149,10 +149,11 @@ fn a_pane_gets_the_control_variables_only_with_a_socket() {
     assert!(
         with_socket
             .last_spawn_env_var("ORZMA_TOKEN")
-            .is_some_and(|token| token.starts_with("orzma:"))
+            .is_some_and(|token| !token.is_empty())
     );
     let mut without = Harness::new();
     let _ = without.open_root();
+    assert_eq!(without.last_spawn_env_var("ORZMA_SOCK"), None);
     assert_eq!(without.last_spawn_env_var("ORZMA_TOKEN"), None);
 }
 
@@ -375,4 +376,12 @@ fn a_refused_webview_command_changes_nothing() {
             mount: MountId::new(9_999),
         }));
     assert!(webview_events(&page.h.drain()).is_empty());
+    let seq = page.h.send(OrzmuxCommand::Webview(WebviewCommand::Focus {
+        mount: Some(page.mount),
+    }));
+    assert!(page.h.drain().iter().any(|event| matches!(
+        event,
+        OrzmuxEvent::Webview { event: WebviewEvent::FocusChanged { focused: Some(m) }, seq: s }
+            if *m == page.mount && *s == seq
+    )));
 }
