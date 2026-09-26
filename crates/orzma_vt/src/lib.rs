@@ -11,7 +11,7 @@ use crate::{
     screen::grid::coords::{GridColumn, GridPoint, ScreenLine},
     screen::grid::reflow::ScrollbackOnGrow,
     screen::selection::{CellSide, SelectionKind},
-    screen::vi::{ViCursor, ViModeSwitch, ViewChange},
+    screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion, ViewChange},
     screen::viewport::{DisplayOffset, Scroll},
 };
 use std::path::PathBuf;
@@ -47,7 +47,7 @@ pub mod prelude {
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
-    pub use crate::screen::vi::{ViCursor, ViModeSwitch, ViMotion};
+    pub use crate::screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion};
     pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
     pub use crate::{InterpretOutput, OrzmaVt, ResizeChanged, Vt, VtSignal};
 }
@@ -64,8 +64,6 @@ pub mod prelude {
 ///
 /// The owner must forward [`InterpretOutput::signals`] and
 /// [`ResizeChanged::evicted`] before it requests the next frame.
-///
-/// TODO: implement vi motions and move the vi cursor with them.
 ///
 /// # Invariants
 ///
@@ -250,6 +248,13 @@ pub trait Vt {
     /// the mode already in force returns `false`.
     fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> bool;
 
+    /// Moves the vi cursor by `motion` and scrolls the viewport just far
+    /// enough to show it; returns whether anything changed. Returns
+    /// `false` outside vi mode.
+    ///
+    /// Only a move of the viewport stages (full) damage.
+    fn vi_motion(&mut self, motion: ViMotion) -> bool;
+
     /// The vi cursor; `None` outside vi mode.
     fn vi_cursor(&self) -> Option<ViCursor>;
 
@@ -405,6 +410,13 @@ impl OrzmaVt {
         self
     }
 
+    /// Returns this terminal with `chars` ending a word for the semantic vi
+    /// motions, besides whitespace.
+    pub fn with_semantic_escape_chars(mut self, chars: SemanticEscapeChars) -> Self {
+        self.device.set_semantic_escape_chars(chars);
+        self
+    }
+
     /// Stages the damage `change` owes; returns whether the change touched
     /// anything a frame carries.
     fn settle_view_change(&mut self, change: ViewChange) -> bool {
@@ -486,6 +498,11 @@ impl Vt for OrzmaVt {
 
     fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> bool {
         let change = self.device.switch_vi_mode(switch);
+        self.settle_view_change(change)
+    }
+
+    fn vi_motion(&mut self, motion: ViMotion) -> bool {
+        let change = self.device.vi_motion(motion);
         self.settle_view_change(change)
     }
 
@@ -1764,5 +1781,47 @@ mod tests {
         vt.interpret(b"1\r\n2\r\n3\r\n4\r\n5");
         let frame = vt.frame().expect("output emits");
         assert_eq!(frame.history_len, 2);
+    }
+
+    /// Asserts that a motion on an idle terminal emits a frame that repaints
+    /// no rows and carries the moved vi cursor.
+    ///
+    /// Case: the user presses `h` in vi mode on an idle terminal.
+    #[test]
+    fn a_motion_emits_a_rowless_frame_with_the_moved_vi_cursor() {
+        let mut vt = filled();
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.frame();
+        assert!(vt.vi_motion(ViMotion::Left));
+        let frame = vt.frame().expect("a motion emits");
+        assert!(frame.rows.is_empty());
+        assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(2, 2)));
+    }
+
+    /// Asserts that a motion outside vi mode returns `false` and owes no
+    /// frame.
+    ///
+    /// Case: a motion request races a vi-mode exit.
+    #[test]
+    fn a_motion_outside_vi_mode_returns_false() {
+        let mut vt = filled();
+        assert!(!vt.vi_motion(ViMotion::Left));
+        assert_eq!(vt.frame(), None);
+    }
+
+    /// Asserts that the configured word separators reach the semantic
+    /// motions.
+    ///
+    /// Case: the user adds `-` to the separators and presses `w` at the
+    /// start of `ab-cd`.
+    #[test]
+    fn configured_separators_end_semantic_words() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10)
+            .with_semantic_escape_chars(SemanticEscapeChars::new("-"));
+        vt.interpret(b"ab-cd");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::First);
+        vt.vi_motion(ViMotion::SemanticRight);
+        assert_eq!(vt.vi_cursor().map(|cursor| cursor.point), Some(cell(0, 2)));
     }
 }

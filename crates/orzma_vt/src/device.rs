@@ -20,7 +20,7 @@ use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::grid::reflow::ScrollbackOnGrow;
 use crate::screen::grid::{GridSize, MIN_COLUMNS};
 use crate::screen::margins::OriginMode;
-use crate::screen::vi::{ViCursor, ViModeSwitch, ViewChange};
+use crate::screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion, ViewChange};
 use crate::screen::viewport::{DisplayOffset, Scroll};
 use crate::screen::{PrintOptions, Screen};
 use std::collections::VecDeque;
@@ -37,6 +37,7 @@ pub(crate) struct DeviceState {
     preceding_graphic: Option<ClassifiedGlyph>,
     cursor_policy: CursorPolicy,
     scrollback_on_grow: ScrollbackOnGrow,
+    semantic_escape_chars: SemanticEscapeChars,
 }
 
 impl DeviceState {
@@ -59,6 +60,7 @@ impl DeviceState {
             preceding_graphic: None,
             cursor_policy: CursorPolicy::default(),
             scrollback_on_grow: ScrollbackOnGrow::default(),
+            semantic_escape_chars: SemanticEscapeChars::default(),
         }
     }
 
@@ -144,6 +146,13 @@ impl DeviceState {
     /// The vi cursor of the screen on show; `None` outside vi mode.
     pub fn vi_cursor(&self) -> Option<ViCursor> {
         self.active_screen().vi_cursor()
+    }
+
+    /// Moves the vi cursor of the screen on show by `motion`, as
+    /// [`Screen::vi_motion`] does, against the device's word separators.
+    pub fn vi_motion(&mut self, motion: ViMotion) -> ViewChange {
+        let screen = self.screens.get_mut(self.modes.active_screen);
+        screen.vi_motion(motion, &self.semantic_escape_chars)
     }
 
     /// Prints one character at the cursor of the screen on show, shaped by
@@ -595,6 +604,12 @@ impl DeviceState {
         self.scrollback_on_grow = policy;
     }
 
+    /// Replaces the characters that end a word for the semantic vi
+    /// motions.
+    pub fn set_semantic_escape_chars(&mut self, chars: SemanticEscapeChars) {
+        self.semantic_escape_chars = chars;
+    }
+
     /// Switches the active screen without a flip's side effects.
     #[cfg(test)]
     pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
@@ -742,6 +757,16 @@ impl DeviceState {
 struct Screens {
     primary: Screen,
     alternate: Screen,
+}
+
+impl Screens {
+    /// The screen `kind` names.
+    fn get_mut(&mut self, kind: ScreenKind) -> &mut Screen {
+        match kind {
+            ScreenKind::Primary => &mut self.primary,
+            ScreenKind::Alternate => &mut self.alternate,
+        }
+    }
 }
 
 /// The current window title and the stack `CSI 22 t` saves it on.

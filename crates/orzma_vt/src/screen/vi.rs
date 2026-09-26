@@ -1,6 +1,9 @@
 //! Vi mode: the cursor it adds, the switch that enters or leaves it, and
 //! how the screen keeps that cursor on its text.
 
+mod motion;
+
+use self::motion::MotionGrid;
 use crate::frame::damage::DamageSpan;
 use crate::screen::Screen;
 use crate::screen::cell::CellWidth;
@@ -72,6 +75,30 @@ pub enum ViMotion {
     ParagraphUp,
     /// Next paragraph break.
     ParagraphDown,
+}
+
+/// The characters that end a word for the semantic vi motions, besides
+/// whitespace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticEscapeChars(String);
+
+impl SemanticEscapeChars {
+    /// Builds the separator set from every character of `chars`.
+    pub fn new(chars: &str) -> Self {
+        Self(chars.to_owned())
+    }
+
+    /// Whether `c` ends a semantic word.
+    pub fn contains(&self, c: char) -> bool {
+        self.0.contains(c)
+    }
+}
+
+/// The separator set `` ,│`|:"' ()[]{}<> `` plus the tab.
+impl Default for SemanticEscapeChars {
+    fn default() -> Self {
+        Self::new(DEFAULT_SEMANTIC_ESCAPE_CHARS)
+    }
 }
 
 /// What a host-driven vi operation changed, and so what the next frame
@@ -240,7 +267,45 @@ impl Screen {
         let last_column = self.grid.size().cols.saturating_sub(1);
         self.vi.clamp(top, bottom, last_column)
     }
+
+    /// Moves the vi cursor by `motion` and scrolls the viewport just far
+    /// enough to show it. Nothing changes outside vi mode.
+    ///
+    /// The damage is [`DamageSpan::Full`] exactly when the viewport moved.
+    pub fn vi_motion(
+        &mut self,
+        motion: ViMotion,
+        escape_chars: &SemanticEscapeChars,
+    ) -> ViewChange {
+        let Some(from) = self.vi.point() else {
+            return ViewChange::Unchanged;
+        };
+        let to =
+            MotionGrid::new(&self.grid, self.viewport.offset, escape_chars).apply(from, motion);
+        let moved = self.vi.set(to);
+        let damage = self.scroll_to_vi_cursor();
+        ViewChange::classify(moved, damage)
+    }
+
+    /// Scrolls the viewport just far enough to show the vi cursor; `None`
+    /// when it was already shown.
+    fn scroll_to_vi_cursor(&mut self) -> Option<DamageSpan> {
+        let point = self.vi.point()?;
+        let (top, bottom) = self.viewport_lines();
+        let delta = if point.line.0 < top.0 {
+            top.0 - point.line.0
+        } else if point.line.0 > bottom.0 {
+            bottom.0 - point.line.0
+        } else {
+            return None;
+        };
+        self.scroll(Scroll::Delta(delta))
+    }
 }
+
+/// The word separators of the built-in semantic motions, besides
+/// whitespace.
+const DEFAULT_SEMANTIC_ESCAPE_CHARS: &str = ",│`|:\"' ()[]{}<>\t";
 
 #[cfg(test)]
 mod tests;

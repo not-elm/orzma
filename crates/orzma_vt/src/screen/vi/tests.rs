@@ -40,6 +40,10 @@ fn vi_point(screen: &Screen) -> Option<GridPoint> {
     screen.vi_cursor().map(|cursor| cursor.point)
 }
 
+fn chars() -> SemanticEscapeChars {
+    SemanticEscapeChars::default()
+}
+
 /// Asserts that entering vi mode seats the vi cursor on the write
 /// cursor.
 ///
@@ -172,4 +176,71 @@ fn a_vi_cursor_on_a_continuation_column_reports_the_glyph_body() {
     assert!(screen.enter_vi_mode());
     screen.vi.set(point(0, 1));
     assert_eq!(vi_point(&screen), Some(point(0, 0)));
+}
+
+/// Asserts that a motion that carries the vi cursor above the viewport
+/// scrolls the viewport just far enough to show it, owing a full repaint.
+///
+/// Case: the user holds `k` from the top row of the screen into
+/// scrollback.
+#[test]
+fn a_motion_above_the_viewport_scrolls_it_to_show_the_vi_cursor() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "1\n2\n3\n4");
+    assert!(screen.enter_vi_mode());
+    let _ = screen.vi_motion(ViMotion::Up, &chars());
+    let _ = screen.vi_motion(ViMotion::Up, &chars());
+    assert_eq!(
+        screen.vi_motion(ViMotion::Up, &chars()),
+        ViewChange::Repainted
+    );
+    assert_eq!(screen.display_offset(), DisplayOffset(1));
+    assert_eq!(vi_point(&screen), Some(point(-1, 1)));
+}
+
+/// Asserts that a motion that carries the vi cursor below a scrolled-back
+/// viewport scrolls it toward the live tail just far enough.
+///
+/// Case: the user browsing scrollback presses `j` on the bottom visible
+/// row.
+#[test]
+fn a_motion_below_the_viewport_scrolls_it_toward_the_live_tail() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "1\n2\n3\n4");
+    assert!(screen.enter_vi_mode());
+    let _ = screen.scroll(Scroll::Delta(1));
+    screen.vi.set(point(1, 0));
+    assert_eq!(
+        screen.vi_motion(ViMotion::Down, &chars()),
+        ViewChange::Repainted
+    );
+    assert_eq!(screen.display_offset(), DisplayOffset(0));
+    assert_eq!(vi_point(&screen), Some(point(2, 0)));
+}
+
+/// Asserts that a motion inside the viewport owes no damage.
+///
+/// Case: the user presses `h` on the prompt line.
+#[test]
+fn a_motion_inside_the_viewport_owes_no_damage() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "abc");
+    assert!(screen.enter_vi_mode());
+    assert_eq!(
+        screen.vi_motion(ViMotion::Left, &chars()),
+        ViewChange::Carried
+    );
+    assert_eq!(vi_point(&screen), Some(point(0, 2)));
+}
+
+/// Asserts that a motion outside vi mode changes nothing.
+///
+/// Case: a motion request arrives just after the terminal left vi mode.
+#[test]
+fn a_motion_outside_vi_mode_changes_nothing() {
+    let mut screen = screen(10, 3, 10);
+    assert_eq!(
+        screen.vi_motion(ViMotion::Left, &chars()),
+        ViewChange::Unchanged
+    );
 }
