@@ -6,6 +6,7 @@ use crate::registry::PaneRegistry;
 use crate::signals::{
     TtyChildExitSignal, TtyFrameSignal, TtySelectionTextSignal, trigger_vt_signal,
 };
+use crate::webview::trigger_webview_event;
 use crate::{OrzmuxConnection, OrzmuxPane, OrzmuxSystems};
 use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
@@ -107,7 +108,9 @@ fn apply_event(
                 commands.entity(entity).despawn();
             }
         }
-        OrzmuxEvent::Webview { .. } => {}
+        OrzmuxEvent::Webview { event, seq } => {
+            trigger_webview_event(commands, registry, event, seq);
+        }
     }
 }
 

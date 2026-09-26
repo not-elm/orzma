@@ -1332,6 +1332,7 @@ dependencies = [
  "crossbeam-channel",
  "orzma_tty",
  "orzma_vt",
+ "orzma_webview_host",
  "orzmux",
  "tracing",
 ]
