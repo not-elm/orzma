@@ -20,6 +20,8 @@ bevy_cef_version := "0.13.0"
 wix_version := "6.0.2"
 cargo_about_version := "0.9.0"
 pnpm_licenses_version := "2.4.2"
+mdbook_version := "0.5.4"
+mdbook_mermaid_version := "0.17.1"
 
 # CARGO_HOME/bin when CARGO_HOME is set and non-empty, else ~/.cargo/bin.
 # env(key, default) returns the default only when the var is ABSENT, so the
@@ -89,6 +91,18 @@ orzmd-web:
 # build the web bundle then the orzmd binary
 orzmd: orzmd-web
     cargo build -p orzmd
+
+# install the pinned mdBook and mdbook-mermaid for the user guide (one-time)
+setup-book:
+    cargo install --locked mdbook@{{ mdbook_version }} mdbook-mermaid@{{ mdbook_mermaid_version }}
+
+# build the user guide into target/book
+book:
+    mdbook build docs/book
+
+# serve the user guide with live reload
+book-serve:
+    mdbook serve docs/book --open
 
 # install the CEF framework + debug render process (macOS, one-time)
 [macos]

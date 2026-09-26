@@ -10,7 +10,7 @@
 orzma is a terminal emulator that can render webviews directly inside the
 terminal.
 
-![thumbnail](./docs/thumbnail.png)
+![thumbnail](./docs/book/src/images/thumbnail.png)
 
 ## Installation
 
