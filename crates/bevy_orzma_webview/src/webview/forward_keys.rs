@@ -49,13 +49,12 @@ impl Plugin for ForwardKeysPlugin {
 }
 
 impl NormalizedChord {
-    /// Normalizes a wire chord, returning `None` for an unrecognized key
-    /// name.
+    /// Normalizes a wire chord, returning `None` for an unrecognized key or
+    /// modifier name.
     ///
     /// `"backtab"` maps to the same physical key as `"tab"`; the Shift
     /// distinction rides the modifier bits. A name made of one ASCII
-    /// punctuation character maps to [`ChordKey::Char`]. Unknown modifier
-    /// names are ignored.
+    /// punctuation character maps to [`ChordKey::Char`].
     pub(crate) fn parse(chord: &ForwardChord) -> Option<Self> {
         let key = ChordKey::from_name(chord.key())?;
         let mut normalized = Self {
@@ -71,7 +70,7 @@ impl NormalizedChord {
                 "ctrl" => normalized.ctrl = true,
                 "shift" => normalized.shift = true,
                 "meta" => normalized.logo = true,
-                _ => {}
+                _ => return None,
             }
         }
         Some(normalized)
@@ -195,9 +194,12 @@ mod tests {
     }
 
     /// Asserts that a letter, a function key and `tab` parse to their
-    /// physical keys with the declared modifiers, and an unknown name fails.
+    /// physical keys with the declared modifiers, and that a chord naming an
+    /// unknown key or an unknown modifier is rejected rather than parsed
+    /// without that modifier.
     ///
-    /// Case: a program registers Alt+h, F5 and Tab as forward keys.
+    /// Case: a program registers Alt+h, F5 and Tab as forward keys, plus a
+    /// chord whose modifier it spelled `Ctrl`.
     #[test]
     fn parse_maps_keys_and_mods() {
         let n = NormalizedChord::parse(&chord(&["alt"], "h")).unwrap();
@@ -212,10 +214,10 @@ mod tests {
             Some(ChordKey::Code(KeyCode::Tab))
         );
         assert!(NormalizedChord::parse(&chord(&[], "nope")).is_none());
+        assert!(NormalizedChord::parse(&chord(&["Ctrl"], "w")).is_none());
     }
 
-    /// Asserts that the navigation key names the forward-key grammar already
-    /// accepted still parse to their physical keys.
+    /// Asserts that the navigation key names parse to their physical keys.
     ///
     /// Case: a TUI browser forwards Esc, Space and the arrow and page keys.
     #[test]
@@ -237,8 +239,8 @@ mod tests {
         }
     }
 
-    /// Asserts that the editing and navigation key names added for forward
-    /// chords parse to their physical keys.
+    /// Asserts that the editing and navigation key names parse to their
+    /// physical keys.
     ///
     /// Case: a markdown viewer forwards Backspace and Enter so its TUI can go
     /// back and confirm a search while the page holds keyboard focus.

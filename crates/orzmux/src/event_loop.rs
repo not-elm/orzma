@@ -217,10 +217,7 @@ impl EventLoop {
             self.record_queue_depths();
             let connected = match ready {
                 Some(Ready::Commands) => self.drain_commands(),
-                Some(Ready::Control) => {
-                    self.drain_control();
-                    true
-                }
+                Some(Ready::Control) => self.drain_control_after_commands(),
                 Some(Ready::Pane(pane)) => {
                     self.backend.pump_pane(pane);
                     true
@@ -261,6 +258,20 @@ impl EventLoop {
         if let Some((seq, command)) = held {
             self.handle_command(seq, command);
         }
+        connected
+    }
+
+    /// Applies the GUI commands already queued, as [`drain_commands`](Self::drain_commands)
+    /// does, then the queued control-socket events, as
+    /// [`drain_control`](Self::drain_control) does. Returns `false` when the
+    /// command channel is disconnected.
+    pub fn drain_control_after_commands(&mut self) -> bool {
+        // NOTE: a control event can move the active pane (a program's socket
+        // `focus`); GUI commands already queued that target the active pane
+        // must resolve against the pane that was active when the GUI sent
+        // them, so they run first.
+        let connected = self.commands.is_empty() || self.drain_commands();
+        self.drain_control();
         connected
     }
 
@@ -312,7 +323,8 @@ impl EventLoop {
     /// Applies one command. An unresolvable target and a refused PTY
     /// write are logged and dropped; `CopySelection` always answers,
     /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
-    /// publishes one only when the active pane moved.
+    /// publishes one when the active pane moved, by this command or by the
+    /// webview host after the last pane selection.
     fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.backend.set_processed(seq);
         let (name, target) = command.log_context();
@@ -447,9 +459,9 @@ impl EventLoop {
 
 /// Logs a command the backend refused, at the level its failure earns.
 ///
-/// An unresolvable target logs at `DEBUG`, a refused PTY write goes
-/// through [`log_refused_write`] at `ERROR`, and every other refusal
-/// logs at `WARN`.
+/// An unresolvable target and a request the webview host turned down log
+/// at `DEBUG`, a refused PTY write goes through [`log_refused_write`] at
+/// `ERROR`, and every other failure logs at `WARN`.
 fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
     match error {
         OrzmuxError::UnresolvedTarget => match target {

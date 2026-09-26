@@ -15,7 +15,7 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_tty_renderer::prelude::{
     PaneInactiveStyle, TerminalCellMetricsResource, TerminalOverlays,
 };
-use bevy_orzma_webview::{NonInteractive, Webview, webview_hit_at};
+use bevy_orzma_webview::{NonInteractive, RequestWebviewFocus, Webview, webview_hit_at};
 use bevy_orzmux::prelude::{OrzmuxActivePaneChanged, OrzmuxPane, PaneAction, RequestPaneAction};
 use orzma_configs::inactive_pane::InactivePaneConfig;
 
@@ -200,17 +200,27 @@ fn on_active_pane_changed(
     }
 }
 
-/// Click-to-focus: asks the bridge to select the clicked pane. The
-/// bridge applies it as active at once and reports the change through
+/// Click-to-focus: asks the bridge to select the clicked pane, and asks for
+/// the release of a webview focus held in any other pane. The bridge
+/// applies the selection as active at once and reports the change through
 /// `OrzmuxActivePaneChanged`, so this frame's keys already go to the
 /// clicked pane; the confirming `Layout` reconciles.
 fn on_pane_clicked(
     ev: On<PaneClicked>,
     mut commands: Commands,
+    focused_webview: Res<FocusedWebview>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
     panes: Query<(), With<OrzmuxPane>>,
 ) {
     if panes.get(ev.entity).is_err() {
         return;
+    }
+    let focused_elsewhere = focused_webview
+        .0
+        .and_then(|webview| webview_parents.get(webview).ok())
+        .is_some_and(|parent| parent.parent() != ev.entity);
+    if focused_elsewhere {
+        commands.trigger(RequestWebviewFocus::new(None));
     }
     commands.trigger(RequestPaneAction {
         action: PaneAction::Select(ev.entity),
@@ -347,6 +357,7 @@ mod tests {
     fn a_click_requests_the_selection_of_a_pane_only() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
             .init_resource::<SelectRequests>()
             .add_observer(on_pane_clicked)
             .add_observer(record_select_request);
@@ -361,6 +372,55 @@ mod tests {
         assert_eq!(
             app.world().resource::<SelectRequests>().0,
             vec![PaneAction::Select(pane)]
+        );
+    }
+
+    /// Asserts that a click on a pane other than the one holding the focused
+    /// webview asks for that focus to be released, while a click on the
+    /// webview's own pane does not, and that both select their pane.
+    ///
+    /// Case: a page in the left pane holds the keyboard, and the user
+    /// right-clicks the shell text in the left pane and then in the right
+    /// pane.
+    #[test]
+    fn a_click_on_another_pane_releases_a_focused_webview() {
+        #[derive(Resource, Default)]
+        struct FocusRequests(Vec<Option<Entity>>);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
+            .init_resource::<SelectRequests>()
+            .init_resource::<FocusRequests>()
+            .add_observer(on_pane_clicked)
+            .add_observer(record_select_request)
+            .add_observer(
+                |ev: On<RequestWebviewFocus>, mut requests: ResMut<FocusRequests>| {
+                    requests.0.push(ev.target());
+                },
+            );
+        let left = app
+            .world_mut()
+            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(1))))
+            .id();
+        let right = app
+            .world_mut()
+            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(2))))
+            .id();
+        let page = app
+            .world_mut()
+            .spawn((
+                ChildOf(left),
+                Webview::new("w".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
+        app.world_mut().trigger(PaneClicked { entity: left });
+        app.world_mut().trigger(PaneClicked { entity: right });
+        app.update();
+        assert_eq!(app.world().resource::<FocusRequests>().0, vec![None]);
+        assert_eq!(
+            app.world().resource::<SelectRequests>().0,
+            vec![PaneAction::Select(left), PaneAction::Select(right)]
         );
     }
 

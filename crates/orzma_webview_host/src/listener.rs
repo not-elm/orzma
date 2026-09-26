@@ -8,7 +8,7 @@ use crate::host::ValidatedRegistration;
 use crate::protocol::{ClientMsg, ServerMsg};
 use crate::uds::{UnixListener, UnixStream};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
 use std::ops::ControlFlow;
 #[cfg(unix)]
@@ -20,6 +20,12 @@ use std::time::Duration;
 /// How long the accept loop waits after a failed accept before it accepts
 /// again.
 const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
+
+/// The longest first line a connection may send, newline included.
+const MAX_HELLO_LINE: u64 = 4 * 1024;
+
+/// The longest request line a connection may send, newline included.
+const MAX_REQUEST_LINE: u64 = 32 * 1024 * 1024;
 
 /// Binds `sock_path` (replacing a stale socket file there), spawns the
 /// accept loop, and returns the receiver of the events its connections
@@ -79,7 +85,9 @@ fn accept_loop(listener: UnixListener, events: Sender<ControlEvent>) {
 /// relays each later line as a `ControlEvent` until the peer closes, then
 /// tears the connection down and reports `Disconnect`. A connection whose
 /// writer thread cannot be started is closed before its `hello` reaches the
-/// host.
+/// host, and one that sends a line longer than [`MAX_HELLO_LINE`] (the
+/// first line) or [`MAX_REQUEST_LINE`] (any later line) is closed at that
+/// line.
 fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender<ControlEvent>) {
     let Ok(read_half) = stream.try_clone() else {
         return;
@@ -117,11 +125,12 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
     read_requests(&mut lines, connection, &events, &out_tx);
     // NOTE: the host holds a clone of `out_tx`, so dropping ours does not end
     // the writer thread; only the host dropping its clone when it applies
-    // `Disconnect` does. Shut the socket down first (a writer parked in
-    // `write_all` on a peer that stopped reading only wakes then), send
-    // `Disconnect`, and only then join: joining before `Disconnect` would wait
-    // forever on a writer parked in `recv`, and the host would never purge the
-    // connection.
+    // `Disconnect` does. Shut the socket down first, send `Disconnect`, and
+    // only then join: joining before `Disconnect` would wait forever on a
+    // writer parked in `recv`, and the host would never purge the connection.
+    // A writer parked in `write_all` on a peer that stopped reading wakes at
+    // the shutdown on Unix; on Windows it stays parked, and this join with it,
+    // until the peer closes its socket.
     let _ = stream.shutdown(Shutdown::Both);
     let _ = events.send(ControlEvent::Disconnect { connection });
     drop(out_tx);
@@ -150,10 +159,11 @@ fn spawn_writer(mut stream: UnixStream, lines: Receiver<String>) -> io::Result<J
         })
 }
 
-/// Reads the first line and returns its token when it is a `hello`.
+/// Reads the first line and returns its token when it is a `hello` no longer
+/// than [`MAX_HELLO_LINE`].
 fn read_hello(lines: &mut BufReader<UnixStream>) -> Option<String> {
     let mut buf = String::new();
-    if matches!(lines.read_line(&mut buf), Ok(0) | Err(_)) {
+    if !read_capped_line(lines, &mut buf, MAX_HELLO_LINE) {
         return None;
     }
     match serde_json::from_str::<ClientMsg>(buf.trim_end_matches(['\n', '\r'])) {
@@ -162,8 +172,9 @@ fn read_hello(lines: &mut BufReader<UnixStream>) -> Option<String> {
     }
 }
 
-/// Relays request lines until the peer closes, a line cannot be read, or
-/// the host or the writer is gone. A line that does not parse is skipped.
+/// Relays request lines until the peer closes, a line cannot be read or is
+/// longer than [`MAX_REQUEST_LINE`], or the host or the writer is gone. A
+/// line that does not parse is skipped.
 fn read_requests(
     lines: &mut BufReader<UnixStream>,
     connection: ConnectionId,
@@ -173,18 +184,26 @@ fn read_requests(
     let mut buf = String::new();
     loop {
         buf.clear();
-        match lines.read_line(&mut buf) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => {
-                let line = buf.trim_end_matches(['\n', '\r']);
-                let Ok(msg) = serde_json::from_str::<ClientMsg>(line) else {
-                    continue;
-                };
-                if relay(msg, connection, events, out_tx).is_break() {
-                    return;
-                }
-            }
+        if !read_capped_line(lines, &mut buf, MAX_REQUEST_LINE) {
+            return;
         }
+        let line = buf.trim_end_matches(['\n', '\r']);
+        let Ok(msg) = serde_json::from_str::<ClientMsg>(line) else {
+            continue;
+        };
+        if relay(msg, connection, events, out_tx).is_break() {
+            return;
+        }
+    }
+}
+
+/// Reads one line of at most `limit` bytes into `buf`. Returns `false` at
+/// the end of the stream, on a read error, and when the line reaches `limit`
+/// bytes without ending.
+fn read_capped_line(lines: &mut BufReader<UnixStream>, buf: &mut String, limit: u64) -> bool {
+    match lines.by_ref().take(limit).read_line(buf) {
+        Ok(0) | Err(_) => false,
+        Ok(read) => buf.ends_with('\n') || u64::try_from(read).is_ok_and(|read| read < limit),
     }
 }
 
@@ -479,6 +498,22 @@ mod tests {
         let mut client = connect(&sock);
         drop(hello(&events, &mut client, false));
         let _ = writeln!(client, r#"{{"op":"unregister","handle":"h"}}"#);
+        assert!(events.recv_timeout(Duration::from_millis(300)).is_err());
+        assert!(read_until_closed(&mut client).is_empty());
+    }
+
+    /// Asserts that a first line longer than the hello cap closes the
+    /// connection without any event.
+    ///
+    /// Case: a stray process streams bytes into the socket without ever
+    /// sending a newline.
+    #[test]
+    fn an_endless_first_line_closes_the_connection() {
+        let (_dir, sock, events) = listen();
+        let mut client = connect(&sock);
+        let flood = vec![b'x'; usize::try_from(MAX_HELLO_LINE).unwrap() + 1];
+        let _ = client.write_all(&flood);
+        let _ = client.flush();
         assert!(events.recv_timeout(Duration::from_millis(300)).is_err());
         assert!(read_until_closed(&mut client).is_empty());
     }

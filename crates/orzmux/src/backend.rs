@@ -21,6 +21,7 @@ use orzma_webview_host::prelude::{
     WebviewHost,
 };
 use std::collections::HashMap;
+use std::mem;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -260,6 +261,9 @@ pub(crate) struct Backend {
     outbox: Vec<OrzmuxEvent>,
     /// Every client's webview state and the rules over it.
     webview: WebviewHost<PaneId>,
+    /// Whether the webview host moved the active pane after the last pane
+    /// selection.
+    active_moved_by_host: bool,
 }
 
 impl Backend {
@@ -281,6 +285,7 @@ impl Backend {
             wheel,
             outbox: Vec::new(),
             webview,
+            active_moved_by_host: false,
         }
     }
 
@@ -413,6 +418,7 @@ impl Backend {
     /// layout reflects that.
     pub fn select_pane(&mut self, pane: PaneId) -> OrzmuxResult {
         let selected = self.tree.select(pane);
+        self.active_moved_by_host = false;
         self.publish_layout();
         if selected {
             Ok(())
@@ -421,13 +427,15 @@ impl Backend {
         }
     }
 
-    /// Moves the active pane one step in `direction`, publishing a
-    /// layout only when the active pane moved.
+    /// Moves the active pane one step in `direction`, publishing a layout
+    /// when the active pane moved, and also when the webview host moved it
+    /// after the last pane selection.
     pub fn select_pane_direction(&mut self, direction: PaneDirection) {
         let moved = self
             .geometry
             .is_some_and(|geometry| self.tree.select_direction(direction, geometry.size));
-        if moved {
+        let moved_by_host = mem::take(&mut self.active_moved_by_host);
+        if moved || moved_by_host {
             self.publish_layout();
         }
     }
@@ -941,7 +949,8 @@ impl Backend {
     }
 
     /// Carries out one request of the webview host; a request for a pane
-    /// that has closed is dropped.
+    /// that has closed is dropped. A selection that moves the active pane
+    /// is remembered until the next pane selection.
     fn apply_webview_request(&mut self, request: MuxRequest<PaneId>) {
         let result = match request {
             MuxRequest::MountPlacement {
@@ -954,7 +963,14 @@ impl Backend {
             MuxRequest::RemovePlacements { pane, instances } => {
                 self.remove_placements(pane, instances)
             }
-            MuxRequest::SelectPane { pane } => self.select_pane(pane),
+            MuxRequest::SelectPane { pane } => {
+                let moves = self.tree.active() != Some(pane);
+                let result = self.select_pane(pane);
+                if moves && result.is_ok() {
+                    self.active_moved_by_host = true;
+                }
+                result
+            }
         };
         if let Err(error) = result {
             tracing::debug!(%error, "a webview host request was dropped");

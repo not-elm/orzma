@@ -2,13 +2,13 @@
 //! scheme, reports page frames and address changes to the webview host, and
 //! applies the host's replies, events, and navigations to pages.
 
-use crate::webview::mount::{Webview, webview_of_mount};
+use crate::webview::mount::{Bridged, Webview, webview_of_mount};
 use crate::webview::scheme::{WebviewAssetRegistry, custom_orzma_scheme};
 use bevy::prelude::*;
 use bevy_cef::prelude::{
     AddressChanged, CefPlugin, CommandLineConfig, HostEmitEvent, JsEmitEventPlugin, LoadError,
-    LoadFinished, LoadStarted, Receive, RequestGoBack, RequestGoForward, RequestReload,
-    WebviewSource,
+    LoadFinished, LoadStarted, Receive, RequestGoBack, RequestGoForward, RequestNavigate,
+    RequestReload, WebviewSource,
 };
 use bevy_orzmux::prelude::{OrzmuxConnection, OrzmuxWebviewEvent};
 use orzma_webview_host::prelude::{Navigation, PageOutcome, WebviewCommand, WebviewEvent};
@@ -32,9 +32,9 @@ pub fn cef_plugin(orzma_registry: WebviewAssetRegistry, root_cache_path: &Path) 
 }
 
 /// Wires the `window.orzma` page bridge: the `orzma.call` and `orzma.emit`
-/// frame observers, the address-change reporter, the observers that apply
-/// the host's replies, events, and navigations to pages, and the page-load
-/// loggers.
+/// frame observers, the address-change reporter and tracker, the observers
+/// that apply the host's replies, events, and navigations to pages, and the
+/// page-load loggers.
 pub(crate) struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
@@ -43,6 +43,7 @@ impl Plugin for RenderPlugin {
             .add_observer(on_orzma_call_frame)
             .add_observer(on_orzma_emit_frame.run_if(resource_exists::<OrzmuxConnection>))
             .add_observer(on_webview_address_changed.run_if(resource_exists::<OrzmuxConnection>))
+            .add_observer(track_page_address)
             .add_observer(deliver_to_page)
             .add_observer(apply_navigation)
             .add_observer(log_webview_load_started)
@@ -59,6 +60,12 @@ impl Plugin for RenderPlugin {
 #[derive(Deserialize, Clone, Debug)]
 #[serde(transparent)]
 struct OrzmaFrame(Value);
+
+/// The top-level URL an orzma webview last reported through
+/// `AddressChanged` or was last sent to by a `Navigate`, whichever came
+/// later.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+struct PageAddress(String);
 
 /// The `kind` discriminator of a page's `window.orzma.call` frame, emitted
 /// by `orzma_bridge.js`.
@@ -104,14 +111,14 @@ fn cef_command_line_config() -> CommandLineConfig {
 /// any other `kind` is ignored.
 ///
 /// The caller is the frame's webview, never the payload. A frame from a
-/// webview that is not an orzma mount is rejected with `no_owner`, and one
-/// that arrives after the multiplexer is gone with `owner_unavailable`, both
-/// settling the page's promise at once.
+/// webview that is not a bridged orzma mount is rejected with `no_owner`,
+/// and one that arrives after the multiplexer is gone with
+/// `owner_unavailable`, both settling the page's promise at once.
 fn on_orzma_call_frame(
     frame: On<Receive<OrzmaFrame>>,
     mut commands: Commands,
     connection: Option<Res<OrzmuxConnection>>,
-    webviews: Query<&Webview>,
+    webviews: Query<&Webview, With<Bridged>>,
 ) {
     let payload = &frame.payload.0;
     if payload.get("kind").and_then(Value::as_str) != Some(ORZMA_CALL_KIND) {
@@ -150,11 +157,11 @@ fn on_orzma_call_frame(
 /// Reports a page's `window.orzma.emit` (a `Receive<OrzmaFrame>` with
 /// `kind:"orzma.emit"`) to the host as a `PageEmit` of the webview's mount;
 /// any other `kind` is ignored. An emit with an empty event name, or from a
-/// webview that is not an orzma mount, is dropped.
+/// webview that is not a bridged orzma mount, is dropped.
 fn on_orzma_emit_frame(
     frame: On<Receive<OrzmaFrame>>,
     connection: Res<OrzmuxConnection>,
-    webviews: Query<&Webview>,
+    webviews: Query<&Webview, With<Bridged>>,
 ) {
     let payload = &frame.payload.0;
     if payload.get("kind").and_then(Value::as_str) != Some(ORZMA_EMIT_KIND) {
@@ -169,7 +176,9 @@ fn on_orzma_emit_frame(
         return;
     }
     let Ok(view) = webviews.get(frame.webview) else {
-        tracing::debug!("orzma.emit frame from a webview that is not an orzma mount; dropping");
+        tracing::debug!(
+            "orzma.emit frame from a webview that is not a bridged orzma mount; dropping"
+        );
         return;
     };
     connection
@@ -181,18 +190,25 @@ fn on_orzma_emit_frame(
         }));
 }
 
-/// Reports a webview's new top-level URL (CEF `OnAddressChange`: link
-/// clicks, redirects, hash and pushState navigation) to the host as a
-/// `UrlChanged` of its mount. A webview that is not an orzma mount is
-/// ignored.
+/// Reports a bridged remote webview's new top-level URL (CEF
+/// `OnAddressChange`: link clicks, redirects, hash and pushState navigation)
+/// to the host as a `UrlChanged` of its mount. Any other webview, including
+/// an `orzma://` page, is ignored.
 fn on_webview_address_changed(
     addr: On<AddressChanged>,
     connection: Res<OrzmuxConnection>,
-    webviews: Query<&Webview>,
+    webviews: Query<(&Webview, &WebviewSource), With<Bridged>>,
 ) {
-    let Ok(view) = webviews.get(addr.webview) else {
+    let Ok((view, source)) = webviews.get(addr.webview) else {
         return;
     };
+    let remote = matches!(
+        source,
+        WebviewSource::Url(url) if url.starts_with("http://") || url.starts_with("https://")
+    );
+    if !remote {
+        return;
+    }
     connection
         .0
         .send(OrzmuxCommand::Webview(WebviewCommand::UrlChanged {
@@ -235,31 +251,61 @@ fn deliver_to_page(
     commands.trigger(HostEmitEvent::new(webview, channel, &payload));
 }
 
-/// Applies a `Navigate` to the webview of its mount: `To` replaces the
-/// `WebviewSource` only when the URL differs from the one loaded, and
-/// `Back`, `Forward`, and `Reload` ask CEF. A mount with no live webview is
-/// ignored.
+/// Records the top-level URL an orzma webview reports in its `PageAddress`;
+/// any other webview is ignored.
+fn track_page_address(
+    addr: On<AddressChanged>,
+    mut commands: Commands,
+    webviews: Query<(), With<Webview>>,
+) {
+    if webviews.contains(addr.webview) {
+        commands
+            .entity(addr.webview)
+            .try_insert(PageAddress(addr.url.clone()));
+    }
+}
+
+/// Applies a `Navigate` to the webview of its mount, and `Back`, `Forward`,
+/// and `Reload` ask CEF. A mount with no live webview is ignored.
+///
+/// `To` does nothing when the page already shows or is loading the URL: the
+/// address it last reported or was last sent to, or its `WebviewSource`
+/// before either. Otherwise it replaces the `WebviewSource` with a URL that
+/// differs from it, asks CEF to load one that equals it, and records the URL
+/// as the page's address.
 fn apply_navigation(
     ev: On<OrzmuxWebviewEvent>,
     mut commands: Commands,
-    mut webviews: Query<(Entity, &Webview, &mut WebviewSource)>,
+    mut webviews: Query<(Entity, &Webview, &mut WebviewSource, Option<&PageAddress>)>,
 ) {
     let WebviewEvent::Navigate { mount, navigation } = ev.webview_event() else {
         return;
     };
-    let Some((webview, _, mut source)) = webviews
+    let Some((webview, _, mut source, address)) = webviews
         .iter_mut()
-        .find(|(_, view, _)| view.mount() == *mount)
+        .find(|(_, view, _, _)| view.mount() == *mount)
     else {
         tracing::debug!(?mount, "navigation for a mount with no webview dropped");
         return;
     };
     match navigation {
         Navigation::To(url) => {
-            let unchanged = matches!(&*source, WebviewSource::Url(current) if current == url);
-            if !unchanged {
+            let loaded = matches!(&*source, WebviewSource::Url(current) if current == url);
+            let showing = address.map_or(loaded, |address| address.0 == *url);
+            if showing {
+                return;
+            }
+            if loaded {
+                commands.trigger(RequestNavigate {
+                    webview,
+                    url: url.clone(),
+                });
+            } else {
                 *source = WebviewSource::Url(url.clone());
             }
+            commands
+                .entity(webview)
+                .try_insert(PageAddress(url.clone()));
         }
         Navigation::Back => commands.trigger(RequestGoBack { webview }),
         Navigation::Forward => commands.trigger(RequestGoForward { webview }),
@@ -330,6 +376,7 @@ mod tests {
             .add_observer(on_orzma_call_frame)
             .add_observer(on_orzma_emit_frame.run_if(resource_exists::<OrzmuxConnection>))
             .add_observer(on_webview_address_changed.run_if(resource_exists::<OrzmuxConnection>))
+            .add_observer(track_page_address)
             .add_observer(deliver_to_page)
             .add_observer(apply_navigation)
             .add_observer(|ev: On<HostEmitEvent>, mut emitted: ResMut<Emitted>| {
@@ -339,7 +386,15 @@ mod tests {
         (app, commands)
     }
 
+    /// Spawns the webview of `mount` loading `url`, with the bridge.
     fn spawn_mounted(app: &mut App, mount: MountId, url: &str) -> Entity {
+        let webview = spawn_display_only(app, mount, url);
+        app.world_mut().entity_mut(webview).insert(Bridged);
+        webview
+    }
+
+    /// Spawns the webview of `mount` loading `url`, without the bridge.
+    fn spawn_display_only(app: &mut App, mount: MountId, url: &str) -> Entity {
         app.world_mut()
             .spawn((
                 Webview::new(HandleId::from("H"), InstanceId(1), mount, 0, 10, 40),
@@ -408,6 +463,52 @@ mod tests {
                 method: "save".into(),
                 params: json!([1, 2]),
             }]
+        );
+    }
+
+    /// Asserts that a page without the bridge reaches the host with none of
+    /// its frames or address changes, its call rejected at once with
+    /// `no_owner`, and that an `orzma://` page's address change is not
+    /// reported either.
+    ///
+    /// Case: an untrusted remote site shown read-only sends forged bridge
+    /// frames through `cef.emit` and navigates, while a bundled page changes
+    /// its hash.
+    #[test]
+    fn frames_and_address_changes_of_pages_without_the_bridge_stay_local() {
+        let (mut app, commands) = app();
+        let remote = spawn_display_only(&mut app, MountId::new(3), "https://example.com/");
+        frame(
+            &mut app,
+            remote,
+            json!({"kind": "orzma.call", "reqId": "p0", "method": "save"}),
+        );
+        frame(
+            &mut app,
+            remote,
+            json!({"kind": "orzma.emit", "event": "tick"}),
+        );
+        let bundled = spawn_mounted(&mut app, MountId::new(4), "orzma://H/index.html");
+        for (webview, url) in [
+            (remote, "https://example.com/next"),
+            (bundled, "orzma://H/index.html#top"),
+        ] {
+            app.world_mut().trigger(AddressChanged {
+                webview,
+                url: url.into(),
+                can_go_back: false,
+                can_go_forward: false,
+            });
+        }
+        app.world_mut().flush();
+        assert!(sent(&commands).is_empty());
+        assert_eq!(
+            app.world().resource::<Emitted>().0,
+            vec![(
+                remote,
+                "orzma".to_string(),
+                json!({"reqId": "p0", "ok": false, "error": "no_owner"}),
+            )]
         );
     }
 
@@ -677,6 +778,58 @@ mod tests {
             app.world().get::<WebviewSource>(webview),
             Some(WebviewSource::Url(url)) if url == "https://example.com/next"
         ));
+    }
+
+    /// Asserts that a navigation to the URL the webview was loaded with,
+    /// after the page moved elsewhere on its own, asks CEF to load it once
+    /// without touching the source, and that the same navigation does
+    /// nothing while that load is in flight or after the page is back there.
+    ///
+    /// Case: a TUI browser's user follows a link inside the page, then types
+    /// the start page's address into the address bar and presses Enter
+    /// twice, and sends it once more after the page is back there.
+    #[test]
+    fn a_navigation_to_the_loaded_url_after_the_page_moved_loads_it() {
+        #[derive(Resource, Default)]
+        struct Navigated(Vec<(Entity, String)>);
+        let (mut app, _commands) = app();
+        app.init_resource::<SourceChanged>()
+            .init_resource::<Navigated>()
+            .add_systems(Update, probe_source_changed)
+            .add_observer(
+                |ev: On<RequestNavigate>, mut navigated: ResMut<Navigated>| {
+                    navigated.0.push((ev.webview, ev.url.clone()));
+                },
+            );
+        let webview = spawn_mounted(&mut app, MountId::new(3), "https://example.com/");
+        app.update();
+        app.update();
+        let arrive = |app: &mut App, url: &str| {
+            app.world_mut().trigger(AddressChanged {
+                webview,
+                url: url.into(),
+                can_go_back: true,
+                can_go_forward: false,
+            });
+            app.world_mut().flush();
+        };
+        let back_home = WebviewEvent::Navigate {
+            mount: MountId::new(3),
+            navigation: Navigation::To("https://example.com/".into()),
+        };
+        arrive(&mut app, "https://example.com/story");
+        host_event(&mut app, back_home.clone());
+        host_event(&mut app, back_home.clone());
+        app.update();
+        assert!(!app.world().resource::<SourceChanged>().0);
+        assert_eq!(
+            app.world().resource::<Navigated>().0,
+            vec![(webview, "https://example.com/".to_string())]
+        );
+        arrive(&mut app, "https://example.com/");
+        host_event(&mut app, back_home);
+        app.update();
+        assert_eq!(app.world().resource::<Navigated>().0.len(), 1);
     }
 
     /// Asserts that a back navigation asks CEF to go back in the webview of

@@ -64,6 +64,10 @@ pub struct WebviewHit {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompositeNotified;
 
+/// Marks a webview whose page has the `window.orzma` bridge.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Bridged;
+
 /// Registers the webview runtime: the observer that spawns, resizes, and
 /// despawns webviews on the host's mount events, the `WebviewSize` size sync,
 /// the per-frame projection that derives `TerminalOverlays` from the
@@ -354,7 +358,7 @@ fn spawn_webview(
         entity.insert(NonInteractive);
     }
     if spec.bridged() {
-        entity.insert(build_preload(spec.preload()));
+        entity.insert((Bridged, build_preload(spec.preload())));
     } else if !spec.preload().is_empty() {
         entity.insert(PreloadScripts::from(spec.preload().to_vec()));
     }
@@ -1095,7 +1099,8 @@ mod tests {
         assert!(!preload.0.is_empty());
     }
 
-    /// Asserts that a display-only URL mount carries no scripts.
+    /// Asserts that a display-only URL mount carries no scripts and is not
+    /// marked as bridged.
     ///
     /// Case: a program shows a remote page without the bridge or preloads.
     #[test]
@@ -1121,9 +1126,11 @@ mod tests {
             .get::<PreloadScripts>(child)
             .expect("PreloadScripts always present via WebviewSource #[require]");
         assert!(preload.0.is_empty());
+        assert!(app.world().get::<Bridged>(child).is_none());
     }
 
-    /// Asserts that a bridged URL mount carries the bridge scripts.
+    /// Asserts that a bridged URL mount carries the bridge scripts and is
+    /// marked as bridged.
     ///
     /// Case: a TUI browser shows a remote page and opts into the bridge to
     /// hear about its navigations.
@@ -1147,6 +1154,7 @@ mod tests {
             .get::<PreloadScripts>(child)
             .expect("PreloadScripts present");
         assert!(!preload.0.is_empty());
+        assert!(app.world().get::<Bridged>(child).is_some());
     }
 
     /// Asserts that a bridged inline mount runs the program's preload after

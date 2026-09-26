@@ -4,7 +4,7 @@ use super::*;
 use crate::boundary::{ForwardChord, MountSpec, WebviewAsset};
 use crate::error::WebviewHostError;
 use crate::protocol::{NavAction, RegisterKind};
-use crossbeam_channel::{Receiver, bounded, unbounded};
+use crossbeam_channel::{Receiver, TryRecvError, bounded, unbounded};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -252,8 +252,9 @@ fn a_stopped_listener_drops_the_socket() {
     assert!(host.bind_pane(1).expect("never fails").is_empty());
 }
 
-/// Asserts that a `hello` with a bound token is accepted, and one with an
-/// unknown token or the token of a closed pane is refused.
+/// Asserts that a `hello` with a bound token is accepted and its writer
+/// kept, and that one with an unknown token or the token of a closed pane is
+/// refused and its writer dropped.
 ///
 /// Case: a pane's shell connects, a stray process guesses a token, and a
 /// leftover process of a closed pane reconnects.
@@ -265,6 +266,13 @@ fn a_hello_is_accepted_only_for_a_live_panes_token() {
     assert!(!fixture.connect(2, "orzma:guess"));
     let _ = fixture.host.pane_closed(1);
     assert!(!fixture.connect(3, &token));
+    assert_eq!(fixture.lines[&1].try_recv(), Err(TryRecvError::Empty));
+    for refused in [2, 3] {
+        assert_eq!(
+            fixture.lines[&refused].try_recv(),
+            Err(TryRecvError::Disconnected)
+        );
+    }
 }
 
 /// Asserts that an inline registration replies with its handle and first
@@ -900,6 +908,20 @@ fn only_webview_vt_signals_are_placement_signals() {
             instances: vec![InstanceId(2)],
         })
     );
+    assert_eq!(
+        PlacementSignal::try_from(VtSignal::WebviewMountRejected {
+            instance: InstanceId(3),
+        }),
+        Ok(PlacementSignal::Rejected {
+            instance: InstanceId(3),
+        })
+    );
+    for instance in [Some(InstanceId(4)), None] {
+        assert_eq!(
+            PlacementSignal::try_from(VtSignal::WebviewUnmount { instance }),
+            Ok(PlacementSignal::Unmounted { instance })
+        );
+    }
     assert!(matches!(
         PlacementSignal::try_from(VtSignal::Bell),
         Err(VtSignal::Bell)
@@ -940,13 +962,14 @@ fn a_gui_focus_in_an_inactive_pane_selects_that_pane() {
 /// Asserts that a GUI focus on a non-interactive or ended mount changes
 /// nothing, pushes nothing, and still answers with the current focus.
 ///
-/// Case: the user clicks a status badge that takes no input, and a page
-/// that was unmounted in the same frame.
+/// Case: while a page holds the keyboard, the user clicks a status badge
+/// that takes no input, and then a page that was unmounted in the same
+/// frame.
 #[test]
 fn a_refused_gui_focus_still_answers_with_the_current_focus() {
-    let mut fixture = Fixture::new();
-    fixture.connect_pane(1, 1);
-    let _ = fixture.host.active_pane_changed(Some(1));
+    let (mut fixture, _, _, mount) = focused_fixture();
+    let _ = gui_focus(&mut fixture, Some(mount));
+    let _ = fixture.pushes(1);
     let (_, inert) = fixture.registered(
         1,
         RegisterKind::Inline {
@@ -957,17 +980,17 @@ fn a_refused_gui_focus_still_answers_with_the_current_focus() {
         },
     );
     let inert_mount = fixture.mounted(1, inert);
-    let output = gui_focus(&mut fixture, Some(inert_mount));
-    assert_eq!(
-        output.events(),
-        [WebviewEvent::FocusChanged { focused: None }]
-    );
-    assert!(fixture.pushes(1).is_empty());
-    let output = gui_focus(&mut fixture, Some(MountId::new(999)));
-    assert_eq!(
-        output.events(),
-        [WebviewEvent::FocusChanged { focused: None }]
-    );
+    for refused in [inert_mount, MountId::new(999)] {
+        let output = gui_focus(&mut fixture, Some(refused));
+        assert_eq!(
+            output.events(),
+            [WebviewEvent::FocusChanged {
+                focused: Some(mount)
+            }]
+        );
+        assert!(output.requests().is_empty());
+        assert!(fixture.pushes(1).is_empty());
+    }
 }
 
 /// Asserts that a GUI focus naming the mount a placement had before it was

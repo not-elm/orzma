@@ -513,13 +513,7 @@ impl<P: PaneKey> WebviewHost<P> {
         connection: ConnectionId,
         handle: &HandleId,
     ) -> WebviewHostResult<InstanceId> {
-        let registration = self.registry.get(handle).ok_or(Refusal::UnknownHandle)?;
-        if !self.tokens.is_live(registration.owner_pane()) {
-            return Err(Refusal::OwnerGone.into());
-        }
-        if registration.connection() != connection {
-            return Err(Refusal::NotOwner.into());
-        }
+        self.owned_registration(connection, handle)?;
         let instance = mint_instance_id()?;
         self.registry.add_instance(handle, instance)?;
         Ok(instance)

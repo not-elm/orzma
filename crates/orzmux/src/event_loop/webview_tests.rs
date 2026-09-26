@@ -1,9 +1,12 @@
 //! Tests of the webview host running inside the multiplexer loop.
 
-use crate::backend::{NewPaneAt, OrzmuxEvent, PaneId, PaneTarget, RequestId, SplitOrientation};
+use crate::backend::{
+    NewPaneAt, OrzmuxEvent, PaneDirection, PaneId, PaneTarget, RequestId, SplitOrientation,
+};
 use crate::event_loop::OrzmuxCommand;
 use crate::test_support::{CONTROL_SOCK, FakePane, Harness};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
 use orzma_vt::prelude::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use orzma_webview_host::prelude::{
     ConnectionId, ControlEvent, MountId, ValidatedRegistration, WebviewCommand, WebviewEvent,
@@ -313,6 +316,135 @@ fn a_socket_mount_comes_back_as_a_webview_mount() {
         event,
         WebviewEvent::Mounted { instance: i, .. } if *i == instance
     )));
+}
+
+/// Asserts that a socket unmount applied before the pane is pumped leaves
+/// no mount behind, although the socket mount before it already reached the
+/// VT.
+///
+/// Case: a program in a Windows pane shows a placement for a single frame,
+/// so its socket `mount` and `unmount` arrive back to back.
+#[test]
+fn a_socket_unmount_right_after_a_socket_mount_leaves_no_mount() {
+    let (mut h, control) = Harness::with_control();
+    let (pane, _fake) = h.open_root();
+    let _lines = connect(&mut h, &control, 1);
+    let instance = register_inline(&mut h, &control, 1);
+    h.drain();
+    control
+        .send(ControlEvent::Mount {
+            connection: ConnectionId::new(1),
+            instance: instance.to_string(),
+            row: 1,
+            col: 2,
+            rows: 4,
+            cols: 8,
+        })
+        .unwrap();
+    control
+        .send(ControlEvent::Unmount {
+            connection: ConnectionId::new(1),
+            instance: instance.to_string(),
+        })
+        .unwrap();
+    h.drain_control();
+    h.pump_pane(pane);
+    assert!(
+        !webview_events(&h.drain())
+            .iter()
+            .any(|event| matches!(event, WebviewEvent::Mounted { .. }))
+    );
+}
+
+/// A root pane whose program mounted an inline page, split so that the new
+/// right pane is the active one.
+struct SplitPage {
+    left: PaneId,
+    left_fake: FakePane,
+    right_fake: FakePane,
+    instance: InstanceId,
+    _lines: Receiver<String>,
+}
+
+impl SplitPage {
+    fn open(h: &mut Harness, control: &Sender<ControlEvent>) -> Self {
+        let (left, left_fake) = h.open_root();
+        let lines = connect(h, control, 1);
+        let instance = register_inline(h, control, 1);
+        h.drain();
+        print_mounts(&left_fake, &[instance], 2);
+        h.pump_pane(left);
+        let _ = h.drain();
+        let right = split(h, left);
+        assert_ne!(right, left);
+        let right_fake = h.spawned_pane().expect("the split spawned a pane");
+        Self {
+            left,
+            left_fake,
+            right_fake,
+            instance,
+            _lines: lines,
+        }
+    }
+
+    /// The socket `focus` of the page's placement.
+    fn focus(&self) -> ControlEvent {
+        ControlEvent::Focus {
+            connection: ConnectionId::new(1),
+            instance: Some(self.instance.to_string()),
+        }
+    }
+}
+
+/// Asserts that after a program's socket `focus` moves the active pane, the
+/// next directional selection is answered with a layout naming that pane
+/// under its own sequence, even when it moves nothing and another command
+/// ran before it.
+///
+/// Case: the user refocuses the window and presses select-left in the
+/// right pane just as the program in the left pane focuses its page, and
+/// the left pane has no neighbour on its left.
+#[test]
+fn a_move_by_a_socket_focus_is_republished_by_the_next_directional_selection() {
+    let (mut h, control) = Harness::with_control();
+    let page = SplitPage::open(&mut h, &control);
+    control.send(page.focus()).unwrap();
+    h.drain_control();
+    assert!(
+        webview_events(&h.drain())
+            .iter()
+            .any(|event| matches!(event, WebviewEvent::FocusChanged { focused: Some(_) }))
+    );
+    h.queue(OrzmuxCommand::WindowFocus { focused: true });
+    let seq = h.send(OrzmuxCommand::SelectPaneDirection {
+        direction: PaneDirection::Left,
+    });
+    assert!(h.drain().iter().any(|event| matches!(
+        event,
+        OrzmuxEvent::Layout { layout, .. } if layout.seq == seq && layout.active == Some(page.left)
+    )));
+}
+
+/// Asserts that GUI commands queued before a control event are applied
+/// first, so a program's socket `focus` cannot move the active pane under a
+/// key the GUI already sent.
+///
+/// Case: the user types into the right pane while the program in the left
+/// pane focuses its page.
+#[test]
+fn gui_commands_queued_before_a_control_event_run_first() {
+    let (mut h, control) = Harness::with_control();
+    let page = SplitPage::open(&mut h, &control);
+    h.queue(OrzmuxCommand::KeyInput {
+        pane: PaneTarget::Active,
+        key: TerminalKey::Character(KeyText::new("x").expect("a valid key text")),
+        mods: TerminalModifiers::default(),
+    });
+    control.send(page.focus()).unwrap();
+    assert!(h.event_loop_mut().drain_control_after_commands());
+    h.settle_writes();
+    assert_eq!(page.right_fake.received(), b"x".to_vec());
+    assert!(page.left_fake.received().is_empty());
 }
 
 /// Asserts that a GUI focus is applied and answered with the sequence of the

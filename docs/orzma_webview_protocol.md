@@ -57,8 +57,10 @@ The control socket is a local Unix-domain **stream** socket speaking **NDJSON**
 (on Windows, an AF_UNIX socket, available since Windows 10 1809; the endpoint
 is a filesystem path on every platform):
 exactly one JSON object per line, terminated by `\n` (a trailing `\r` is
-tolerated). Each line travels in one direction. The connection is long-lived —
-it stays open for as long as the program wants its registrations to live.
+tolerated). Each line travels in one direction. The host closes a connection
+when its first line is longer than 4 KiB or any later line is longer than
+32 MiB. The connection is long-lived — it stays open for as long as the
+program wants its registrations to live.
 
 ### Discovery
 
