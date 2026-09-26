@@ -5146,6 +5146,8 @@ dependencies = [
  "crossbeam-channel",
  "orzma_tty",
  "orzma_vt",
+ "orzma_webview_host",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",

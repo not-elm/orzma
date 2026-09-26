@@ -1,6 +1,6 @@
 //! The multiplexer's thread-facing half: the command vocabulary the GUI
-//! sends, and the loop that waits on the command channel and every
-//! pane's PTY streams.
+//! sends, and the loop that waits on the command channel, the control
+//! socket's events, and every pane's PTY streams.
 
 use crate::backend::queue_sample::QueueSampler;
 use crate::backend::{
@@ -12,6 +12,7 @@ use crossbeam_channel::{Receiver, Select, TryRecvError};
 use orzma_tty::prelude::{PointerInput, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{GridColumn, GridSize, InstanceId, PlacementSize, ScreenLine, Scroll};
+use orzma_webview_host::prelude::WebviewCommand;
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing::Level;
@@ -151,6 +152,9 @@ pub enum OrzmuxCommand {
         /// The rect's extent in cells.
         size: PlacementSize,
     },
+    /// A report the GUI sends the webview host: a focus change, a first
+    /// frame, or a page's call, event, or URL change.
+    Webview(WebviewCommand),
 }
 
 impl OrzmuxCommand {
@@ -177,6 +181,7 @@ impl OrzmuxCommand {
             }
             Self::ResizeSplit { .. } => ("ResizeSplit", None),
             Self::MountPlacement { pane, .. } => ("MountPlacement", Some(PaneTarget::Id(*pane))),
+            Self::Webview(_) => ("Webview", None),
         }
     }
 
@@ -238,6 +243,10 @@ impl EventLoop {
             self.record_queue_depths();
             let connected = match ready {
                 Some(Ready::Commands) => self.drain_commands(),
+                Some(Ready::Control) => {
+                    self.drain_control();
+                    true
+                }
                 Some(Ready::Pane(pane)) => {
                     self.backend.pump_pane(pane);
                     true
@@ -279,6 +288,19 @@ impl EventLoop {
             self.handle_command(seq, command);
         }
         connected
+    }
+
+    /// Applies up to `CONTROL_BATCH` queued control-socket events, logging
+    /// each one the webview host refuses.
+    pub fn drain_control(&mut self) {
+        for _ in 0..CONTROL_BATCH {
+            let Some(event) = self.backend.try_recv_control() else {
+                return;
+            };
+            if let Err(error) = self.backend.handle_control(event) {
+                log_refused_control(&error);
+            }
+        }
     }
 
     /// Hands the backend's queued events to the GUI, waking it only when it
@@ -381,17 +403,23 @@ impl EventLoop {
             } => self
                 .backend
                 .mount_placement(pane, instance, row, column, size),
+            OrzmuxCommand::Webview(command) => self.backend.webview_command(command),
         }
     }
 
-    /// Blocks until a command or a pane stream is ready, or the earliest
-    /// of the panes' next deadlines and the sampler's report deadline
-    /// passes. Returns the ready source, `None` on timeout.
+    /// Blocks until a command, a control-socket event, or a pane stream is
+    /// ready, or the earliest of the panes' next deadlines and the
+    /// sampler's report deadline passes. Returns the ready source, `None`
+    /// on timeout.
     fn wait_ready(&mut self) -> Option<Ready> {
         let mut select = Select::new();
         self.sources.clear();
         select.recv(&self.commands);
         self.sources.push(Ready::Commands);
+        if let Some(control) = self.backend.control_events() {
+            select.recv(control);
+            self.sources.push(Ready::Control);
+        }
         for (id, readiness) in self.backend.readiness() {
             select.recv(readiness.chunks);
             self.sources.push(Ready::Pane(id));
@@ -477,7 +505,21 @@ fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &O
         OrzmuxError::PtyWrite { pane, source } => {
             log_refused_write(*pane, name, source, Level::ERROR);
         }
+        OrzmuxError::WebviewHost(host) if host.is_refusal() => {
+            tracing::debug!(command = name, %error, "webview command refused");
+        }
         _ => tracing::warn!(command = name, %error, "command refused"),
+    }
+}
+
+/// Logs a control-socket event the webview host turned down at debug, and
+/// one it failed on at warn.
+fn log_refused_control(error: &OrzmuxError) {
+    match error {
+        OrzmuxError::WebviewHost(host) if host.is_refusal() => {
+            tracing::debug!(%error, "control request refused");
+        }
+        _ => tracing::warn!(%error, "control request failed"),
     }
 }
 
@@ -485,11 +527,16 @@ fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &O
 #[derive(Debug, Clone, Copy)]
 enum Ready {
     Commands,
+    Control,
     Pane(PaneId),
 }
 
 /// How many queued commands one iteration applies before pumping panes.
 const COMMAND_BATCH: usize = 64;
+
+/// How many queued control-socket events one iteration applies before
+/// panes and GUI commands get a turn.
+const CONTROL_BATCH: usize = 64;
 
 #[cfg(test)]
 mod tests {
@@ -505,6 +552,7 @@ mod tests {
     use orzma_tty::test_support::BlockingSink;
     use orzma_vt::Vt;
     use orzma_vt::prelude::{CellSide, OrzmaVt};
+    use orzma_webview_host::prelude::WebviewHost;
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::Arc;
@@ -581,7 +629,11 @@ mod tests {
         let (gui, event_rx) = GuiLink::channel(Waker::noop().clone());
         let (spawned_tx, _spawned_rx) = unbounded();
         let factory = FakeFactory::new(spawned_tx, Arc::new(FactoryLog::default()));
-        let backend = Backend::new(Box::new(factory), WheelConfig::default());
+        let backend = Backend::new(
+            Box::new(factory),
+            WheelConfig::default(),
+            WebviewHost::without_socket(),
+        );
         command_tx
             .send((
                 CommandSeq(1),
@@ -1805,3 +1857,6 @@ mod tests {
         assert_eq!(h.wake_count(), before + 1);
     }
 }
+
+#[cfg(test)]
+mod webview_tests;

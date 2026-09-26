@@ -17,4 +17,5 @@ pub mod prelude {
     pub use crate::client::{OrzmuxClient, OrzmuxConfig};
     pub use crate::error::{OrzmuxError, OrzmuxResult};
     pub use crate::event_loop::OrzmuxCommand;
+    pub use orzma_webview_host::prelude::{WebviewCommand, WebviewEvent};
 }

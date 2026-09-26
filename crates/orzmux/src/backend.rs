@@ -1,11 +1,12 @@
-//! The multiplexer's pane ledger: owns every pane and the layout tree,
-//! applies the operations the event loop dispatches, and queues the
-//! events the GUI receives.
+//! The multiplexer's pane ledger: owns every pane, the layout tree, and the
+//! webview host, applies the operations the event loop dispatches, and
+//! queues the events the GUI receives.
 
 use crate::backend::layout::LayoutTree;
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::ChunkDepth;
 use crate::error::{OrzmuxError, OrzmuxResult};
+use crossbeam_channel::Receiver;
 use orzma_tty::prelude::{
     OrzmaTty, OrzmaTtyError, OrzmaTtyResult, PointerInput, PumpItem, Readiness, TerminalKey,
     TerminalModifiers, TtySignal, WheelConfig, WheelInput,
@@ -14,6 +15,10 @@ use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{
     Frame, GridColumn, GridSize, InstanceId, OrzmaVt, PlacementSize, ScreenLine, Scroll, Vt,
     VtSignal,
+};
+use orzma_webview_host::prelude::{
+    ControlEvent, HostOutput, MuxRequest, PlacementSignal, WebviewCommand, WebviewEvent,
+    WebviewHost,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -200,7 +205,8 @@ pub enum OrzmuxEvent {
         /// The pane's new frame.
         frame: Frame,
     },
-    /// A pane's VT emitted a signal the GUI must act on.
+    /// A pane's VT emitted a signal the GUI must act on. Webview placement
+    /// signals go to the webview host instead.
     Signal {
         /// The pane the signal came from.
         pane: PaneId,
@@ -226,10 +232,18 @@ pub enum OrzmuxEvent {
         /// Why the pane closed.
         reason: CloseReason,
     },
+    /// The webview host's news for the GUI, stamped with the last GUI
+    /// command the backend had processed when it arose.
+    Webview {
+        /// The host's event.
+        event: WebviewEvent<PaneId>,
+        /// The last processed GUI command.
+        seq: CommandSeq,
+    },
 }
 
-/// Every live pane, the layout tree they tile, and the events they have
-/// generated since the last drain.
+/// Every live pane, the layout tree they tile, the webview host serving their
+/// programs, and the events they have generated since the last drain.
 pub(crate) struct Backend {
     factory: Box<dyn PaneFactory>,
     panes: HashMap<PaneId, Pane>,
@@ -244,11 +258,18 @@ pub(crate) struct Backend {
     wheel: WheelConfig,
     /// Events generated since the last drain, in generation order.
     outbox: Vec<OrzmuxEvent>,
+    /// Every client's webview state and the rules over it.
+    webview: WebviewHost<PaneId>,
 }
 
 impl Backend {
-    /// A backend with no panes and no geometry.
-    pub fn new(factory: Box<dyn PaneFactory>, wheel: WheelConfig) -> Self {
+    /// A backend with no panes and no geometry, whose webview clients are
+    /// served by `webview`.
+    pub fn new(
+        factory: Box<dyn PaneFactory>,
+        wheel: WheelConfig,
+        webview: WebviewHost<PaneId>,
+    ) -> Self {
         Self {
             factory,
             panes: HashMap::new(),
@@ -259,6 +280,7 @@ impl Backend {
             processed: CommandSeq::default(),
             wheel,
             outbox: Vec::new(),
+            webview,
         }
     }
 
@@ -304,6 +326,10 @@ impl Backend {
 
     /// Spawns a pane at `at` and announces it with `PaneOpened`.
     ///
+    /// The shell's environment gains `ORZMA_SOCK` and a fresh `ORZMA_TOKEN`
+    /// when the webview host has a control socket; a token that cannot be
+    /// minted is logged and the shell starts without them.
+    ///
     /// # Errors
     ///
     /// Returns [`OrzmuxError::NoGeometry`] before the window has
@@ -332,6 +358,18 @@ impl Backend {
                 .and_then(|id| self.panes.get(&id))
                 .and_then(Pane::cwd)
         });
+        let control_env = self.webview.bind_pane(new).unwrap_or_else(|error| {
+            tracing::warn!(pane = ?new, %error, "the pane starts without ORZMA_SOCK and ORZMA_TOKEN");
+            Vec::new()
+        });
+        let env = env
+            .into_iter()
+            .chain(
+                control_env
+                    .into_iter()
+                    .map(|(key, value)| (EnvKey(key), EnvValue(value))),
+            )
+            .collect();
         match self.spawn_pane(new, geometry, spawn_cwd.clone(), env) {
             Ok((tty, size)) => {
                 self.panes.insert(
@@ -347,6 +385,8 @@ impl Backend {
                 if let Some(previous) = previous_active {
                     self.tree.select(previous);
                 }
+                let output = self.webview.pane_closed(new);
+                self.apply_webview(output);
                 Err(error)
             }
         }
@@ -542,6 +582,41 @@ impl Backend {
         });
     }
 
+    /// The channel the control socket's listener sends on, or `None` when
+    /// the webview host has no socket.
+    pub fn control_events(&self) -> Option<&Receiver<ControlEvent>> {
+        self.webview.control_events()
+    }
+
+    /// The next queued control-socket event, if any.
+    pub fn try_recv_control(&mut self) -> Option<ControlEvent> {
+        self.webview.try_recv_control()
+    }
+
+    /// Applies one control-socket event through the webview host.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::WebviewHost`] when the host refuses the
+    /// request or fails; nothing changes then.
+    pub fn handle_control(&mut self, event: ControlEvent) -> OrzmuxResult {
+        let output = self.webview.control(event)?;
+        self.apply_webview(output);
+        Ok(())
+    }
+
+    /// Applies one report the GUI sent the webview host.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::WebviewHost`] when the host refuses it;
+    /// nothing changes then.
+    pub fn webview_command(&mut self, command: WebviewCommand) -> OrzmuxResult {
+        let output = self.webview.command(command)?;
+        self.apply_webview(output);
+        Ok(())
+    }
+
     /// Empties the outbox, yielding the events in generation order.
     pub fn drain_events(&mut self) -> impl Iterator<Item = OrzmuxEvent> + '_ {
         self.outbox.drain(..)
@@ -680,6 +755,7 @@ impl Backend {
     fn publish_layout(&mut self) {
         self.refresh_focus();
         let Some(geometry) = self.geometry else {
+            self.sync_webview_active();
             return;
         };
         let solved = self.tree.solve(geometry.size);
@@ -717,6 +793,7 @@ impl Backend {
             separators: solved.separators,
         };
         self.emit(OrzmuxEvent::Layout { layout, frames });
+        self.sync_webview_active();
     }
 
     /// Tells every pane whether it holds focus: the active pane does while
@@ -740,10 +817,11 @@ impl Backend {
         }
     }
 
-    /// Forwards a pump's items in order: each signal as a `Signal` event,
-    /// each frame as a `Frame` event, or into `layout_frames` when the
-    /// caller publishes the frames itself. Returns `Some(code)` when the
-    /// items carried `ChildExit`.
+    /// Forwards a pump's items in order: each placement signal to the
+    /// webview host, every other signal as a `Signal` event, each frame as
+    /// a `Frame` event, or into `layout_frames` when the caller publishes
+    /// the frames itself. Returns `Some(code)` when the items carried
+    /// `ChildExit`.
     fn forward_items(
         &mut self,
         mut layout_frames: Option<&mut Vec<(PaneId, Frame)>>,
@@ -755,12 +833,20 @@ impl Backend {
             match item {
                 PumpItem::Signal(TtySignal::ChildExit { code }) => exited = Some(code),
                 PumpItem::Signal(TtySignal::Vt(signal)) => {
-                    if let VtSignal::CurrentDir(path) = &signal
-                        && let Some(pane) = self.panes.get_mut(&id)
-                    {
-                        pane.set_reported_cwd(path.clone());
+                    match PlacementSignal::try_from(signal) {
+                        Ok(placement) => {
+                            let output = self.webview.placement_signal(id, placement);
+                            self.apply_webview(output);
+                        }
+                        Err(signal) => {
+                            if let VtSignal::CurrentDir(path) = &signal
+                                && let Some(pane) = self.panes.get_mut(&id)
+                            {
+                                pane.set_reported_cwd(path.clone());
+                            }
+                            self.emit(OrzmuxEvent::Signal { pane: id, signal });
+                        }
                     }
-                    self.emit(OrzmuxEvent::Signal { pane: id, signal });
                 }
                 PumpItem::Frame(frame) => match layout_frames.as_deref_mut() {
                     Some(frames) => frames.push((id, frame)),
@@ -772,7 +858,9 @@ impl Backend {
     }
 
     /// Removes a pane from the tree and the pool after flushing its last
-    /// output, then publishes the layout the survivors get.
+    /// output, then publishes the layout the survivors get. The webview
+    /// host releases the pane's registrations first, so their events
+    /// precede `PaneClosed`.
     fn close_pane(&mut self, id: PaneId, reason: CloseReason) {
         if let Some(pane) = self.panes.get_mut(&id) {
             let flushed = pane.tty.flush_now();
@@ -780,6 +868,8 @@ impl Backend {
         }
         self.tree.remove(id);
         self.panes.remove(&id);
+        let output = self.webview.pane_closed(id);
+        self.apply_webview(output);
         self.emit(OrzmuxEvent::PaneClosed { pane: id, reason });
         self.publish_layout();
     }
@@ -823,6 +913,47 @@ impl Backend {
     ) -> OrzmuxResult<T> {
         write(&mut self.pane_mut(id)?.tty)
             .map_err(|source| OrzmuxError::PtyWrite { pane: id, source })
+    }
+
+    /// Tells the webview host which pane is active, so it releases a focus
+    /// held in any other pane.
+    fn sync_webview_active(&mut self) {
+        let output = self.webview.active_pane_changed(self.tree.active());
+        self.apply_webview(output);
+    }
+
+    /// Queues the host's events for the GUI, stamped with the last processed
+    /// command, and applies its requests.
+    fn apply_webview(&mut self, output: HostOutput<PaneId>) {
+        let (events, requests) = output.into_parts();
+        let seq = self.processed;
+        for event in events {
+            self.emit(OrzmuxEvent::Webview { event, seq });
+        }
+        for request in requests {
+            self.apply_webview_request(request);
+        }
+    }
+
+    /// Carries out one request of the webview host; a request for a pane
+    /// that has closed is dropped.
+    fn apply_webview_request(&mut self, request: MuxRequest<PaneId>) {
+        let result = match request {
+            MuxRequest::MountPlacement {
+                pane,
+                instance,
+                row,
+                column,
+                size,
+            } => self.mount_placement(pane, instance, row, column, size),
+            MuxRequest::RemovePlacements { pane, instances } => {
+                self.remove_placements(pane, instances)
+            }
+            MuxRequest::SelectPane { pane } => self.select_pane(pane),
+        };
+        if let Err(error) = result {
+            tracing::debug!(%error, "a webview host request was dropped");
+        }
     }
 
     fn emit(&mut self, event: OrzmuxEvent) {

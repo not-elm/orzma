@@ -4,6 +4,7 @@
 use crate::backend::PaneId;
 use orzma_tty::prelude::OrzmaTtyError;
 use orzma_vt::prelude::VtError;
+use orzma_webview_host::prelude::WebviewHostError;
 use std::io::Error as IoError;
 use thiserror::Error;
 
@@ -47,11 +48,15 @@ pub enum OrzmuxError {
         #[source]
         source: OrzmaTtyError,
     },
+    /// The webview host refused a request or failed.
+    #[error(transparent)]
+    WebviewHost(#[from] WebviewHostError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzma_webview_host::prelude::Refusal;
 
     /// Asserts that a backend thread start-up failure's message includes
     /// the OS error text.
@@ -90,5 +95,15 @@ mod tests {
             OrzmuxError::SplitRefused.to_string(),
             "the target pane has too little room to divide"
         );
+    }
+
+    /// Asserts that a webview host failure keeps the host's own message.
+    ///
+    /// Case: a program asks to focus another program's page and the refusal
+    /// is logged by the multiplexer.
+    #[test]
+    fn a_webview_host_failure_keeps_the_hosts_message() {
+        let error = OrzmuxError::from(WebviewHostError::from(Refusal::NotOwner));
+        assert_eq!(error.to_string(), "another connection owns the target");
     }
 }

@@ -107,6 +107,7 @@ fn apply_event(
                 commands.entity(entity).despawn();
             }
         }
+        OrzmuxEvent::Webview { .. } => {}
     }
 }
 
