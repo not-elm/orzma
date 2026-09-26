@@ -55,11 +55,13 @@ the manuals kept there are permanent — including a section of one
 code**, doc comments included — not by path, and not by section number or
 decision ID (`spec §7`, `D17a of the engine-swap design`).
 
-Everything else in `docs/` is short-lived by design. `docs/todo/` holds
-per-task working notes that are deleted once the task ships, and
-`docs/superpowers/` is not even tracked, so a comment that points at one
-becomes a dead reference the next reader cannot follow — and unlike a
-broken code path, nothing fails to compile when it does.
+Everything else in `docs/` is short-lived by design or moves around.
+`docs/todo/` holds per-task working notes that are deleted once the task
+ships, `docs/superpowers/` is not even tracked, and the pages of the user
+guide under `docs/book/` are renamed and merged as the guide is
+reorganized, so a comment that points at one becomes a dead reference the
+next reader cannot follow — and unlike a broken code path, nothing fails
+to compile when it does.
 
 | Pattern                                          | Example                                    | Instead                                                          |
 | ------------------------------------------------ | ------------------------------------------ | ---------------------------------------------------------------- |
