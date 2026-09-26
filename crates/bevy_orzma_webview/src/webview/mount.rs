@@ -1064,13 +1064,13 @@ mod tests {
         assert_eq!(slot_of(&app, terminal, clock), Some(1));
     }
 
-    /// Asserts that a directory mount loads its `orzma://` URL with no
-    /// scripts when the registration has no bridge.
+    /// Asserts that a directory mount loads the `orzma://` URL of its entry
+    /// and carries the `window.orzma` bridge.
     ///
-    /// Case: a program registers a directory of static pages without
-    /// opting into the bridge.
+    /// Case: a program registers a directory of static pages whose entry
+    /// sits in a subdirectory, and mounts it.
     #[test]
-    fn a_directory_mount_loads_its_url_without_the_bridge() {
+    fn a_directory_mount_loads_its_entry_with_the_bridge() {
         let (mut app, terminal, instance) = app_with_terminal();
         mount_with(
             &mut app,
@@ -1078,20 +1078,21 @@ mod tests {
             instance,
             MountSpec::new(
                 HandleId::from("DYN1"),
-                "orzma://DYN1/index.html",
+                "orzma://DYN1/docs/index.html",
                 PlacementSize { rows: 10, cols: 40 },
-            ),
+            )
+            .with_bridge(true),
         );
         let child = webview_children_of(&app, terminal)[0];
         match app.world().get::<WebviewSource>(child) {
-            Some(WebviewSource::Url(url)) => assert_eq!(url, "orzma://DYN1/index.html"),
+            Some(WebviewSource::Url(url)) => assert_eq!(url, "orzma://DYN1/docs/index.html"),
             other => panic!("expected an orzma URL, got {other:?}"),
         }
         let preload = app
             .world()
             .get::<PreloadScripts>(child)
             .expect("PreloadScripts always present via WebviewSource #[require]");
-        assert!(preload.0.is_empty());
+        assert!(!preload.0.is_empty());
     }
 
     /// Asserts that a display-only URL mount carries no scripts.

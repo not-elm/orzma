@@ -42,9 +42,13 @@ pub(crate) fn trigger_webview_event(
     event: WebviewEvent<PaneId>,
     seq: CommandSeq,
 ) {
+    let pane = match &event {
+        WebviewEvent::Mounted { pane, .. } => Some(*pane),
+        _ => None,
+    };
     match event.try_map_pane(|pane| registry.entity_of(pane)) {
         Some(event) => commands.trigger(OrzmuxWebviewEvent::new(event, seq)),
-        None => tracing::debug!("webview mount for an unknown pane dropped"),
+        None => tracing::debug!(?pane, "webview mount for an unknown pane dropped"),
     }
 }
 

@@ -101,9 +101,9 @@ fn request_webview_focus(
     );
 }
 
-/// Mirrors a host `FocusChanged` into `FocusedWebview`, unless it answers a
-/// command older than the last `Focus` the GUI sent. A focused mount with no
-/// live webview mirrors as no focus.
+/// Mirrors a host `FocusChanged` into `FocusedWebview`, unless the backend
+/// stamped it before it processed the last `Focus` the GUI sent. A focused
+/// mount with no live webview mirrors as no focus.
 fn mirror_host_focus(
     ev: On<OrzmuxWebviewEvent>,
     mut focused: ResMut<FocusedWebview>,
@@ -424,8 +424,9 @@ mod tests {
     /// Asserts that despawning the pane of the focused webview releases the
     /// focus without an unmount from the host.
     ///
-    /// Case: the GUI despawns a pane entity while one of its pages holds
-    /// keyboard focus.
+    /// Case: a pane's shell exits while one of its pages holds keyboard
+    /// focus, and the GUI removes the pane before the host's unmount of the
+    /// page reaches it.
     #[test]
     fn a_despawned_pane_releases_the_focus_of_its_webview() {
         let (mut app, _commands) = focus_app();
