@@ -1,0 +1,172 @@
+name: release-linux
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release-linux.yml"
+      - "scripts/stage_linux.py"
+      - "scripts/stage_windows.py"
+      - "scripts/build_linux_icons.py"
+      - "build/linux/**"
+      - "apps/cef_render_process/**"
+      - "build.rs"
+      - "src/main.rs"
+      - "justfile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version in the archive name (dry run only; defaults to the Cargo version)"
+        required: false
+        type: string
+
+# NOTE: macOS and Windows share `release-${{ github.ref }}`. A third member would
+# cancel whichever run is pending there, so Linux keeps its own group.
+concurrency:
+  group: release-linux-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: write
+
+env:
+  CEF_VERSION: "152.4.0+152.0.8"
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    # Building inside 22.04 keeps the shipped binaries' glibc floor at 2.35 now that
+    # the ubuntu-22.04 runner image is being retired.
+    container:
+      image: ubuntu:22.04
+      volumes:
+        - /usr/local/lib/android:/host/android
+        - /usr/share/dotnet:/host/dotnet
+        - /opt/ghc:/host/ghc
+        - /usr/local/.ghcup:/host/ghcup
+        - /opt/hostedtoolcache/CodeQL:/host/codeql
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Free runner disk space
+        run: rm -rf /host/android/* /host/dotnet/* /host/ghc/* /host/ghcup/* /host/codeql/*
+
+      # libcef.so's runtime libraries let the stage's ldd gate prove the shipped tree
+      # resolves on the glibc 2.35 baseline; README lists the same packages for users.
+      - name: Install system packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config python3 binutils xz-utils bzip2 zstd \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
+            libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 \
+            libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 \
+            libpango-1.0-0 libcairo2 libgtk-3-0 libasound2 libdbus-1-3 libglib2.0-0
+
+      - uses: actions/checkout@v5
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: dtolnay/rust-toolchain@1.95
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Resolve version
+        id: ver
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          CARGO_VERSION="$(cargo metadata --format-version 1 --no-deps | python3 -c '
+          import json, sys
+          pkgs = json.load(sys.stdin)["packages"]
+          v = next((p["version"] for p in pkgs if p["name"] == "orzma"), None)
+          if v is None:
+              sys.exit("package orzma not found in cargo metadata")
+          print(v)')"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "${TAG_VERSION}" != "${CARGO_VERSION}" ]; then
+              echo "Tag v${TAG_VERSION} does not match Cargo version ${CARGO_VERSION}; bump Cargo.toml or fix the tag." >&2
+              exit 1
+            fi
+            VERSION="${TAG_VERSION}"
+          elif [ -n "${DISPATCH_VERSION}" ]; then
+            VERSION="${DISPATCH_VERSION}"
+          else
+            VERSION="${CARGO_VERSION}"
+          fi
+          if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9A-Za-z.+-]+$'; then
+            echo "Version '${VERSION}' has characters that cannot appear in the archive name." >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-linux"
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      # NOTE: container jobs cannot share caches with host jobs such as ci-rust: the
+      # cache version hashes the workspace-relative path, which differs here. Tag runs
+      # read only default-branch caches, so a tag run usually downloads CEF afresh.
+      - name: Cache the CEF build dependency
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/orzma/cef
+          key: cef-container-${{ runner.os }}-${{ env.CEF_VERSION }}
+
+      - name: Point cef-dll-sys at the cached CEF
+        run: echo "CEF_PATH=$HOME/.cache/orzma/cef" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Runs through just so the release builds exactly what `just bundle` builds
+      # locally; duplicating the steps here is how local and CI builds drift apart.
+      - name: Build, stage and package
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          ORZMA_STAGE_CHECK_DEPS: "1"
+        run: just bundle "$VERSION"
+
+      # download-cef keeps its ~400MB source archive beside the extracted runtime;
+      # dropping it keeps the saved cache entry to what cef-dll-sys actually reads.
+      - name: Trim the CEF cache
+        run: rm -rf "$HOME"/.cache/orzma/cef/*/cef_binary_*.tar.bz2
+
+      - name: Upload the dry-run archive
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: orzma-${{ steps.ver.outputs.version }}-x86_64-linux
+          path: |
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz.sha256
+
+      # action-gh-release (>= 2.5.2) finds the release macOS/Windows may be creating in
+      # parallel and retries on a 422 already_exists, so no create/upload fallback is needed.
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz.sha256
+          generate_release_notes: true

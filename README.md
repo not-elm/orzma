@@ -37,6 +37,28 @@ Requires Windows 10 1809 or later (x64).
 
 Download `orzma-<version>-x64.msi` from the [latest release](https://github.com/not-elm/orzma/releases/latest) and run it. The installer is per-user: it needs no administrator prompt, installs into `%LocalAppData%\Programs\orzma`, and puts `orzma`, `orzmd`, and `orzbrowser` on your `PATH`.
 
+### Linux (x86_64)
+
+Requires glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36, or newer).
+
+Install the system libraries the embedded Chromium needs (Ubuntu / Debian):
+
+```bash
+sudo apt install libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+  libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 \
+  libpango-1.0-0 libcairo2 libgtk-3-0 libasound2 libdbus-1-3 libglib2.0-0
+```
+
+Download `orzma-<version>-x86_64-linux.tar.gz` from the [latest release](https://github.com/not-elm/orzma/releases/latest), then:
+
+```bash
+tar xzf orzma-<version>-x86_64-linux.tar.gz
+cd orzma-<version>-x86_64-linux
+./install.sh
+```
+
+The installer is per-user and needs no root: it copies orzma into `~/.local/share/orzma`, links `~/.local/bin/orzma`, and adds orzma to your desktop's application list. You can also run `./orzma` straight from the extracted directory without installing. To uninstall, run `~/.local/share/orzma/uninstall.sh` (your settings in `~/.config/orzma` are kept).
+
 ## Features
 
 ### Webview
