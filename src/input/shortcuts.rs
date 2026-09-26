@@ -769,7 +769,9 @@ mod tests {
     use super::*;
     use bevy::input::keyboard::Key;
     use orzma_configs::OrzmaConfigs;
-    use orzma_configs::shortcuts::{Binding, FontSizeStep, Shortcuts as ConfigShortcuts};
+    use orzma_configs::shortcuts::{
+        Binding, FontSizeStep, PaneDirection, Shortcuts as ConfigShortcuts,
+    };
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -1670,6 +1672,38 @@ mod tests {
         };
         let resolved = resolved_shortcuts(config);
         assert_eq!(resolved.repeat_time, Duration::from_millis(250));
+    }
+
+    /// Asserts that the stock resize bindings repeat: after the leader,
+    /// Shift+H fires and opens the window, a second Shift+H and a Shift+L
+    /// fire without the leader, and a Shift+H after the window closed
+    /// passes through.
+    ///
+    /// Case: the user taps the leader and nudges a divider with Shift+H,
+    /// Shift+H and Shift+L in quick succession, then types a capital H a
+    /// second later.
+    #[test]
+    fn stock_resize_bindings_repeat_without_the_leader() {
+        let sc = resolved_shortcuts(OrzmaConfigs::default());
+        let shift = mods(false, true, false, false);
+        let mut phase = LeaderPhase::Pending;
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyH, shift, ms(0)),
+            LeaderStep::RunAction(Shortcut::ResizePane(PaneDirection::Left))
+        ));
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyH, shift, ms(100)),
+            LeaderStep::RunAction(Shortcut::ResizePane(PaneDirection::Left))
+        ));
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyL, shift, ms(200)),
+            LeaderStep::RunAction(Shortcut::ResizePane(PaneDirection::Right))
+        ));
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyH, shift, ms(1000)),
+            LeaderStep::Passthrough
+        ));
+        assert_eq!(phase, LeaderPhase::Idle);
     }
 
     /// Asserts that the `Plus` token resolves to the unshifted `=` key, so a

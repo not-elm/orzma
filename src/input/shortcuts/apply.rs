@@ -26,6 +26,9 @@ use orzmux::prelude::{
     SplitOrientation as OrzmuxSplitOrientation,
 };
 
+/// How many cells one resize-pane shortcut moves a divider.
+const PANE_RESIZE_CELLS: u16 = 5;
+
 pub(super) struct ShortcutsApplyPlugin;
 
 impl Plugin for ShortcutsApplyPlugin {
@@ -78,9 +81,9 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
 /// fires only outside vi mode; a leader paste fires unconditionally), copy
 /// (fires unconditionally — vi mode included; no-selection is a no-op
 /// downstream), the font-size zoom (window-wide, so it fires even with no
-/// focused surface), and the pane actions (select/split/kill, targeting the
-/// backend's active pane). Window actions are no-ops; `Quit` and
-/// `ReleaseWebviewFocus` are handled upstream in `resolve_key_effects`.
+/// focused surface), and the pane actions (select/split/kill/resize,
+/// targeting the backend's active pane). Window actions are no-ops; `Quit`
+/// and `ReleaseWebviewFocus` are handled upstream in `resolve_key_effects`.
 ///
 /// TODO: implement window actions once the built-in multiplexer supports
 /// windows.
@@ -118,8 +121,13 @@ fn apply_shortcut(
         Shortcut::KillPane => commands.trigger(RequestPaneAction {
             action: PaneAction::Kill,
         }),
-        Shortcut::ResizePane(_)
-        | Shortcut::ZoomPane
+        Shortcut::ResizePane(direction) => commands.trigger(RequestPaneAction {
+            action: PaneAction::Resize {
+                direction: pane_direction(direction),
+                cells: PANE_RESIZE_CELLS,
+            },
+        }),
+        Shortcut::ZoomPane
         | Shortcut::NewWindow
         | Shortcut::KillWindow
         | Shortcut::NextWindow
@@ -371,6 +379,51 @@ mod tests {
             app.world().resource::<Captured>().pane_actions,
             vec![PaneAction::SelectDirection(OrzmuxDirection::Left)],
             "SelectPane must map to RequestPaneAction::SelectDirection with the converted direction"
+        );
+    }
+
+    /// Asserts that `ResizePane` fires a `RequestPaneAction` carrying
+    /// `PaneAction::Resize` with the converted direction and a five-cell
+    /// step, in vi mode as well as outside it.
+    ///
+    /// Case: the user presses the leader-scoped resize-left-pane binding,
+    /// then resize-down-pane while the focused pane is in vi mode.
+    #[test]
+    fn resize_pane_maps_to_a_five_cell_resize_action() {
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![action_effect(
+                Shortcut::ResizePane(PaneDirection::Left),
+                true,
+            )],
+            Some(term),
+            false,
+            Modifiers::default(),
+        );
+        dispatch(
+            &mut app,
+            vec![action_effect(
+                Shortcut::ResizePane(PaneDirection::Down),
+                true,
+            )],
+            Some(term),
+            true,
+            Modifiers::default(),
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().pane_actions,
+            vec![
+                PaneAction::Resize {
+                    direction: OrzmuxDirection::Left,
+                    cells: 5,
+                },
+                PaneAction::Resize {
+                    direction: OrzmuxDirection::Down,
+                    cells: 5,
+                },
+            ]
         );
     }
 
