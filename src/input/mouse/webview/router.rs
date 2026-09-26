@@ -21,8 +21,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use bevy_orzma_tty_renderer::prelude::TerminalOverlays;
+use bevy_orzma_tty_renderer::prelude::{TerminalCellMetricsResource, TerminalOverlays};
 use bevy_orzma_webview::{NonInteractive, Webview};
 
 /// Adds the webview pointer-forwarding systems for the shell surface.
@@ -286,7 +285,7 @@ mod tests {
     use super::*;
     use bevy::math::{DVec2, IVec4};
     use bevy::window::WindowResolution;
-    use bevy_orzma_tty_renderer::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::CellMetrics;
     use orzma_vt::prelude::InstanceId;
 
     fn test_metrics() -> TerminalCellMetricsResource {

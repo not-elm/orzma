@@ -3,7 +3,7 @@
 
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
-use bevy_orzma_tty_renderer::TerminalFontSize;
+use bevy_orzma_tty_renderer::prelude::TerminalFontSize;
 use orzma_configs::shortcuts::FontSizeStep;
 
 /// The zoom factors, in ascending order. `FACTORS[BASE]` is the unzoomed 1.0.

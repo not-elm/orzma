@@ -1,15 +1,27 @@
-//! Applies each `TtyFrameSignal`'s frame to the per-entity
-//! `TerminalView` and `TerminalCells` components.
+//! The renderer's CPU-side mirror of each terminal's viewport and painted
+//! content, kept current from the frames the backend signals.
 
-use crate::schema::{TerminalCells, TerminalView};
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{OrzmuxPane, TtyFrameSignal};
+
+mod cells;
+#[cfg(test)]
+mod test_support;
+mod view;
+
+pub use cells::TerminalCells;
+pub use view::TerminalView;
 
 /// Applies each signalled frame to its terminal's view and cells, and
 /// makes every pane entity carry both.
 ///
 /// Both are required components of [`OrzmuxPane`]. The plugin must be
 /// added before any pane is promoted.
+///
+/// # Panics
+///
+/// Panics if any entity has carried `OrzmuxPane` before the plugin is
+/// added.
 #[derive(Default)]
 pub struct TerminalGridPlugin;
 
@@ -48,11 +60,12 @@ fn apply_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{
-        AnchoredPlacement, Cursor, DisplayOffset, GridColumn, GridLine, GridPoint, GridSlot,
-        InstanceId, PlacementSize, SelectionGeometry, SelectionRange, quiet_frame,
+    use crate::grid::test_support::quiet_frame;
+    use orzma_vt::prelude::{
+        AnchoredPlacement, Cell, Cursor, DirtyRow, DisplayOffset, Frame, GridColumn, GridLine,
+        GridPoint, GridSize, InstanceId, PlacementSize, Row, Run, SelectionGeometry,
+        SelectionRange, ViewportLine,
     };
-    use orzma_vt::prelude::{DirtyRow, Frame, GridSize, Row, Run, ViewportLine};
     use orzmux::prelude::PaneId;
 
     #[derive(Resource, Default)]
@@ -339,7 +352,17 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().get::<TerminalCells>(terminal).unwrap().cells,
-            vec![vec![GridSlot::Empty]]
+            vec![vec![Cell::default()]]
         );
+    }
+
+    /// Asserts that a frame carrying nothing new reports no difference
+    /// for either component.
+    ///
+    /// Case: a frame repeats what the mirror already holds.
+    #[test]
+    fn a_quiet_frame_differs_from_neither_component() {
+        assert!(!TerminalView::settled().differs_from(&quiet_frame()));
+        assert!(!TerminalCells::settled().differs_from(&quiet_frame()));
     }
 }

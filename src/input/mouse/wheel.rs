@@ -16,7 +16,7 @@ use crate::surface::geometry::topmost_surface_at;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
+use bevy_orzma_tty_renderer::prelude::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::RequestTtyWheel;
 use orzma_tty::prelude::{TerminalModifiers, WheelInput, WheelModifiers};
 
@@ -202,7 +202,7 @@ mod tests {
     use bevy::input::mouse::MouseScrollUnit;
     use bevy::input::touch::TouchPhase;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use bevy_orzma_tty_renderer::schema::TerminalView;
+    use bevy_orzma_tty_renderer::prelude::TerminalView;
     use orzma_tty::prelude::CellCoord;
 
     fn make_wheel_app() -> App {

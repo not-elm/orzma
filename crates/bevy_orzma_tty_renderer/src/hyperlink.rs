@@ -1,8 +1,8 @@
 //! Global hover state for the hyperlink under the pointer.
 
-use crate::schema::HyperlinkId;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::resource::Resource;
+use orzma_vt::prelude::HyperlinkId;
 
 /// Pointer hover state that drives the hyperlink underline accent.
 /// Exactly one cell can be hovered at a time across all panes.

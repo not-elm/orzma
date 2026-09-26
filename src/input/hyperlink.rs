@@ -17,8 +17,9 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
-use bevy_orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalCells, TerminalView};
+use bevy_orzma_tty_renderer::prelude::{
+    HyperlinkHoverState, TerminalCellMetricsResource, TerminalCells, TerminalView,
+};
 use bevy_orzmux::prelude::{OrzmuxSeparator, PaneGeometry, SplitOrientation};
 use orzma_configs::shortcuts::Modifiers;
 
@@ -269,8 +270,8 @@ fn insert_initial_cursor_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_orzma_tty_renderer::schema::HyperlinkId;
     use bevy_orzmux::prelude::SplitId;
+    use orzma_vt::prelude::HyperlinkId;
 
     fn empty() -> Modifiers {
         Modifiers::default()
@@ -379,7 +380,7 @@ mod tests {
         );
     }
 
-    use bevy_orzma_tty_renderer::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::CellMetrics;
 
     fn hover_test_metrics() -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
@@ -431,16 +432,14 @@ mod tests {
     /// A 10x5 grid whose top-left cell links to `https://example.com` as
     /// `HyperlinkId::new(7)`, shared by the hover tests.
     fn linked_grid() -> (TerminalView, TerminalCells) {
-        use bevy_orzma_tty_renderer::schema::{Color, GridCell, GridSlot, HyperlinkUri};
+        use orzma_vt::prelude::{Cell, HyperlinkUri};
         use std::collections::HashMap;
-        let mut rows = vec![vec![GridSlot::Empty; 10]; 5];
-        rows[0][0] = GridSlot::Cell(GridCell {
-            text: "x".to_string(),
-            fg: Color::DefaultForeground,
-            bg: Color::DefaultBackground,
-            style: 0,
-            hyperlink: Some(id(7)),
-        });
+        let mut rows = vec![vec![Cell::default(); 10]; 5];
+        rows[0][0] = Cell {
+            c: 'x',
+            hyperlink_id: Some(id(7)),
+            ..Cell::default()
+        };
         (
             TerminalView {
                 cols: 10,

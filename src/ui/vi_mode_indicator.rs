@@ -10,7 +10,7 @@ use bevy::ecs::lifecycle::Remove;
 use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
-use bevy_orzma_tty_renderer::schema::TerminalView;
+use bevy_orzma_tty_renderer::prelude::TerminalView;
 use bevy_orzmux::prelude::OrzmuxPane;
 
 /// Background color of the vi-mode indicator chip: bright yellow.

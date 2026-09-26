@@ -20,7 +20,7 @@ use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
 use bevy::time::{Real, Time};
 use bevy::window::{CursorMoved, PrimaryWindow, WindowFocused};
-use bevy_orzma_tty_renderer::TerminalCellMetricsResource;
+use bevy_orzma_tty_renderer::prelude::TerminalCellMetricsResource;
 use bevy_orzmux::prelude::CellSide;
 use orzma_tty::prelude::{CellCoord, PointerButton, PointerInput, PointerKind, ProtocolModifiers};
 use std::time::Duration;
@@ -446,10 +446,9 @@ mod tests {
     use bevy::input::mouse::MouseWheel;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
     use bevy::window::WindowResolution;
-    use bevy_orzma_tty_renderer::schema::{
-        Color, GridCell, GridSlot, HyperlinkId, HyperlinkUri, TerminalCells, TerminalView,
-    };
+    use bevy_orzma_tty_renderer::prelude::{TerminalCells, TerminalView};
     use bevy_orzmux::prelude::RequestTtyPointer;
+    use orzma_vt::prelude::{Cell, HyperlinkId, HyperlinkUri};
     use std::collections::HashMap;
 
     /// What reached the world, in trigger order.
@@ -581,13 +580,11 @@ mod tests {
         let pane = spawn_pane(app, left, width);
         let id = HyperlinkId::new(7).expect("nonzero");
         let cells = TerminalCells {
-            cells: vec![vec![GridSlot::Cell(GridCell {
-                text: "x".to_string(),
-                fg: Color::DefaultForeground,
-                bg: Color::DefaultBackground,
-                style: 0,
-                hyperlink: Some(id),
-            })]],
+            cells: vec![vec![Cell {
+                c: 'x',
+                hyperlink_id: Some(id),
+                ..Cell::default()
+            }]],
             hyperlinks: HashMap::from([(id, HyperlinkUri::new(uri))]),
             ..default()
         };

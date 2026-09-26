@@ -1,7 +1,7 @@
 //! Caret paint policy: focus, hollow rendering, and the blink phase.
 
-use crate::material::PaneInactiveStyle;
-use crate::schema::TerminalView;
+use crate::grid::TerminalView;
+use crate::pane_style::PaneInactiveStyle;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::time::Duration;
@@ -82,8 +82,8 @@ fn publish_next_caret_flip(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{Cursor, CursorShape, GridColumn, GridLine, GridPoint};
     use bevy::time::TimeUpdateStrategy;
+    use orzma_vt::prelude::{Cursor, CursorShape, GridColumn, GridLine, GridPoint};
 
     fn app(window_focused: bool) -> App {
         let mut app = App::new();

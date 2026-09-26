@@ -1,30 +1,48 @@
+//! The GPU terminal renderer: mirrors each pane's frames into components
+//! and draws them through a UI material.
+
 use crate::{
-    cursor::CursorPlugin, glyph::TerminalGlyphPlugin, grid::TerminalGridPlugin,
-    material::TerminalMaterialPlugin, schema::HyperlinkHoverState,
+    cursor::CursorPlugin, font::TerminalFontPlugin, glyph::TerminalGlyphPlugin,
+    grid::TerminalGridPlugin, hyperlink::HyperlinkHoverState, material::TerminalMaterialPlugin,
 };
 use bevy::prelude::*;
 
 pub mod bundled;
 mod cursor;
-pub mod glyph;
+mod error;
+mod font;
+mod glyph;
 mod grid;
-pub mod material;
-pub mod schema;
+mod hyperlink;
+mod material;
+mod pane_style;
+mod system_set;
 
-pub use crate::glyph::font::{
-    CellMetrics, FontFace, FontLoadError, TerminalCellMetricsResource, TerminalFontInitSet,
-    TerminalFontPlugin, TerminalFontSize, TerminalFonts, physical_font_size,
-};
-pub use material::TerminalPaddingFallback;
-
+/// The renderer's public vocabulary, gathered for downstream crates.
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
     pub use crate::cursor::{CaretStyle, CursorPlugin, LastKeyInstant, NextCaretFlip};
-    pub use crate::grid::TerminalGridPlugin;
-    pub use crate::material::{OVERLAY_SLOTS, PaneInactiveStyle, TerminalOverlays};
-    pub use crate::schema::*;
+    pub use crate::error::{RendererError, RendererResult};
+    pub use crate::font::{
+        CellMetrics, FontFace, TerminalCellMetricsResource, TerminalFontInitSet,
+        TerminalFontPlugin, TerminalFontSize, TerminalFonts, physical_font_size,
+    };
+    pub use crate::grid::{TerminalCells, TerminalGridPlugin, TerminalView};
+    pub use crate::hyperlink::HyperlinkHoverState;
+    pub use crate::material::{
+        OVERLAY_SLOTS, TerminalOverlays, TerminalPaddingFallback, TerminalUiMaterial,
+    };
+    pub use crate::pane_style::PaneInactiveStyle;
+    pub use crate::system_set::TerminalMaterialSystems;
 }
 
+/// Renders every terminal pane: mirrors its frames into components,
+/// rasterizes its glyphs, and keeps its material and caret current.
+///
+/// # Panics
+///
+/// Panics if any entity has carried `OrzmuxPane` before the plugin is
+/// added.
 pub struct TerminalRendererPlugin;
 
 impl Plugin for TerminalRendererPlugin {
@@ -33,6 +51,7 @@ impl Plugin for TerminalRendererPlugin {
             TerminalGridPlugin,
             TerminalMaterialPlugin,
             TerminalGlyphPlugin,
+            TerminalFontPlugin,
             CursorPlugin,
         ));
     }
