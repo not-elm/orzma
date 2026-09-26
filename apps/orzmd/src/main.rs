@@ -236,6 +236,18 @@ fn spawn_open(target: impl AsRef<OsStr>) -> io::Result<()> {
     open::that_detached(target)
 }
 
+/// Strips a `\\?\` verbatim prefix from `path` on Windows so the opener
+/// receives a path Explorer accepts; returns `path` unchanged elsewhere.
+#[cfg(windows)]
+fn display_path(path: &Path) -> &Path {
+    dunce::simplified(path)
+}
+
+#[cfg(not(windows))]
+fn display_path(path: &Path) -> &Path {
+    path
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("orzmd: {e}");
@@ -358,7 +370,7 @@ fn event_loop(
             let base = session.base_dir();
             let opened = document::resolve_link(base, &op.path)
                 .ok()
-                .is_some_and(|target| spawn_open(dunce::simplified(&target)).is_ok());
+                .is_some_and(|target| spawn_open(display_path(&target)).is_ok());
             if !opened {
                 session.flash = Some(format!("cannot open {}", op.path));
             }

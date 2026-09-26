@@ -23,6 +23,8 @@ rust-embed = "8"
 tempfile = { workspace = true }
 blake3 = "1"
 open = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
 dunce = "1"
 
 [lints]

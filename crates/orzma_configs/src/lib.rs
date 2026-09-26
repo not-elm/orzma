@@ -450,8 +450,8 @@ mod integration_tests {
             let err = toml::from_str::<OrzmaConfigs>(&toml_str)
                 .expect_err("a removed action must not parse");
             assert!(
-                err.to_string().contains(key) || err.to_string().contains("unknown field"),
-                "the error should name the removed key; got: {err}"
+                err.to_string().contains("unknown field"),
+                "the error should reject the removed key as unknown; got: {err}"
             );
         }
     }

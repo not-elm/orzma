@@ -1,7 +1,6 @@
-//! OSC 8 hyperlink hover detection and cursor-icon control across every
-//! terminal surface: the only writer of `HyperlinkHoverState`, and the
-//! writer of the window's `CursorIcon` everywhere except over an inline
-//! webview that owns the pointer, where the cursor is CEF's.
+//! OSC 8 hyperlink hover and cursor-icon control across terminal surfaces.
+//! The only writer of `HyperlinkHoverState`; writes the window's `CursorIcon`
+//! except over an inline webview that owns the pointer, where CEF owns it.
 
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled, WebviewMouseDisabled};
@@ -74,14 +73,14 @@ type HoverSurfaces<'w, 's> = Query<
 >;
 
 /// Over a surface whose inline webview owns the pointer
-/// (`MouseClaimedByWebview` without `WebviewMouseDisabled`), leaves the
-/// cursor to CEF and writes CEF's last cursor once on the frame the pointer
-/// enters. Over a claimed surface whose webview input is disabled, or an
-/// unclaimed surface with `TerminalMouseDisabled`, shows the arrow. Neither
-/// advertises a link. A divider the pointer holds or hovers claims the cursor before
-/// any surface is read, leaving the hover state empty; a held divider keeps
-/// the cursor even while the pointer reports no position, which is what a
-/// drag past the window's edge does.
+/// (`MouseClaimedByWebview` without `WebviewMouseDisabled`), leaves the cursor
+/// to CEF and writes CEF's last cursor once on the frame the pointer enters.
+/// Over a claimed surface whose webview input is disabled, or an unclaimed
+/// surface with `TerminalMouseDisabled`, shows the arrow. Neither advertises a
+/// link. A divider the pointer holds or hovers claims the cursor before any
+/// surface is read, leaving the hover state empty; a held divider keeps the
+/// cursor even while the pointer reports no position, which is what a drag past
+/// the window's edge does.
 fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,

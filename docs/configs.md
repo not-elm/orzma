@@ -341,13 +341,13 @@ divider never moves against the key, and a key with no divider to move on its
 axis does nothing. In vi mode each step needs the leader again (see
 "Repeatable bindings" above).
 
-Note on the leader: because the stock defaults above bind thirteen
-actions to `<Leader>...`, the tap leader is armed by default — tapping and
-releasing the leader modifier (`Cmd` on macOS, `Alt` elsewhere, with no other
-key/mouse press in between) arms the leader, and the very next keystroke either
-fires a bound `<Leader>` action or is swallowed if nothing matches.
-`LeaderPending` has no expiry: after an accidental tap, the next keystroke is
-consumed one way or the other, it does not time out on its own.
+Note on the leader: because the stock defaults above bind thirteen actions
+to `<Leader>...`, the tap leader is armed by default — tapping and releasing
+the leader modifier (`Cmd` on macOS, `Alt` elsewhere, with no other
+key/mouse press in between) arms the leader, and the very next keystroke
+either fires a bound `<Leader>` action or is swallowed if nothing matches.
+`LeaderPending` has no expiry: after an accidental tap, the next keystroke
+is consumed one way or the other, it does not time out on its own.
 
 Holding the leader modifier still behaves normally: only a bare press and
 release arms the leader, so `Alt+h` continues to reach the shell as a
