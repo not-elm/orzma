@@ -25,6 +25,7 @@ data-encoding = "2"
 getrandom = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 url = "2"
 tracing = { workspace = true }
 

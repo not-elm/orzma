@@ -1009,7 +1009,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_bound_socket_file_is_private_to_the_current_user() {
-        use orzma_webview_host::host::RuntimeRoot;
+        use orzma_webview_host::prelude::RuntimeRoot;
         use orzma_webview_host::private_dir::{
             canonical_sddl, current_user_sid, security_descriptor_sddl,
         };

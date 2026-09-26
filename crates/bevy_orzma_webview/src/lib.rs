@@ -3,6 +3,7 @@
 //! and the control socket that mints Tier 1 handles.
 
 mod control_plane;
+pub mod error;
 #[cfg(test)]
 mod test_support;
 mod webview;
@@ -10,6 +11,7 @@ mod webview;
 use bevy::prelude::*;
 use control_plane::ControlPlanePlugin;
 pub use control_plane::{ChordKey, ControlPlaneHandle, HandleId, NormalizedChord, TokenRegistry};
+pub use error::{WebviewError, WebviewResult};
 use std::task::Waker;
 use webview::apc::ApcPlugin;
 pub use webview::apc::NonInteractive;

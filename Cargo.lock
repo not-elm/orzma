@@ -1319,6 +1319,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tracing",
  "url",
 ]
@@ -5106,6 +5107,8 @@ dependencies = [
 name = "orzma_webview_host"
 version = "0.2.0-dev"
 dependencies = [
+ "getrandom 0.2.17",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "uds_windows",

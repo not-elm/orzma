@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
+getrandom = "0.2"
+serde_json = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.2"
