@@ -8,6 +8,7 @@
 - [Webviews](webviews.md)
 - [Terminal Features](terminal-features.md)
 - [Vi Mode](vi-mode.md)
+- [Companion Apps](companion-apps.md)
 
 # Reference
 
