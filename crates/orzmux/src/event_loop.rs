@@ -66,6 +66,10 @@ pub enum OrzmuxCommand {
         direction: PaneDirection,
     },
     /// Moves the active pane's divider in `direction` by `cells`.
+    ///
+    /// Nothing moves and no layout is published when no divider lies on
+    /// `direction`'s axis, `cells` is zero, or the divider already sits at
+    /// its limit.
     ResizePaneDirection {
         /// The direction the divider moves.
         direction: PaneDirection,

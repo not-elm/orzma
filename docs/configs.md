@@ -374,9 +374,10 @@ to (up and down at its column of stacked panes): the divider after the pane
 moves when there is one, and otherwise the divider before it. So left and
 right move the active pane's right border unless the pane is the last one in
 its row. Panes nested inside the area that grows or shrinks keep their
-proportions. A divider stops at 4 columns or 2 rows per pane (less in a
-window too small for that), never moves against the key, and a key with no
-divider to move on its axis does nothing.
+proportions. A divider stops once the side it shrinks reaches 4 columns or
+2 rows per pane (less in a window too small for that), so a small pane nested
+on that side can still end up narrower. A divider never moves against the key,
+and a key with no divider to move on its axis does nothing.
 
 Note on the leader: because the stock defaults above bind more than two dozen
 actions to `<Leader>...`, the tap leader is armed by default — tapping and

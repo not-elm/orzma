@@ -260,7 +260,8 @@ impl LayoutTree {
     ///
     /// The divider comes from the pane's run on `direction`'s axis: the
     /// nearest split of that orientation above the pane, together with
-    /// each parent of the same orientation above it. Within the run the
+    /// each consecutive parent of the same orientation; the run stops at
+    /// the first split of the other orientation. Within the run the
     /// divider after the pane moves when there is one, and otherwise the
     /// divider before it. The divider stops at the drag minimum, or at
     /// the tree minimum in a window too small for the drag minimum, and
