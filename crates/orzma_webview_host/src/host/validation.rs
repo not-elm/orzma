@@ -115,6 +115,11 @@ impl ValidatedRegistration {
     pub(crate) fn serves_asset(&self) -> bool {
         !matches!(self.source, Source::Url { .. })
     }
+
+    /// Whether a page of this content accepts pointer and keyboard input.
+    pub(crate) fn interactive(&self) -> bool {
+        self.interactive
+    }
 }
 
 /// Validates a URL a program asked to load: parses it, requires an `http`

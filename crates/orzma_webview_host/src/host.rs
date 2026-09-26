@@ -2,15 +2,16 @@
 //! driven by control-socket events, VT placement signals, and pane
 //! lifecycle changes.
 
-use crate::boundary::{HandleId, MountId, WebviewEvent};
+use crate::boundary::{HandleId, MountId, WebviewCommand, WebviewEvent};
 use crate::control_socket::{ConnectionId, ControlEvent, ControlSocket};
 use crate::error::{Refusal, RegisterError, WebviewHostResult};
 use crate::host::connections::Connections;
+use crate::host::focus::{FocusRoute, FocusState, FocusTransition};
 use crate::host::mint::mint_instance_id;
-use crate::host::mounts::{MountChange, Mounts};
+use crate::host::mounts::{MountChange, MountState, Mounts};
 use crate::host::registry::{Registration, Registry};
 use crate::host::tokens::Tokens;
-use crate::protocol::ServerMsg;
+use crate::protocol::{PushMsg, ServerMsg};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use orzma_vt::prelude::{
     GridColumn, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize, ScreenLine, VtSignal,
@@ -19,6 +20,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 mod connections;
+mod focus;
 pub(crate) mod mint;
 mod mounts;
 mod registry;
@@ -99,6 +101,11 @@ pub enum MuxRequest<P> {
         /// The placements to drop.
         instances: Vec<InstanceId>,
     },
+    /// Make `pane` the active pane.
+    SelectPane {
+        /// The pane to activate.
+        pane: P,
+    },
 }
 
 /// A webview placement change a pane's VT reported.
@@ -156,6 +163,8 @@ pub struct WebviewHost<P> {
     tokens: Tokens<P>,
     registry: Registry<P>,
     mounts: Mounts<P>,
+    focus: FocusState<P>,
+    active: Option<P>,
 }
 
 impl<P: PaneKey> WebviewHost<P> {
@@ -261,6 +270,36 @@ impl<P: PaneKey> WebviewHost<P> {
         output
     }
 
+    /// Records that `active` is now the active pane, and releases webview
+    /// focus held by a mount in any other pane.
+    pub fn active_pane_changed(&mut self, active: Option<P>) -> HostOutput<P> {
+        self.active = active;
+        let mut output = HostOutput::default();
+        let elsewhere = self
+            .focus
+            .current()
+            .is_some_and(|route| Some(route.pane()) != active);
+        if elsewhere && self.clear_focus() {
+            output.push_event(WebviewEvent::FocusChanged { focused: None });
+        }
+        output
+    }
+
+    /// Applies one command the GUI sent.
+    ///
+    /// A `Focus` is always answered with a `FocusChanged` carrying the
+    /// resulting focus, including when the focus it asked for is refused
+    /// because the mount ended or takes no input.
+    ///
+    /// # Errors
+    ///
+    /// Never fails for `Focus`.
+    pub fn command(&mut self, command: WebviewCommand) -> WebviewHostResult<HostOutput<P>> {
+        match command {
+            WebviewCommand::Focus { mount } => Ok(self.gui_focus(mount)),
+        }
+    }
+
     /// Applies one control event.
     ///
     /// `hello`, `register`, and `new_instance` are answered on their reply
@@ -271,17 +310,18 @@ impl<P: PaneKey> WebviewHost<P> {
     ///
     /// Returns [`WebviewHostError::Refused`](crate::error::WebviewHostError::Refused)
     /// when a request without a reply names a handle or instance its
-    /// connection does not own, an instance not spelled as 32 hex digits, or
-    /// a mount size out of range. Nothing changes then.
+    /// connection does not own, an instance not spelled as 32 hex digits, a
+    /// mount size out of range, or a `focus` of a placement that is not
+    /// mounted or takes no input. Nothing changes then.
     pub fn control(&mut self, event: ControlEvent) -> WebviewHostResult<HostOutput<P>> {
         match event {
             ControlEvent::Hello {
                 connection,
                 token,
-                writer: _,
+                writer,
                 reply,
             } => {
-                self.hello(connection, &token, &reply);
+                self.hello(connection, &token, writer, &reply);
                 Ok(HostOutput::default())
             }
             ControlEvent::Register {
@@ -317,6 +357,10 @@ impl<P: PaneKey> WebviewHost<P> {
                 connection,
                 instance,
             } => self.socket_unmount(connection, &instance),
+            ControlEvent::Focus {
+                connection,
+                instance,
+            } => self.socket_focus(connection, instance),
         }
     }
 
@@ -327,13 +371,21 @@ impl<P: PaneKey> WebviewHost<P> {
             tokens: Tokens::new(),
             registry: Registry::new(),
             mounts: Mounts::new(),
+            focus: FocusState::new(),
+            active: None,
         }
     }
 
-    fn hello(&mut self, connection: ConnectionId, token: &str, reply: &Sender<bool>) {
+    fn hello(
+        &mut self,
+        connection: ConnectionId,
+        token: &str,
+        writer: Sender<String>,
+        reply: &Sender<bool>,
+    ) {
         let pane = self.tokens.resolve(token);
         if let Some(pane) = pane {
-            self.connections.insert(connection, pane);
+            self.connections.insert(connection, pane, writer);
         }
         let _ = reply.send(pane.is_some());
     }
@@ -473,6 +525,127 @@ impl<P: PaneKey> WebviewHost<P> {
         Ok(output)
     }
 
+    fn gui_focus(&mut self, mount: Option<MountId>) -> HostOutput<P> {
+        let mut output = HostOutput::default();
+        match mount {
+            Some(mount) => {
+                if let Err(error) = self.focus_mount(&mut output, mount) {
+                    tracing::debug!(?mount, %error, "a focus from the GUI was refused");
+                }
+            }
+            None => {
+                self.clear_focus();
+            }
+        }
+        output.push_event(WebviewEvent::FocusChanged {
+            focused: self.focus.focused_mount(),
+        });
+        output
+    }
+
+    fn socket_focus(
+        &mut self,
+        connection: ConnectionId,
+        instance: Option<String>,
+    ) -> WebviewHostResult<HostOutput<P>> {
+        let mut output = HostOutput::default();
+        let changed = match instance {
+            Some(spelled) => {
+                let (instance, _) = self.owned_instance(connection, &spelled)?;
+                let mount = self
+                    .mounts
+                    .get(instance)
+                    .map(MountState::mount)
+                    .ok_or(Refusal::NotMounted)?;
+                self.focus_mount(&mut output, mount)?
+            }
+            None => {
+                let pane = self
+                    .connections
+                    .pane_of(connection)
+                    .ok_or(Refusal::ConnectionClosed)?;
+                let in_own_pane = self
+                    .focus
+                    .current()
+                    .is_some_and(|route| route.pane() == pane);
+                in_own_pane && self.clear_focus()
+            }
+        };
+        if changed {
+            output.push_event(WebviewEvent::FocusChanged {
+                focused: self.focus.focused_mount(),
+            });
+        }
+        Ok(output)
+    }
+
+    /// Moves focus to `mount`, pushing `false` to the mount that lost it and
+    /// `true` to `mount`'s owner, and asking for `mount`'s pane to be
+    /// selected when it is not the active one. Returns whether focus moved.
+    fn focus_mount(
+        &mut self,
+        output: &mut HostOutput<P>,
+        mount: MountId,
+    ) -> WebviewHostResult<bool> {
+        let route = self.focus_route(mount)?;
+        let pane = route.pane();
+        let FocusTransition::Moved { lost } = self.focus.set(route.clone()) else {
+            return Ok(false);
+        };
+        if let Some(lost) = lost {
+            self.push_focus(&lost, false);
+        }
+        self.push_focus(&route, true);
+        if self.active != Some(pane) {
+            output.push_request(MuxRequest::SelectPane { pane });
+        }
+        Ok(true)
+    }
+
+    /// The focus route of `mount`.
+    fn focus_route(&self, mount: MountId) -> WebviewHostResult<FocusRoute<P>> {
+        let (instance, state) = self.mounts.resolve(mount).ok_or(Refusal::StaleMount)?;
+        let (handle, registration) = self
+            .registry
+            .resolve_instance(instance)
+            .ok_or(Refusal::UnknownInstance)?;
+        if !registration.content().interactive() {
+            return Err(Refusal::NotInteractive.into());
+        }
+        Ok(FocusRoute::new(
+            mount,
+            instance,
+            handle.clone(),
+            registration.connection(),
+            state.pane(),
+        ))
+    }
+
+    /// Releases focus, pushing `false` to its holder. Returns whether a
+    /// mount held it.
+    fn clear_focus(&mut self) -> bool {
+        match self.focus.clear() {
+            Some(lost) => {
+                self.push_focus(&lost, false);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Pushes a `focus_changed` for `route` to its program; a closed
+    /// connection drops it.
+    fn push_focus(&self, route: &FocusRoute<P>, focused: bool) {
+        let message = PushMsg::FocusChanged {
+            handle: route.handle().clone(),
+            instance: route.instance().to_string(),
+            focused,
+        };
+        if let Err(error) = self.connections.push(route.connection(), &message) {
+            tracing::debug!(%error, "a focus push was dropped");
+        }
+    }
+
     fn placement_mounted(
         &mut self,
         output: &mut HostOutput<P>,
@@ -517,17 +690,25 @@ impl<P: PaneKey> WebviewHost<P> {
         self.end_mounts(output, &in_pane);
     }
 
-    /// Ends the mounts of `instances` that are mounted, reporting them in one
-    /// `Unmounted`.
+    /// Ends the mounts of `instances` that are mounted: releases focus first
+    /// when one of them holds it, then reports them in one `Unmounted`.
     fn end_mounts(&mut self, output: &mut HostOutput<P>, instances: &[InstanceId]) {
         let ended: Vec<MountId> = instances
             .iter()
             .filter_map(|instance| self.mounts.remove(*instance))
             .map(|state| state.mount())
             .collect();
-        if !ended.is_empty() {
-            output.push_event(WebviewEvent::Unmounted { mounts: ended });
+        if ended.is_empty() {
+            return;
         }
+        let focused_ended = self
+            .focus
+            .focused_mount()
+            .is_some_and(|mount| ended.contains(&mount));
+        if focused_ended && self.clear_focus() {
+            output.push_event(WebviewEvent::FocusChanged { focused: None });
+        }
+        output.push_event(WebviewEvent::Unmounted { mounts: ended });
     }
 
     /// Tears released registrations down: ends their mounts, drops the

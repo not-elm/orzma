@@ -16,7 +16,7 @@ pub use private_dir::restrict_to_current_user;
 pub mod prelude {
     pub use crate::boundary::{
         ForwardChord, HandleId, MountId, MountSpec, Navigation, PageOutcome, WebviewAsset,
-        WebviewEvent,
+        WebviewCommand, WebviewEvent,
     };
     pub use crate::control_socket::{ConnectionId, ControlEvent, ControlSocket};
     pub use crate::error::{

@@ -92,6 +92,13 @@ pub enum ControlEvent {
         /// The instance, in its wire spelling.
         instance: String,
     },
+    /// A socket `focus`.
+    Focus {
+        /// The connection that sent the line.
+        connection: ConnectionId,
+        /// The instance to focus in its wire spelling, or `None` to blur.
+        instance: Option<String>,
+    },
 }
 
 /// The host's end of the control socket: the path programs connect to, and

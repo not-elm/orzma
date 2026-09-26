@@ -355,6 +355,18 @@ impl<P> WebviewEvent<P> {
     }
 }
 
+/// What the GUI reports to the host.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WebviewCommand {
+    /// The user focused the webview of `mount` (`Some`), or released
+    /// webview focus (`None`) with an off-rect click, the release-focus
+    /// shortcut, or vi mode. The host answers with a `FocusChanged`.
+    Focus {
+        /// The mount the user focused.
+        mount: Option<MountId>,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

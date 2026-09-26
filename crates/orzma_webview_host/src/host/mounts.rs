@@ -73,6 +73,15 @@ impl<P: PaneKey> Mounts<P> {
         self.by_instance.get(&instance)
     }
 
+    /// The placement `mount` belongs to and its state, when `mount` is the
+    /// placement's current mount.
+    pub fn resolve(&self, mount: MountId) -> Option<(InstanceId, &MountState<P>)> {
+        self.by_instance
+            .iter()
+            .find(|(_, state)| state.mount == mount)
+            .map(|(instance, state)| (*instance, state))
+    }
+
     /// Ends the mount of `instance`, returning its state when it was mounted.
     pub fn remove(&mut self, instance: InstanceId) -> Option<MountState<P>> {
         self.by_instance.remove(&instance)
@@ -148,5 +157,28 @@ mod tests {
         let mut on_one = mounts.on_pane(1);
         on_one.sort();
         assert_eq!(on_one, [InstanceId(1), InstanceId(2)]);
+    }
+
+    /// Asserts that a mount id resolves to its placement only while it is
+    /// that placement's current mount.
+    ///
+    /// Case: the GUI reports a click on a page that was just unmounted and
+    /// mounted again.
+    #[test]
+    fn a_mount_resolves_only_while_current() {
+        let mut mounts = Mounts::new();
+        let MountChange::New(first) = mounts.mount(InstanceId(1), 1_u32, SMALL) else {
+            panic!("the first mount is new");
+        };
+        assert_eq!(
+            mounts.resolve(first).map(|(instance, _)| instance),
+            Some(InstanceId(1))
+        );
+        let _ = mounts.remove(InstanceId(1));
+        let MountChange::New(second) = mounts.mount(InstanceId(1), 1, SMALL) else {
+            panic!("the remount is new");
+        };
+        assert!(mounts.resolve(first).is_none());
+        assert!(mounts.resolve(second).is_some());
     }
 }
