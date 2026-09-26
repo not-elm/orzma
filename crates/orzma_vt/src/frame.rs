@@ -36,8 +36,8 @@ pub struct Frame {
     pub cursor: Cursor,
     /// Lines scrolled back from the live tail; always carried.
     pub display_offset: DisplayOffset,
-    /// Vi-mode cursor. It is always `None`, because this terminal does
-    /// not implement vi mode.
+    /// Vi-mode cursor; `None` outside vi mode. It lies inside the
+    /// viewport and never names a continuation column.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range.
     pub selection: Option<SelectionRange>,
@@ -124,6 +124,7 @@ impl FrameTracker {
             cursor: device.cursor(),
             display_offset: screen.display_offset(),
             selection: screen.selection_range(),
+            vi_cursor: screen.vi_cursor(),
         };
         let placements = self.diff_placements(device);
         let palette = self.diff_palette(device.palette());
@@ -147,7 +148,7 @@ impl FrameTracker {
             rows,
             cursor: carried.cursor,
             display_offset: carried.display_offset,
-            vi_cursor: None,
+            vi_cursor: carried.vi_cursor,
             selection: carried.selection,
             placements,
             palette,
@@ -215,6 +216,7 @@ struct Carried {
     cursor: Cursor,
     display_offset: DisplayOffset,
     selection: Option<SelectionRange>,
+    vi_cursor: Option<ViCursor>,
 }
 
 #[cfg(test)]
@@ -283,6 +285,7 @@ mod tests {
                 cursor: device.cursor(),
                 display_offset: device.display_offset(),
                 selection: None,
+                vi_cursor: None,
             },
             Some(&listed),
             None,

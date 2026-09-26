@@ -11,6 +11,7 @@ use crate::{
     screen::grid::coords::{GridColumn, GridPoint, ScreenLine},
     screen::grid::reflow::ScrollbackOnGrow,
     screen::selection::{CellSide, SelectionKind},
+    screen::vi::{ViCursor, ViModeSwitch, ViewChange},
     screen::viewport::{DisplayOffset, Scroll},
 };
 use std::path::PathBuf;
@@ -64,8 +65,7 @@ pub mod prelude {
 /// The owner must forward [`InterpretOutput::signals`] and
 /// [`ResizeChanged::evicted`] before it requests the next frame.
 ///
-/// TODO: implement vi mode: accept a [`crate::prelude::ViModeSwitch`]
-/// and vi motions, and report the vi cursor in [`Frame::vi_cursor`].
+/// TODO: implement vi motions and move the vi cursor with them.
 ///
 /// # Invariants
 ///
@@ -240,6 +240,24 @@ pub trait Vt {
 
     /// Snapshot of the modes the device owns.
     fn modes(&self) -> VtModes;
+
+    /// Enters or leaves vi mode; returns whether the mode changed.
+    ///
+    /// Entering drops the selection and seats the vi cursor on the write
+    /// cursor, or on the viewport's top-left cell when the viewport is
+    /// scrolled back past it. Leaving drops the vi cursor and the
+    /// selection and returns the viewport to the live tail. A switch to
+    /// the mode already in force returns `false`.
+    fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> bool;
+
+    /// The vi cursor; `None` outside vi mode.
+    fn vi_cursor(&self) -> Option<ViCursor>;
+
+    /// Returns `true` while vi mode is on.
+    #[inline]
+    fn is_vi_mode(&self) -> bool {
+        self.vi_cursor().is_some()
+    }
 }
 
 /// Everything one [`Vt::interpret`] call produced besides the staged
@@ -386,6 +404,13 @@ impl OrzmaVt {
         self.device.set_scrollback_on_grow(policy);
         self
     }
+
+    /// Stages the damage `change` owes; returns whether the change touched
+    /// anything a frame carries.
+    fn settle_view_change(&mut self, change: ViewChange) -> bool {
+        self.tracker.stage_if_changed(change.damage());
+        change.is_changed()
+    }
 }
 
 impl Vt for OrzmaVt {
@@ -457,6 +482,15 @@ impl Vt for OrzmaVt {
 
     fn modes(&self) -> VtModes {
         self.device.modes()
+    }
+
+    fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> bool {
+        let change = self.device.switch_vi_mode(switch);
+        self.settle_view_change(change)
+    }
+
+    fn vi_cursor(&self) -> Option<ViCursor> {
+        self.device.vi_cursor()
     }
 }
 
@@ -1676,5 +1710,45 @@ mod tests {
         let vt = vt().with_cursor_policy(policy);
         assert_eq!(vt.device.modes().text_cursor.shape, CursorShape::Bar);
         assert_eq!(vt.device.modes().text_cursor.blink, CursorBlink::Blinking);
+    }
+
+    /// Asserts that entering vi mode on an idle terminal emits a frame that
+    /// repaints no rows and carries the vi cursor on the write cursor.
+    ///
+    /// Case: the user enters vi mode while the shell sits idle at its
+    /// prompt.
+    #[test]
+    fn an_idle_enter_emits_a_rowless_frame_carrying_the_vi_cursor() {
+        let mut vt = filled();
+        assert!(vt.switch_vi_mode(ViModeSwitch::Enter));
+        let frame = vt.frame().expect("entering vi mode emits");
+        assert!(frame.rows.is_empty());
+        assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(2, 3)));
+    }
+
+    /// Asserts that a repeated enter returns `false` and owes no frame.
+    ///
+    /// Case: the vi-mode shortcut is pressed twice in a row.
+    #[test]
+    fn a_repeated_enter_returns_false_and_emits_nothing() {
+        let mut vt = filled();
+        assert!(vt.switch_vi_mode(ViModeSwitch::Enter));
+        vt.frame();
+        assert!(!vt.switch_vi_mode(ViModeSwitch::Enter));
+        assert_eq!(vt.frame(), None);
+    }
+
+    /// Asserts that leaving vi mode emits a frame without the vi cursor.
+    ///
+    /// Case: the user presses `q` to leave vi mode at the live tail.
+    #[test]
+    fn an_exit_emits_a_frame_without_the_vi_cursor() {
+        let mut vt = filled();
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.frame();
+        assert!(vt.switch_vi_mode(ViModeSwitch::Exit));
+        let frame = vt.frame().expect("leaving vi mode emits");
+        assert_eq!(frame.vi_cursor, None);
+        assert!(!vt.is_vi_mode());
     }
 }

@@ -20,6 +20,7 @@ use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::grid::reflow::ScrollbackOnGrow;
 use crate::screen::grid::{GridSize, MIN_COLUMNS};
 use crate::screen::margins::OriginMode;
+use crate::screen::vi::{ViCursor, ViModeSwitch, ViewChange};
 use crate::screen::viewport::{DisplayOffset, Scroll};
 use crate::screen::{PrintOptions, Screen};
 use std::collections::VecDeque;
@@ -123,6 +124,26 @@ impl DeviceState {
     /// A motion that moves the viewport reports [`DamageSpan::Full`].
     pub fn scroll(&mut self, scroll: Scroll) -> Option<DamageSpan> {
         self.active_screen_mut().scroll(scroll)
+    }
+
+    /// Enters or leaves vi mode on the screen on show, as
+    /// [`Screen::enter_vi_mode`] and [`Screen::exit_vi_mode`] do.
+    pub fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> ViewChange {
+        let screen = self.active_screen_mut();
+        match switch {
+            ViModeSwitch::Enter => ViewChange::classify(screen.enter_vi_mode(), None),
+            ViModeSwitch::Exit => screen.exit_vi_mode(),
+        }
+    }
+
+    /// Whether vi mode is on.
+    pub fn is_vi_mode(&self) -> bool {
+        self.active_screen().is_vi_mode()
+    }
+
+    /// The vi cursor of the screen on show; `None` outside vi mode.
+    pub fn vi_cursor(&self) -> Option<ViCursor> {
+        self.active_screen().vi_cursor()
     }
 
     /// Prints one character at the cursor of the screen on show, shaped by

@@ -41,6 +41,7 @@ use crate::screen::selection::{
 };
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
+use crate::screen::vi::ScreenVi;
 use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
 use crate::screen::webview_placements::WebviewPlacements;
 use std::ops::{Range, RangeInclusive};
@@ -68,6 +69,7 @@ pub struct Screen {
     checkpoint: Checkpoint,
     webview_placements: WebviewPlacements,
     selection: ScreenSelection,
+    vi: ScreenVi,
 }
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
@@ -136,6 +138,7 @@ impl Screen {
             checkpoint: Checkpoint::default(),
             webview_placements: WebviewPlacements::new(),
             selection: ScreenSelection::new(),
+            vi: ScreenVi::new(),
         }
     }
 }

@@ -5,8 +5,8 @@
 use crate::CellPixels;
 use orzma_vt::prelude::{
     CellSide, DisplayOffset, Frame, GridColumn, GridPoint, GridSize, InstanceId, InterpretOutput,
-    PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, SynchronizedOutput, Vt,
-    VtModes,
+    PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, SynchronizedOutput, ViCursor,
+    ViModeSwitch, Vt, VtModes,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -280,6 +280,14 @@ impl Vt for FakeVt {
 
     fn modes(&self) -> VtModes {
         self.modes
+    }
+
+    fn switch_vi_mode(&mut self, _switch: ViModeSwitch) -> bool {
+        false
+    }
+
+    fn vi_cursor(&self) -> Option<ViCursor> {
+        None
     }
 }
 

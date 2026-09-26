@@ -397,6 +397,14 @@ impl Grid {
         &self.rows[index].cells
     }
 
+    /// Borrows the row at an active-grid line; `None` when the line is
+    /// outside the ring.
+    pub fn row_at(&self, line: GridLine) -> Option<&Row<Cell>> {
+        self.ring_index(line)
+            .and_then(|index| self.rows.get(index))
+            .map(|row| &row.cells)
+    }
+
     /// Number of history rows currently retained.
     pub fn history_len(&self) -> usize {
         self.rows.len() - usize::from(self.size.rows)
