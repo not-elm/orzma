@@ -73,6 +73,8 @@ Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 | Typecheck every package | `pnpm check-types`                                     |
 | Lint (biome)            | `pnpm lint` / `pnpm lint:fix` / `pnpm lint:ci`         |
 
+Biome (`biome.json`) scans `sdk/**` — it is the JS/TS lint+format tool for this repo.
+
 ### Documentation
 
 | Action                                    | Command           |
@@ -80,8 +82,6 @@ Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 | Install the pinned mdBook tools (one-time) | `just setup-book` |
 | Build the user guide into `target/book`    | `just book`       |
 | Preview the user guide with live reload    | `just book-serve` |
-
-Biome (`biome.json`) scans `sdk/**` — it is the JS/TS lint+format tool for this repo.
 
 ## Other notable paths
 

@@ -16,11 +16,25 @@ orzma resolves the config path in this order:
 
 ## Validation
 
-Unknown sections are rejected at startup, as are unknown keys in `[cursor]`,
-`[orzma]`, `[keyboard]`, `[shortcuts]`, `[vi-mode]`, and `[font]`. Unknown keys in
-`[mouse]` and `[inactive_pane]` are silently ignored. Most invalid values are
-startup errors too; the few that are silently clamped or reverted are noted
-in the comments below.
+orzma checks the file when it starts. A problem has one of two effects:
+
+- **orzma ignores the whole file** and starts with every setting at its
+  default when the file cannot be read as a configuration: a TOML syntax
+  error, an unknown section, an unknown key in `[cursor]`, `[orzma]`,
+  `[keyboard]`, `[shortcuts]`, `[vi-mode]`, or `[font]`, a value of the wrong
+  type or an unknown word, or a malformed key binding.
+- **orzma does not start** when the settings conflict or cannot be applied: a
+  key bound to more than one action, a leader that shadows another binding or
+  cannot be used, a font size or style outside the allowed values, or a font
+  family that is not installed.
+
+In both cases orzma writes the reason to standard error. To read it, start
+orzma from a terminal: on macOS, run `/Applications/orzma.app/Contents/MacOS/orzma`;
+on Windows, run `orzma 2> orzma-error.txt` and open the file.
+
+Unknown keys in `[mouse]` and `[inactive_pane]` are silently ignored, and the
+few values that are silently clamped or reverted are noted in the comments
+below.
 
 ## Settings
 
@@ -48,7 +62,7 @@ shell_integration = true
 ```toml
 [cursor]
 # Unlike the other enum-valued keys, an unrecognized `style` word silently
-# reverts to the default instead of being a startup error.
+# reverts to the default instead of making orzma ignore the whole file.
 style = "block"           # block | underline | bar
 blink_interval = 750      # milliseconds; 0 keeps the caret steady whatever a program asks for. Any other value below 10 is silently raised to 10.
 blink_timeout = 5         # seconds; 0 blinks indefinitely. Silently raised to twice blink_interval (one full on/off cycle) when shorter.
@@ -112,7 +126,7 @@ fine_modifier = "alt"            # "alt" | "ctrl" | "shift" | "none". Modifier f
 fine_lines = 1                   # u32. Lines per notch while fine_modifier is held.
 max_protocol_events_per_frame = 8  # u32. Most wheel notches one routing call turns into mouse reports or alternate-scroll cursor keys, per axis; excess notches are dropped, and cursor keys additionally stop at 240 per call.
 cells_per_notch = 0.5            # f32. Wheel accumulation threshold per notch, on both axes.
-axis_lock_ratio = 0.9            # f32 in 0.0..=1.0. Trackpad dominant-axis lock: horizontal scroll kept only when |x|/hypot(x,y) >= this. 0.0 disables; 1.0 = pure-horizontal only.
+axis_lock_ratio = 0.9            # f32, clamped to 0.0..=1.0; a non-finite value reverts to 0.9. Trackpad dominant-axis lock: horizontal scroll kept only when |x|/hypot(x,y) >= this. 0.0 disables; 1.0 = pure-horizontal only.
 double_click_timeout_ms = 400    # u32. Max ms between clicks to count as double/triple.
 click_drift_px = 8.0             # f32. Max pointer drift (logical px) between clicks of a multi-click.
 drag_threshold_px = 4.0          # f32. Pointer travel (logical px) before a press becomes a drag.
@@ -121,7 +135,7 @@ divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divi
 autoscroll_base_period_ms = 50     # u32. Tick interval when drag-scrolling at the pane edge.
 autoscroll_min_period_ms = 16      # u32. Floor on the autoscroll interval.
 autoscroll_step_ms = 4             # u32. Interval decrement per cell past the edge.
-# Mouse numbers are not range-checked; out-of-range values are used as-is.
+# Other mouse numbers are not range-checked; out-of-range values are used as-is.
 ```
 
 ### `[inactive_pane]`

@@ -34,8 +34,9 @@ A `[vi-mode]` entry is an optional `Ctrl+` prefix plus exactly one key.
 - **`""` or `[]` unbinds** an action (for example, `search-forward = ""`).
 - **Duplicate keys are a startup error**: if the same key string is bound to
   more than one `[vi-mode]` action, orzma fails at startup naming every
-  colliding action (as duplicate chords are in `[shortcuts]`). Unknown
-  action names are rejected the same way unknown `[shortcuts]` actions are.
+  colliding action (as duplicate chords are in `[shortcuts]`). An unknown
+  action name, like the parse errors above, makes orzma ignore the whole
+  file instead (see [Validation](configuration.md#validation)).
 
 Shadowing note: `[shortcuts]` chords (both leader-scoped and direct) are
 matched **before** `[vi-mode]` keys. If the same keystroke is bound in both
@@ -117,7 +118,7 @@ The stock `[vi-mode]` table:
 
 ```toml
 [vi-mode]
-# Vi-mode key bindings for Alacritty vi mode. See "Keys" above for the key
+# Vi-mode key bindings. See "Keys" above for the key
 # syntax and the duplicate-key rule.
 
 # --- cursor motion (trailing comment: ViMotion variant / copy-mode command, for reference) ---

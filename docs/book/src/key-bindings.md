@@ -39,8 +39,9 @@ A chord is zero or more modifiers followed by exactly one key, joined with `+`.
 Examples: `Cmd+Shift+Q`, `Ctrl+Alt+ArrowLeft`, `Cmd+Plus`.
 
 Invalid chords — an empty token (`Cmd+`), an unknown named key (`Cmd+F12`), a
-duplicated modifier (`Cmd+Meta+S`), or more than one key (`Cmd+S+T`) — fail at
-startup.
+duplicated modifier (`Cmd+Meta+S`), or more than one key (`Cmd+S+T`) — make
+orzma ignore the whole file and start with the defaults (see
+[Validation](configuration.md#validation)).
 
 ## Repeatable bindings (`<Leader:r>`)
 
@@ -94,9 +95,9 @@ the seven that differ elsewhere.
 | --- | --- | --- |
 | `paste` | `Cmd+V` | Paste from the system clipboard. |
 | `copy` | `Cmd+C` | Copy the focused terminal's selection to the system clipboard, then dismiss the selection. |
-| `increase-font-size` | `Cmd+Plus` / `Ctrl+Plus` | Step the terminal font size up. |
-| `decrease-font-size` | `Cmd+-` / `Ctrl+-` | Step the terminal font size down. |
-| `reset-font-size` | `Cmd+0` / `Ctrl+0` | Return the terminal font size to `[font] size`. |
+| `increase-font-size` | `Cmd+Plus` | Step the terminal font size up. |
+| `decrease-font-size` | `Cmd+-` | Step the terminal font size down. |
+| `reset-font-size` | `Cmd+0` | Return the terminal font size to `[font] size`. |
 | `release-webview-focus` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
 | `enter-vi-mode` | `<Leader>s` | Enter vi mode. |
@@ -149,7 +150,7 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   stock defaults that includes all 29 leader-bound actions above, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g.
-  `next-window = "Ctrl+Shift+]"`.
+  `split-vertical-pane = "Ctrl+Shift+I"`.
 
 ## The `+` and `-` keys
 
@@ -196,11 +197,11 @@ repeat-time-ms = 500
 # never collide.
 
 # --- existing actions ---
-paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for a leader binding.
+paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>v" for a leader binding.
 copy                  = "Cmd+C"        # Copy the focused terminal's selection to the system clipboard.
 release-webview-focus = "<Leader>u"
 quit                  = "Cmd+Q"        # Unbound by default off macOS, where the window manager closes the window.
-enter-vi-mode         = "<Leader>s"    # Enters Alacritty vi mode.
+enter-vi-mode         = "<Leader>s"    # Enters vi mode.
 
 # --- pane actions ---
 select-left-pane      = "<Leader>h"    # select-pane -L

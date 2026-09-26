@@ -142,5 +142,6 @@ just book         # build into target/book
   `docs/book/mermaid-init.js` and run `mdbook-mermaid install docs/book`,
   because it does not overwrite existing files. The lychee version is pinned in
   `.github/workflows/book.yml`.
-- When the SDK moves to a new ratatui version, update the `cargo add` line in
-  `docs/book/src/building-webview-apps.md`.
+- When the SDK moves to a new ratatui version, update the version in the Setup
+  section of `docs/book/src/building-webview-apps.md` and in
+  `sdk/ratatui_orzma/README.md`.

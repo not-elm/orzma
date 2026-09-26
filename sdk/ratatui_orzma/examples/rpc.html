@@ -9,9 +9,14 @@
     const tick = () => {
       n += 1;
       const a = n;
-      window.orzma.call('add', { a, b: 2 }).then((value) => {
-        sum.textContent = `add(${a}, 2) = ${value}`;
-      });
+      window.orzma.call('add', { a, b: 2 }).then(
+        (value) => {
+          sum.textContent = `add(${a}, 2) = ${value}`;
+        },
+        (error) => {
+          sum.textContent = `add(${a}, 2) failed: ${error.message}`;
+        },
+      );
       const b = a % 3;
       window.orzma.call('divide', { a, b }).then(
         (value) => {

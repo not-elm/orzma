@@ -61,7 +61,8 @@ press and release it without any other key — and then press the command's key.
 | Leader, then `p` | Close the active pane. |
 
 To see a web page inside the terminal, open a Markdown file with the bundled
-viewer, and press `q` to quit it:
+viewer. In a directory that has a `README.md`, such as a project you have
+cloned, run the command below, and press `q` to quit it:
 
 ```sh
 orzmd README.md
