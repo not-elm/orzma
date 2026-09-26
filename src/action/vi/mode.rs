@@ -99,6 +99,7 @@ mod tests {
     use bevy::ecs::system::ResMut;
     use bevy::prelude::{ChildOf, MinimalPlugins};
     use bevy_orzma_webview::Webview;
+    use bevy_orzmux::prelude::RequestTtySelectionClear;
     use orzma_vt::prelude::InstanceId;
     use orzmux::prelude::PaneId;
 
@@ -108,6 +109,7 @@ mod tests {
 
     #[derive(Debug, PartialEq)]
     enum SeenRequest {
+        Clear(Entity),
         Switch(Entity, ViModeSwitch),
     }
 
@@ -115,11 +117,15 @@ mod tests {
     struct SeenRequests(Vec<SeenRequest>);
 
     fn capture_requests(app: &mut App) {
-        app.init_resource::<SeenRequests>().add_observer(
-            |ev: On<RequestTtyViMode>, mut seen: ResMut<SeenRequests>| {
+        app.init_resource::<SeenRequests>()
+            .add_observer(
+                |ev: On<RequestTtySelectionClear>, mut seen: ResMut<SeenRequests>| {
+                    seen.0.push(SeenRequest::Clear(ev.terminal));
+                },
+            )
+            .add_observer(|ev: On<RequestTtyViMode>, mut seen: ResMut<SeenRequests>| {
                 seen.0.push(SeenRequest::Switch(ev.terminal, ev.switch));
-            },
-        );
+            });
     }
 
     /// Asserts that entering vi mode inserts `ViModeState` and requests only
