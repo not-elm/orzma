@@ -1,7 +1,7 @@
 //! Maps a (mode, key) pair to a high-level [`Action`]. Pure and stateless;
 //! the two-key chord `gg` emits [`Action::Prefix`] that `App` completes.
 
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui_orzma::KeyChord;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,7 +42,12 @@ pub(crate) enum Action {
 }
 
 /// Maps a key event in `mode` to an [`Action`].
+///
+/// A key release maps to [`Action::Ignore`].
 pub(crate) fn map(mode: Mode, key: KeyEvent) -> Action {
+    if key.kind == KeyEventKind::Release {
+        return Action::Ignore;
+    }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match mode {
         Mode::Normal => map_normal(ctrl, key.code),
@@ -287,6 +292,40 @@ mod tests {
     fn hint_mode_ctrl_c_quits_and_other_ctrl_ignored() {
         assert_eq!(map(Mode::Hint, ctrl('c')), Action::Quit);
         assert_eq!(map(Mode::Hint, ctrl('d')), Action::Ignore);
+    }
+
+    /// Asserts that a key release drives no action in any mode, while a
+    /// repeat of the same key still does.
+    ///
+    /// Case: on Windows, ConPTY reports each keystroke as a press followed by
+    /// a release, and the user opens the address bar and types a URL.
+    #[test]
+    fn a_key_release_drives_no_action() {
+        let codes = [
+            KeyCode::Char('o'),
+            KeyCode::Char('a'),
+            KeyCode::Char('q'),
+            KeyCode::Enter,
+            KeyCode::Backspace,
+            KeyCode::Esc,
+        ];
+        let modes = [
+            Mode::Normal,
+            Mode::Insert,
+            Mode::Address,
+            Mode::Help,
+            Mode::Hint,
+        ];
+        for mode in modes {
+            for code in codes {
+                let release =
+                    KeyEvent::new_with_kind(code, KeyModifiers::NONE, KeyEventKind::Release);
+                assert_eq!(map(mode, release), Action::Ignore, "{mode:?} {code:?}");
+            }
+        }
+        let repeat =
+            KeyEvent::new_with_kind(KeyCode::Char('a'), KeyModifiers::NONE, KeyEventKind::Repeat);
+        assert_eq!(map(Mode::Address, repeat), Action::AddressChar('a'));
     }
 
     fn event_of(chord: &KeyChord) -> KeyEvent {
