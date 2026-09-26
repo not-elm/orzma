@@ -1496,11 +1496,14 @@ impl Screen {
     /// Resizes the grid, truncating rather than reflowing; `None` when
     /// the dimensions already matched.
     ///
-    /// A shrink pushes as many rows off the top as it takes to keep the
-    /// cursor on screen and drops the rest from the bottom. A growth
-    /// reclaims rows from history before it appends blank ones. A resize
-    /// that changes the dimensions also clears the cursor's landing
-    /// cell, since the grid moved under it.
+    /// A shrink of a screen with scrollback pushes as many rows off the
+    /// top into history as it takes to keep the cursor on screen and
+    /// drops the rest from the bottom. A screen without scrollback keeps
+    /// its top rows instead: the shrink drops rows from the bottom only,
+    /// and the cursor and the saved cursor are clamped to the new last
+    /// row. A growth reclaims rows from history before it appends blank
+    /// ones. A resize that changes the dimensions also clears the
+    /// cursor's landing cell.
     ///
     /// # Invariants
     ///
@@ -1524,7 +1527,11 @@ impl Screen {
             return None;
         }
         self.state.last_landing = None;
-        let required_scrolling = (self.state.line.0 + 1).saturating_sub(size.rows);
+        let required_scrolling = if self.grid.has_scrollback() {
+            (self.state.line.0 + 1).saturating_sub(size.rows)
+        } else {
+            0
+        };
         for _ in 0..required_scrolling {
             self.grid
                 .scroll_up_one(ScreenLine(0), ScreenLine(old.rows - 1), Cell::default());
