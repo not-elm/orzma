@@ -95,6 +95,21 @@ fn send_wheel_over_the_alternate_screen_writes_cursor_keys() {
     assert_eq!(sink.contents(), b"\x1bOA".repeat(3));
 }
 
+/// Asserts that wheel notches sent as cursor keys leave the selection in
+/// place, unlike a typed key.
+///
+/// Case: the user drags over a line in `less` to select it, then spins
+/// the wheel to read further down the file.
+#[test]
+fn send_wheel_as_cursor_keys_keeps_the_selection() {
+    let (mut term, _sink) = detached_term();
+    term.vt.modes.active_screen = ScreenKind::Alternate;
+    term.vt.selection_changes = true;
+    term.send_wheel(wheel(-1, 0), &WheelConfig::default())
+        .expect("send_wheel");
+    assert!(term.vt.selections.is_empty());
+}
+
 /// Asserts that Shift over a tracking alternate screen skips the
 /// reports and writes cursor keys instead.
 ///
