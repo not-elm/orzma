@@ -17,6 +17,7 @@ mod pump;
 mod resize;
 mod scroll;
 mod sync;
+mod vi_mode;
 mod wheel;
 
 fn grid(cols: u16, rows: u16) -> GridSize {
