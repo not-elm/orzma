@@ -196,6 +196,17 @@ class AssembleDebRoot(unittest.TestCase):
                 pd.assemble_deb_root(tree, root)
             self.assertIn("icons", str(ctx.exception))
 
+    def test_top_level_symlinks_are_copied_as_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = _make_stage_tree(Path(tmp))
+            os.symlink("libcef.so", tree / "libcef.so.1")
+            root = Path(tmp) / "root"
+            root.mkdir()
+            pd.assemble_deb_root(tree, root)
+            link = root / "usr" / "lib" / "orzma" / "libcef.so.1"
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(os.readlink(link), "libcef.so")
+
 
 class NormalizeModes(unittest.TestCase):
     def test_modes_follow_the_tarball_rules(self):

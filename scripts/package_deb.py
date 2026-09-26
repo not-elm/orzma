@@ -197,10 +197,10 @@ def main(argv: list[str] | None = None) -> None:
 
 def _copy_entry(src: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if src.is_dir():
+    if src.is_dir() and not src.is_symlink():
         shutil.copytree(src, dest, symlinks=True)
     else:
-        shutil.copy2(src, dest)
+        shutil.copy2(src, dest, follow_symlinks=False)
 
 
 def _write_copyright(license_file: Path, dest: Path) -> None:
