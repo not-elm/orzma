@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -218,6 +221,110 @@ class NormalizeModes(unittest.TestCase):
             pd.normalize_modes(root)
             self.assertTrue((root / "link").is_symlink())
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+
+
+HAS_DPKG_DEB = shutil.which("dpkg-deb") is not None
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class DpkgDebArgv(unittest.TestCase):
+    def test_argv_builds_root_owned_xz_package(self):
+        self.assertEqual(
+            pd.dpkg_deb_argv(Path("/r"), Path("/o/x.deb")),
+            ["dpkg-deb", "--root-owner-group", "-Zxz", "--build", "/r", "/o/x.deb"],
+        )
+
+
+class PackageDeb(unittest.TestCase):
+    def test_missing_stage_tree_points_at_just_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as ctx:
+                pd.package_deb(Path(tmp) / "stage", "0.2.0", Path(tmp))
+            self.assertIn("just stage", str(ctx.exception))
+
+    def test_missing_dpkg_deb_names_the_tool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_stage_tree(Path(tmp))
+            with mock.patch.object(pd.shutil, "which", return_value=None):
+                with self.assertRaises(SystemExit) as ctx:
+                    pd.package_deb(Path(tmp) / "stage", "0.2.0", Path(tmp))
+            self.assertIn("dpkg-deb", str(ctx.exception))
+
+    def test_scratch_root_is_removed_when_dpkg_deb_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_stage_tree(Path(tmp))
+            failure = subprocess.CalledProcessError(2, ["dpkg-deb"])
+            with mock.patch.object(pd.shutil, "which", return_value="/usr/bin/dpkg-deb"), \
+                    mock.patch.object(pd.subprocess, "run", side_effect=failure):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    pd.package_deb(Path(tmp) / "stage", "0.2.0", Path(tmp))
+            self.assertFalse((Path(tmp) / pd.SCRATCH_DIR_NAME).exists())
+
+
+@unittest.skipUnless(HAS_DPKG_DEB, "dpkg-deb is not installed")
+class BuildDebEndToEnd(unittest.TestCase):
+    def _build(self, tmp: str, version: str = "0.2.0-rc.1") -> Path:
+        _make_stage_tree(Path(tmp), version)
+        return pd.package_deb(Path(tmp) / "stage", version, Path(tmp))
+
+    def test_package_carries_mapped_version_and_keeps_file_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            deb = self._build(tmp)
+            self.assertEqual(deb.name, "orzma_0.2.0-rc.1_amd64.deb")
+            field = subprocess.run(["dpkg-deb", "-f", str(deb), "Version", "Package"],
+                                   capture_output=True, text=True, check=True).stdout
+            self.assertIn("Version: 0.2.0~rc.1", field)
+            self.assertIn("Package: orzma", field)
+
+    def test_contents_are_root_owned_with_relative_launchers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            listing = subprocess.run(["dpkg-deb", "-c", str(self._build(tmp))],
+                                     capture_output=True, text=True, check=True).stdout
+            self.assertIn("./usr/bin/orzma -> ../lib/orzma/orzma", listing)
+            self.assertIn("./usr/lib/orzma/libcef.so", listing)
+            self.assertIn("./usr/share/doc/orzma/copyright", listing)
+            for line in listing.splitlines():
+                self.assertIn("root/root", line)
+
+    def test_sidecar_is_written_and_scratch_root_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            deb = self._build(tmp)
+            sidecar = Path(f"{deb}.sha256").read_text()
+            self.assertEqual(sidecar, f"{_sha256(deb)}  {deb.name}\n")
+            self.assertFalse((Path(tmp) / pd.SCRATCH_DIR_NAME).exists())
+
+    def test_stale_scratch_root_does_not_leak_into_the_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _write(Path(tmp) / pd.SCRATCH_DIR_NAME / "usr" / "lib" / "orzma" / "stale", b"old")
+            listing = subprocess.run(["dpkg-deb", "-c", str(self._build(tmp))],
+                                     capture_output=True, text=True, check=True).stdout
+            self.assertNotIn("stale", listing)
+
+    def test_rebuild_is_byte_identical(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {k: v for k, v in os.environ.items() if k != "SOURCE_DATE_EPOCH"}
+            with mock.patch.dict(os.environ, env, clear=True):
+                first = _sha256(self._build(tmp))
+                second = _sha256(self._build(tmp))
+            self.assertEqual(first, second)
+
+    def test_restrictive_umask_still_builds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.umask(0o077)
+            try:
+                deb = self._build(tmp)
+            finally:
+                os.umask(previous)
+            self.assertTrue(deb.is_file())
+
+    def test_cli_writes_the_package_into_out_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_stage_tree(Path(tmp), "0.2.0")
+            pd.main(["--version", "0.2.0", "--out-dir", tmp])
+            self.assertTrue((Path(tmp) / "orzma_0.2.0_amd64.deb").is_file())
 
 
 if __name__ == "__main__":

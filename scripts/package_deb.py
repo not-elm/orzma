@@ -3,14 +3,17 @@
 
 from __future__ import annotations
 
+import argparse
 import math
 import os
 import re
 import shutil
 import stat
+import subprocess
 from pathlib import Path
 
-from stage_linux import BIN_NAME, COMPANION_BINS, normalized_mode
+from stage_linux import BIN_NAME, COMPANION_BINS, DEFAULT_OUT_DIR, dist_name, normalized_mode, write_sidecar
+from stage_windows import cargo_version
 
 PACKAGE = "orzma"
 DEB_ARCH = "amd64"
@@ -64,6 +67,7 @@ STAGE_ONLY_ENTRIES = frozenset({"install.sh", "uninstall.sh", "share"})
 LICENSE_FILE = "LICENSE"
 DOC_ENTRIES = frozenset({"THIRD-PARTY-LICENSES.md", "chromium"})
 DEB_VERSION_RE = re.compile(r"[0-9][0-9A-Za-z.+~]*")
+SCRATCH_DIR_NAME = "deb-root"
 
 
 def deb_version(version: str) -> str:
@@ -137,6 +141,60 @@ def normalize_modes(root: Path) -> None:
         path.chmod(normalized_mode(path))
 
 
+def dpkg_deb_argv(root: Path, out: Path) -> list[str]:
+    return ["dpkg-deb", "--root-owner-group", "-Zxz", "--build", str(root), str(out)]
+
+
+def build_deb(tree: Path, version: str, out_dir: Path) -> Path:
+    if shutil.which("dpkg-deb") is None:
+        raise SystemExit("dpkg-deb not found; the .deb can only be built on a Debian/Ubuntu host")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / deb_file_name(version)
+    root = out_dir / SCRATCH_DIR_NAME
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir()
+    try:
+        assemble_deb_root(tree, root)
+        normalize_modes(root)
+        control = render_control(version, installed_size_kib(root))
+        debian = root / "DEBIAN"
+        debian.mkdir()
+        debian.chmod(0o755)
+        (debian / "control").write_text(control, encoding="utf-8", newline="\n")
+        (debian / "control").chmod(0o644)
+        env = {**os.environ, "SOURCE_DATE_EPOCH": os.environ.get("SOURCE_DATE_EPOCH", "0")}
+        subprocess.run(dpkg_deb_argv(root, out), check=True, env=env)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    sidecar = write_sidecar(out)
+    print(f"==> wrote {out} and {sidecar.name}")
+    return out
+
+
+def package_deb(stage_root: Path, version: str, out_dir: Path) -> Path:
+    tree = stage_root / dist_name(version)
+    if not tree.is_dir():
+        raise SystemExit(
+            f"stage tree not found: {tree}; run `just stage` first with the same --version"
+        )
+    return build_deb(tree, version, out_dir)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Package the staged Linux tree into an orzma .deb")
+    p.add_argument("--version", help="package version; defaults to the Cargo version")
+    p.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
+    return p
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_arg_parser().parse_args(argv)
+    version = args.version or cargo_version(BIN_NAME)
+    out_dir = Path(args.out_dir).expanduser()
+    package_deb(out_dir / "stage", version, out_dir)
+
+
 def _copy_entry(src: Path, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
@@ -159,3 +217,7 @@ def _install_desktop_entry(template: Path, dest: Path) -> None:
         raise SystemExit(f"{template} has no {EXEC_PLACEHOLDER} placeholder to substitute")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(text.replace(EXEC_PLACEHOLDER, EXEC_PATH), encoding="utf-8")
+
+
+if __name__ == "__main__":
+    main()
