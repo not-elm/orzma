@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=orzma
+Comment=Terminal emulator with in-process webviews
+Exec=@ORZMA_EXEC@
+Icon=orzma
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=orzma
