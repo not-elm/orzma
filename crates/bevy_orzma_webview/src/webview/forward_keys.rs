@@ -194,6 +194,96 @@ mod tests {
         ForwardChord::new(mods.iter().map(|m| (*m).to_owned()).collect(), key)
     }
 
+    /// Asserts that a letter, a function key and `tab` parse to their
+    /// physical keys with the declared modifiers, and an unknown name fails.
+    ///
+    /// Case: a program registers Alt+h, F5 and Tab as forward keys.
+    #[test]
+    fn parse_maps_keys_and_mods() {
+        let n = NormalizedChord::parse(&chord(&["alt"], "h")).unwrap();
+        assert_eq!(n.key, ChordKey::Code(KeyCode::KeyH));
+        assert!(n.alt && !n.ctrl && !n.shift && !n.logo);
+        assert_eq!(
+            NormalizedChord::parse(&chord(&[], "f5")).map(|c| c.key),
+            Some(ChordKey::Code(KeyCode::F5))
+        );
+        assert_eq!(
+            NormalizedChord::parse(&chord(&[], "tab")).map(|c| c.key),
+            Some(ChordKey::Code(KeyCode::Tab))
+        );
+        assert!(NormalizedChord::parse(&chord(&[], "nope")).is_none());
+    }
+
+    /// Asserts that the navigation key names the forward-key grammar already
+    /// accepted still parse to their physical keys.
+    ///
+    /// Case: a TUI browser forwards Esc, Space and the arrow and page keys.
+    #[test]
+    fn parse_maps_forward_keys_keys() {
+        let cases: &[(&str, KeyCode)] = &[
+            ("esc", KeyCode::Escape),
+            (" ", KeyCode::Space),
+            ("down", KeyCode::ArrowDown),
+            ("up", KeyCode::ArrowUp),
+            ("pagedown", KeyCode::PageDown),
+            ("pageup", KeyCode::PageUp),
+        ];
+        for (key, expected) in cases {
+            assert_eq!(
+                NormalizedChord::parse(&chord(&[], key)).map(|c| c.key),
+                Some(ChordKey::Code(*expected)),
+                "failed for key={key:?}"
+            );
+        }
+    }
+
+    /// Asserts that the editing and navigation key names added for forward
+    /// chords parse to their physical keys.
+    ///
+    /// Case: a markdown viewer forwards Backspace and Enter so its TUI can go
+    /// back and confirm a search while the page holds keyboard focus.
+    #[test]
+    fn parse_maps_editing_and_navigation_key_names() {
+        let cases: &[(&str, KeyCode)] = &[
+            ("enter", KeyCode::Enter),
+            ("backspace", KeyCode::Backspace),
+            ("left", KeyCode::ArrowLeft),
+            ("right", KeyCode::ArrowRight),
+            ("home", KeyCode::Home),
+            ("end", KeyCode::End),
+            ("delete", KeyCode::Delete),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(
+                NormalizedChord::parse(&chord(&[], name)).map(|c| c.key),
+                Some(ChordKey::Code(*expected)),
+                "failed for key={name:?}"
+            );
+        }
+    }
+
+    /// Asserts that one ASCII punctuation character parses to a character
+    /// chord, while a longer or non-punctuation name is rejected.
+    ///
+    /// Case: a markdown viewer forwards `/` to open its search and `[` / `]`
+    /// to jump between headings.
+    #[test]
+    fn parse_maps_single_punctuation_to_a_character_chord() {
+        for c in ['/', '?', '[', ']', ':'] {
+            assert_eq!(
+                NormalizedChord::parse(&chord(&[], &c.to_string())).map(|n| n.key),
+                Some(ChordKey::Char(c)),
+                "failed for key={c:?}"
+            );
+        }
+        for name in ["//", "é", "nope"] {
+            assert!(
+                NormalizedChord::parse(&chord(&[], name)).is_none(),
+                "{name:?} must be rejected"
+            );
+        }
+    }
+
     /// Asserts that converting a registration's chords keeps the recognized
     /// ones in order and skips a name the host does not know.
     ///
