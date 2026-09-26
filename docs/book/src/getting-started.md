@@ -93,8 +93,7 @@ extracted directory without installing. To uninstall, run
 kept.
 
 Every install includes the [companion apps](companion-apps.md) `orzmd` and
-`orzbrowser`. To build orzma from source, see
-[CONTRIBUTING.md](https://github.com/not-elm/orzma/blob/main/CONTRIBUTING.md).
+`orzbrowser`. To build orzma from source, see [Contributing](contributing.md).
 
 ## First steps
 

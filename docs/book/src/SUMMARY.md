@@ -19,3 +19,4 @@
 
 - [Building Webview Apps](building-webview-apps.md)
 - [Protocol Reference](protocol-reference.md)
+- [Contributing](contributing.md)

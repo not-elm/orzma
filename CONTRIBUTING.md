@@ -109,8 +109,10 @@ sends it commands and receives layout snapshots and frames, which
 ## Conventions
 
 - Code comments are written in English.
-- Rust code follows [.claude/rules/rust.md](.claude/rules/rust.md), and
-  TypeScript follows [.claude/rules/typescript.md](.claude/rules/typescript.md).
+- Rust code follows
+  [.claude/rules/rust.md](https://github.com/not-elm/orzma/blob/main/.claude/rules/rust.md),
+  and TypeScript follows
+  [.claude/rules/typescript.md](https://github.com/not-elm/orzma/blob/main/.claude/rules/typescript.md).
   They cover the comment rules, doc comments, imports, and error handling.
 - Run `just fix-lint` before sending a change. CI runs `cargo fmt --check`,
   `cargo clippy` with warnings as errors, the tests, `cargo doc`, cargo-deny,
