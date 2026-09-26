@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 thiserror = { workspace = true }
 getrandom = "0.2"
+orzma_vt = { path = "../orzma_vt" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
