@@ -7,8 +7,11 @@ use bevy_orzma_tty_renderer::prelude::CaretStyle;
 use orzma_configs::OrzmaConfigs;
 use orzma_configs::cursor::{CursorConfig, CursorStyleSetting};
 use orzma_configs::mouse::MouseConfig;
+use orzma_configs::selection::SelectionConfig;
 use orzma_tty::prelude::WheelConfig;
-use orzma_vt::prelude::{CursorBlink, CursorPolicy, CursorShape, TextCursorStyle};
+use orzma_vt::prelude::{
+    CursorBlink, CursorPolicy, CursorShape, SemanticEscapeChars, TextCursorStyle,
+};
 
 /// The resolved `OrzmaConfigs`, loaded once at app build time.
 #[derive(Resource, Debug, Default, Deref)]
@@ -98,6 +101,14 @@ pub(crate) fn cursor_policy(config: &CursorConfig) -> CursorPolicy {
             blink: CursorBlink::Blinking,
         },
     }
+}
+
+/// The word separators the `[selection]` section selects for the semantic
+/// vi-mode motions.
+pub(crate) fn semantic_escape_chars(config: &SelectionConfig) -> SemanticEscapeChars {
+    config
+        .semantic_escape_chars()
+        .map_or_else(SemanticEscapeChars::default, SemanticEscapeChars::new)
 }
 
 /// Crate-internal mutex guarding `ORZMA_CONFIG` env-var mutations across
@@ -286,5 +297,23 @@ mod tests {
         assert_eq!(style.blink_timeout, Some(Duration::from_secs(5)));
         assert_eq!(style.thickness, 0.15);
         assert!(!style.unfocused_hollow);
+    }
+
+    /// Asserts that `semantic_escape_chars` keeps the built-in separators
+    /// for an empty `[selection]` section and passes a configured string
+    /// through.
+    ///
+    /// Case: one user leaves `[selection]` out while another sets
+    /// `semantic_escape_chars = "-"`.
+    #[test]
+    fn semantic_escape_chars_maps_the_selection_section() {
+        assert_eq!(
+            semantic_escape_chars(&SelectionConfig::default()),
+            SemanticEscapeChars::default()
+        );
+        assert_eq!(
+            semantic_escape_chars(&SelectionConfig::new(Some("-".to_string()))),
+            SemanticEscapeChars::new("-")
+        );
     }
 }

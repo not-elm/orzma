@@ -31,7 +31,7 @@ use bevy_orzma_webview_host::WebviewAssetRegistry;
 use bevy_orzmux::prelude::{
     OrzmuxClient, OrzmuxConfig, OrzmuxConnection, OrzmuxPlugin, OrzmuxSystems,
 };
-use configs::{OrzmaConfigsPlugin, cursor_policy, wheel_config};
+use configs::{OrzmaConfigsPlugin, cursor_policy, semantic_escape_chars, wheel_config};
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
 use session::SessionPlugin;
@@ -74,6 +74,7 @@ fn main() {
             scrollback_rows: SCROLLBACK_ROWS,
             wheel: wheel_config(&pre_configs.mouse),
             cursor: cursor_policy(&pre_configs.cursor),
+            semantic_escape_chars: semantic_escape_chars(&pre_configs.selection),
             shell_integration: pre_configs.orzma.shell_integration,
         },
         wakers.input().clone(),
