@@ -1,3 +1,3 @@
 [shortcuts]
-new-window = "<Leader>g"
-zoom-pane = "<Leader>g"
+kill-pane = "<Leader>g"
+split-horizontal-pane = "<Leader>g"

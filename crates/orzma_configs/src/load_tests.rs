@@ -131,8 +131,8 @@ fn unknown_action_surfaces_parse_toml() {
 /// Asserts that a pane action can be rebound to a leader chord and another
 /// action can be unbound with an empty string.
 ///
-/// Case: a user moves the vertical split to `<Leader>g` and turns off one
-/// action they never use.
+/// Case: a user moves the vertical split to `<Leader>g` and turns off
+/// `kill-pane`.
 #[test]
 fn multiplexer_action_rebind_and_unbind() {
     let configs = load_fixture("multiplexer_action_binding.toml").expect("the fixture is valid");
@@ -143,7 +143,7 @@ fn multiplexer_action_rebind_and_unbind() {
             repeat: false,
         })
     );
-    assert_eq!(configs.shortcuts.select_window_5, None);
+    assert_eq!(configs.shortcuts.kill_pane, None);
 }
 
 /// Asserts that a vi-mode key can be rebound and another unbound, leaving the
@@ -196,11 +196,8 @@ fn duplicate_leader_chord_rejected() {
         load_fixture("duplicate_leader_binding.toml").expect_err("the fixture has a duplicate");
     match err {
         OrzmaConfigsError::DuplicatePrefixChords(dupes) => {
-            assert!(
-                dupes
-                    .iter()
-                    .any(|d| d.actions.contains(&"new-window") && d.actions.contains(&"zoom-pane"))
-            );
+            assert!(dupes.iter().any(|d| d.actions.contains(&"kill-pane")
+                && d.actions.contains(&"split-horizontal-pane")));
         }
         other => panic!("expected DuplicatePrefixChords, got {other:?}"),
     }

@@ -242,7 +242,7 @@ mod validate_tests {
     /// quit could never fire again.
     #[test]
     fn validate_rejects_leader_shadowing_direct_binding() {
-        let toml_str = "[shortcuts]\nquit = \"Ctrl+Alt+Q\"\nleader = \"Ctrl+Alt+Q\"\nrename-window = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nquit = \"Ctrl+Alt+Q\"\nleader = \"Ctrl+Alt+Q\"\nkill-pane = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         match err {
             OrzmaConfigsError::LeaderShadowsDirectBinding { action, .. } => {
@@ -254,14 +254,15 @@ mod validate_tests {
 
     #[test]
     fn validate_rejects_leader_table_internal_dupe() {
-        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nrename-window = \"<Leader>d\"\nenter-vi-mode = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nkill-pane = \"<Leader>d\"\nenter-vi-mode = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         assert!(matches!(err, OrzmaConfigsError::DuplicatePrefixChords(_)));
     }
 
     #[test]
     fn validate_allows_cross_keyspace_same_key() {
-        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-vi-mode = \"s\"\nrename-window = \"<Leader>s\"\n";
+        let toml_str =
+            "[shortcuts]\nleader = \"Ctrl+A\"\nenter-vi-mode = \"s\"\nkill-pane = \"<Leader>s\"\n";
         assert!(
             parse_validated(toml_str).is_ok(),
             "direct `s` and leader-scoped `s` occupy different key-spaces"
@@ -270,7 +271,7 @@ mod validate_tests {
 
     #[test]
     fn validate_allows_leader_with_bindings() {
-        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nrename-window = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nkill-pane = \"<Leader>d\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 
@@ -280,7 +281,7 @@ mod validate_tests {
     /// Case: a user binds the leader to `Cmd+.` in their config file.
     #[test]
     fn validate_rejects_unmappable_leader() {
-        let toml_str = "[shortcuts]\nleader = \"Cmd+.\"\nrename-window = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Cmd+.\"\nkill-pane = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         assert!(matches!(err, OrzmaConfigsError::UnmappableLeader { .. }));
     }
@@ -293,13 +294,23 @@ mod validate_tests {
 
     #[test]
     fn validate_accepts_bare_modifier_tap_leader() {
-        let toml_str = "[shortcuts]\nleader = \"Cmd\"\nrename-window = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Cmd\"\nkill-pane = \"<Leader>d\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 
     #[test]
     fn validate_tap_leader_coexists_with_cmd_direct_bindings() {
         let toml_str = "[shortcuts]\nleader = \"Cmd\"\n";
+        assert!(parse_validated(toml_str).is_ok());
+    }
+
+    /// Asserts that `<Leader>c` is free for a user binding under the stock
+    /// defaults.
+    ///
+    /// Case: a user binds vi mode to `<Leader>c`.
+    #[test]
+    fn validate_accepts_enter_vi_mode_on_leader_c() {
+        let toml_str = "[shortcuts]\nenter-vi-mode = \"<Leader>c\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 }
@@ -425,5 +436,23 @@ mod integration_tests {
     fn user_unbind_with_empty_string_sets_field_to_none() {
         let c = parse("[shortcuts]\nquit = \"\"\n");
         assert!(c.shortcuts.quit.is_none());
+    }
+
+    /// Asserts that `new-window` and `zoom-pane` are rejected as unknown
+    /// `[shortcuts]` keys.
+    ///
+    /// Case: a user starts orzma with a config.toml that still sets
+    /// `new-window` and `zoom-pane`.
+    #[test]
+    fn window_action_keys_are_unknown_fields() {
+        for key in ["new-window", "zoom-pane"] {
+            let toml_str = format!("[shortcuts]\n{key} = \"<Leader>c\"\n");
+            let err = toml::from_str::<OrzmaConfigs>(&toml_str)
+                .expect_err("a removed action must not parse");
+            assert!(
+                err.to_string().contains(key) || err.to_string().contains("unknown field"),
+                "the error should name the removed key; got: {err}"
+            );
+        }
     }
 }
