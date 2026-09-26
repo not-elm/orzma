@@ -337,6 +337,24 @@ fn a_wide_separator_ends_a_semantic_word() {
     );
 }
 
+/// Asserts that whitespace ends a semantic word even when the configured
+/// separators leave it out.
+///
+/// Case: the user has configured only `-` as a word separator and presses
+/// `w` at the start of `ab cd-ef`.
+#[test]
+fn whitespace_ends_a_semantic_word_outside_the_configured_separators() {
+    let mut grid = grid();
+    for (column, c) in "ab cd-ef".chars().enumerate() {
+        put(&mut grid, 0, u16::try_from(column).expect("a short row"), c);
+    }
+    let chars = SemanticEscapeChars::new("-");
+    assert_eq!(
+        walk_with(&grid, &chars, point(0, 0), &[ViMotion::SemanticRight]),
+        vec![point(0, 3)]
+    );
+}
+
 /// Asserts that the whitespace-word motions treat punctuation as part of
 /// a word.
 ///

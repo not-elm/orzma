@@ -460,9 +460,12 @@ impl<'a> MotionGrid<'a> {
             .is_some_and(|cell| !is_spacer(cell) && (cell.c == ' ' || cell.c == '\t'))
     }
 
+    /// Whether the glyph at `point` ends a semantic word: a blank, a tab, or
+    /// one of the configured separators.
     fn is_separator(&self, point: GridPoint) -> bool {
-        self.cell(point)
-            .is_some_and(|cell| !is_spacer(cell) && self.escape_chars.contains(cell.c))
+        self.cell(point).is_some_and(|cell| {
+            !is_spacer(cell) && (matches!(cell.c, ' ' | '\t') || self.escape_chars.contains(cell.c))
+        })
     }
 
     fn is_wrap(&self, point: GridPoint) -> bool {
