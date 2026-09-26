@@ -26,9 +26,6 @@ use orzmux::prelude::{
     SplitOrientation as OrzmuxSplitOrientation,
 };
 
-/// How many cells one resize-pane shortcut moves a divider.
-const PANE_RESIZE_CELLS: u16 = 5;
-
 pub(super) struct ShortcutsApplyPlugin;
 
 impl Plugin for ShortcutsApplyPlugin {
@@ -41,6 +38,9 @@ impl Plugin for ShortcutsApplyPlugin {
         );
     }
 }
+
+/// How many cells one resize-pane shortcut moves a divider.
+const PANE_RESIZE_CELLS: u16 = 5;
 
 /// Applies the frame's key effects in press order: shortcuts, vi-mode
 /// keys, typed keys, and the chords a focused webview declared as forward
