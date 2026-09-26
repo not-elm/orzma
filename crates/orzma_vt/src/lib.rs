@@ -277,8 +277,8 @@ pub trait Vt {
 #[derive(Debug, Default)]
 pub struct InterpretOutput {
     /// Whether this chunk produced anything frame-relevant — staged row
-    /// damage, a change to the reported cursor (motion or visibility),
-    /// or a mutated frame-visible section.
+    /// damage, a change to the reported cursor (motion or visibility), a
+    /// mutated frame-visible section, or a move of the vi cursor.
     pub damaged: bool,
     /// Out-of-band signals: the parser-raised ones in byte-stream order,
     /// then the [`VtSignal::WebviewEvicted`] naming the placements the
@@ -1849,6 +1849,36 @@ mod tests {
         assert!(vt.scroll(Scroll::Top));
         let frame = vt.frame().expect("the vi cursor moved");
         assert!(frame.rows.is_empty());
+        assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(0, 0)));
+    }
+
+    /// Asserts that leaving the alternate screen in vi mode keeps vi mode on
+    /// with the vi cursor on the primary screen's restored write cursor.
+    ///
+    /// Case: `less` exits on its own while the user is in vi mode over it.
+    #[test]
+    fn leaving_the_alternate_screen_in_vi_mode_keeps_vi_mode_on_the_primary() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10);
+        vt.interpret(b"abc\x1b[?1049h");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.interpret(b"\x1b[?1049l");
+        assert!(vt.is_vi_mode());
+        assert_eq!(vt.vi_cursor().map(|cursor| cursor.point), Some(cell(0, 3)));
+    }
+
+    /// Asserts that a reset that moves only the vi cursor still reports
+    /// damage and emits a frame carrying the moved vi cursor.
+    ///
+    /// Case: on a blank screen whose write cursor sits at home, the user
+    /// moves the vi cursor away and a program then sends `RIS`.
+    #[test]
+    fn a_reset_that_moves_only_the_vi_cursor_emits_a_frame() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10);
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::Right);
+        vt.frame();
+        assert!(vt.interpret(b"\x1bc").damaged);
+        let frame = vt.frame().expect("the reset moved the vi cursor");
         assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(0, 0)));
     }
 }

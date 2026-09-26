@@ -5,6 +5,7 @@ use crate::screen::PrintOptions;
 use crate::screen::cell::ClassifiedGlyph;
 use crate::screen::character_sets::GraphicChar;
 use crate::screen::grid::GridSize;
+use crate::screen::grid::reflow::ScrollbackOnGrow;
 use crate::screen::selection::{CellSide, SelectionKind};
 use crate::screen::viewport::DisplayOffset;
 
@@ -454,5 +455,49 @@ fn a_scroll_down_while_scrolled_back_keeps_the_vi_cursor_in_view() {
     screen.vi.set(point(1, 0));
     let _ = screen.scroll_region_down(1);
     assert_eq!(screen.display_offset(), DisplayOffset(1));
+    assert_eq!(vi_point(&screen), Some(point(1, 0)));
+}
+
+/// Asserts that a reflow carries the vi cursor to the same character.
+///
+/// Case: the user narrows the window while the vi cursor sits inside a
+/// line that now wraps.
+#[test]
+fn a_reflow_carries_the_vi_cursor_to_its_character() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "abcdefgh");
+    assert!(screen.enter_vi_mode());
+    screen.vi.set(point(0, 6));
+    let _ = screen.reflow(GridSize { cols: 4, rows: 3 }, ScrollbackOnGrow::Reclaim);
+    assert_eq!(vi_point(&screen), Some(point(1, 2)));
+}
+
+/// Asserts that a reflow that drops the vi cursor's row seats the vi
+/// cursor on the viewport's top-left cell.
+///
+/// Case: the user shrinks a pane without scrollback to one row while the
+/// vi cursor sits on a row that no longer fits.
+#[test]
+fn a_reflow_that_drops_the_vi_cursor_row_seats_it_top_left() {
+    let mut screen = screen(4, 3, 0);
+    print_text(&mut screen, "a\nb\nc");
+    assert!(screen.enter_vi_mode());
+    screen.vi.set(point(0, 1));
+    let _ = screen.reflow(GridSize { cols: 4, rows: 1 }, ScrollbackOnGrow::Reclaim);
+    assert_eq!(vi_point(&screen), Some(point(0, 0)));
+}
+
+/// Asserts that a truncating resize carries the vi cursor with the rows it
+/// scrolls off the top.
+///
+/// Case: the user shrinks the window while a full-screen program is shown
+/// and the vi cursor sits on its bottom row.
+#[test]
+fn a_truncating_resize_carries_the_vi_cursor_with_its_row() {
+    let mut screen = screen(4, 3, 0);
+    print_text(&mut screen, "a\nb\nc");
+    assert!(screen.enter_vi_mode());
+    screen.vi.set(point(2, 0));
+    let _ = screen.resize(GridSize { cols: 4, rows: 2 });
     assert_eq!(vi_point(&screen), Some(point(1, 0)));
 }

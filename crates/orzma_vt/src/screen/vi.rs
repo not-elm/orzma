@@ -203,6 +203,13 @@ impl ScreenVi {
             point.line = GridLine((point.line.0 + i32::from(count)).min(bottom.0));
         }
     }
+
+    /// Moves the vi cursor by `rows` rows, down when positive.
+    pub fn shift(&mut self, rows: i32) {
+        if let Some(point) = &mut self.point {
+            point.line = GridLine(point.line.0.saturating_add(rows));
+        }
+    }
 }
 
 /// Vi mode.

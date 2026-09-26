@@ -262,11 +262,15 @@ impl DeviceState {
     ///
     /// The primary screen comes back at the size the alternate screen has.
     ///
+    /// Vi mode stays on, with the vi cursor seated on the primary screen's
+    /// home position.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)
     pub fn reset(&mut self) -> Option<DamageSpan> {
         self.preceding_graphic = None;
+        let vi_mode = self.is_vi_mode();
         let was_showing_alternate = matches!(self.modes.active_screen, ScreenKind::Alternate);
         let primary = self.screens.primary.reset();
         let _ = self
@@ -283,6 +287,9 @@ impl DeviceState {
         // instead.
         self.modes = VtModes::default();
         self.apply_initial_cursor_style();
+        if vi_mode {
+            let _ = self.screens.primary.seat_vi_cursor();
+        }
         self.title = TitleState::default();
         self.active_hyperlink = None;
         // NOTE: `hyperlinks` is deliberately not reset. Ids must never be
@@ -730,14 +737,19 @@ impl DeviceState {
     /// shown. The placements that reflow strands are not named here: their
     /// anchors stop resolving, and the next [`Self::evict_lost_anchors`]
     /// names them.
+    ///
+    /// Vi mode stays on across the flip: the vi cursor leaves the screen
+    /// that was shown and is seated on the screen now shown, on its write
+    /// cursor.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
+        let vi_mode = self.active_screen_mut().drop_vi_cursor();
         self.modes.active_screen = to;
         // NOTE: Dropping this clear lets a link a killed program left open
         // cover every cell the next program prints after the flip. It runs
         // only on a real flip, so a repeated set on the screen already
         // shown leaves such a link open.
         self.active_hyperlink = None;
-        match to {
+        let evicted = match to {
             ScreenKind::Alternate => Vec::new(),
             ScreenKind::Primary => {
                 self.screens.alternate.clear_selection();
@@ -746,7 +758,11 @@ impl DeviceState {
                 let _ = self.screens.primary.reflow(size, self.scrollback_on_grow);
                 evicted
             }
+        };
+        if vi_mode {
+            let _ = self.active_screen_mut().seat_vi_cursor();
         }
+        evicted
     }
 
     fn supersede_placement(&mut self, id: InstanceId) {
@@ -800,8 +816,9 @@ mod tests {
     use crate::hyperlink::HyperlinkUri;
     use crate::screen::cell::Cell;
     use crate::screen::character_sets::{CharacterSet, GCode};
-    use crate::screen::grid::coords::{GridColumn, GridLine};
+    use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint};
     use crate::screen::grid::reflow::ScrollbackOnGrow;
+    use crate::screen::vi::ViModeSwitch;
     use crate::screen::viewport::ViewportLine;
     use std::iter::from_fn;
 
@@ -1701,5 +1718,46 @@ mod tests {
         let hidden = &device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(hidden.c, '─');
         assert_eq!(hidden.fg, Color::Indexed(1));
+    }
+
+    /// Asserts that flipping to the alternate screen keeps vi mode on and
+    /// seats the vi cursor on the alternate screen's write cursor.
+    ///
+    /// Case: a program opens the alternate screen while the user is in vi
+    /// mode.
+    #[test]
+    fn a_flip_to_the_alternate_screen_keeps_vi_mode() {
+        let mut device = device();
+        device.print('a').expect("a printable glyph");
+        let _ = device.switch_vi_mode(ViModeSwitch::Enter);
+        let _ = device.switch_screen(ScreenKind::Alternate);
+        assert!(device.is_vi_mode());
+        assert!(!device.screens.primary.is_vi_mode());
+        assert_eq!(
+            device.vi_cursor().map(|cursor| cursor.point),
+            Some(GridPoint {
+                line: GridLine(0),
+                column: GridColumn(0)
+            })
+        );
+    }
+
+    /// Asserts that a reset keeps vi mode on with the vi cursor at the
+    /// home position.
+    ///
+    /// Case: a program sends `RIS` while the user is in vi mode.
+    #[test]
+    fn a_reset_keeps_vi_mode_with_the_vi_cursor_home() {
+        let mut device = device();
+        device.print('a').expect("a printable glyph");
+        let _ = device.switch_vi_mode(ViModeSwitch::Enter);
+        let _ = device.reset();
+        assert_eq!(
+            device.vi_cursor().map(|cursor| cursor.point),
+            Some(GridPoint {
+                line: GridLine(0),
+                column: GridColumn(0)
+            })
+        );
     }
 }
