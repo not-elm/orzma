@@ -46,7 +46,7 @@ pub mod prelude {
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
-    pub use crate::screen::vi::{ViCursor, ViModeSwitch};
+    pub use crate::screen::vi::{ViCursor, ViModeSwitch, ViMotion};
     pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
     pub use crate::{InterpretOutput, OrzmaVt, ResizeChanged, Vt, VtSignal};
 }
