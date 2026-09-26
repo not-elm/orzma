@@ -12,7 +12,7 @@ body:
     id: location
     attributes:
       label: Location
-      description: The doc URL or file path (e.g. `README.md`, `docs/configs.md`).
+      description: The doc URL or file path (e.g. `README.md`, `https://not-elm.github.io/orzma/configuration.html`).
     validations:
       required: true
   - type: textarea

@@ -1,74 +1,59 @@
 # orzma
 
-> [!CAUTION]
-> This app is still in early development and may introduce breaking changes.
->
-> The entire codebase is currently being redesigned. The documentation in this
-> README and under `docs/` describes the previous design, so the actual
-> behavior may differ from what is documented here until the redesign lands.
+> [!WARNING]
+> orzma is in early development and may introduce breaking changes.
 
-orzma is a terminal emulator that can render webviews directly inside the
-terminal.
+orzma is a terminal emulator that can render web pages inside the terminal. A
+program running in an orzma pane can place a live web page among its own text
+and exchange messages with it.
 
 ![thumbnail](./docs/book/src/images/thumbnail.png)
 
+## Documentation
+
+The user guide is published at <https://not-elm.github.io/orzma/> with each
+release. Its sources are in [`docs/book/src`](docs/book/src).
+
+- [Getting Started](https://not-elm.github.io/orzma/) — install orzma and take
+  the first steps.
+- [Configuration](https://not-elm.github.io/orzma/configuration.html) and
+  [Key Bindings](https://not-elm.github.io/orzma/key-bindings.html).
+- [Building Webview Apps](https://not-elm.github.io/orzma/building-webview-apps.html)
+  and the [Protocol Reference](https://not-elm.github.io/orzma/protocol-reference.html).
+
 ## Installation
 
-macOS (Apple Silicon) via Homebrew Cask:
+macOS 11 or later on Apple Silicon, with Homebrew:
 
 ```bash
 brew install --cask not-elm/orzma/orzma
 ```
 
-This taps `not-elm/homebrew-orzma` and installs `orzma.app` into
-`/Applications`. Upgrade later with:
+Windows 10 1809 or later, and Windows 11 (x64): download `orzma-<version>-x64.msi` from the
+[latest release](https://github.com/not-elm/orzma/releases/latest) and run it.
 
-```bash
-brew upgrade --cask orzma
-```
+See [Getting Started](https://not-elm.github.io/orzma/) for details.
 
-The companion apps `orzmd` and `orzbrowser` (built with the `ratatui_orzma` SDK)
-ship bundled inside `orzma.app`, so the Homebrew Cask install already includes
-them. To build and install them from source instead, run `just install-apps`.
+## Companion apps
 
-### Windows (installer)
-
-Requires Windows 10 1809 or later (x64).
-
-Download `orzma-<version>-x64.msi` from the [latest release](https://github.com/not-elm/orzma/releases/latest) and run it. The installer is per-user: it needs no administrator prompt, installs into `%LocalAppData%\Programs\orzma`, and puts `orzma`, `orzmd`, and `orzbrowser` on your `PATH`.
-
-## Features
-
-### Webview
-
-orzma can display webviews inside the terminal, which opens up new
-possibilities for TUI applications. For example:
-
-- render rich graphics such as charts
-- embed games built with WebAssembly
-- host a local frontend (e.g. a dev server on localhost)
-
-## CLI Tools
-
-| name                                      | description            |
-| ----------------------------------------- | ---------------------- |
-| [orzmd](./apps/orzmd/README.md)           | A rich markdown viewer |
-| [orzbrowser](./apps/orzbrowser/README.md) | A tiny browser         |
+| Name | Description |
+| --- | --- |
+| [orzmd](https://not-elm.github.io/orzma/companion-apps.html#orzmd) | A rich Markdown viewer |
+| [orzbrowser](https://not-elm.github.io/orzma/companion-apps.html#orzbrowser) | A keyboard-driven browser |
 
 ## SDK
 
 - [ratatui_orzma](sdk/ratatui_orzma) — Rust SDK: a ratatui widget and RPC
-  handler for embedding orzma webviews from a TUI app.
-- [@orzma/web](sdk/orzma-web) — TypeScript client for the in-page `window.orzma`
-  bridge.
+  handler for embedding orzma webviews in a TUI app.
+- [@orzma/web](sdk/orzma-web) — TypeScript client for the in-page
+  `window.orzma` bridge.
 
-## Orzma Webview Protocol
+See [Building Webview Apps](https://not-elm.github.io/orzma/building-webview-apps.html)
+for a tutorial.
 
-[docs/orzma_webview_protocol.md](docs/orzma_webview_protocol.md)
+## Contributing
 
-## Configuration
-
-[docs/configs.md](docs/configs.md)
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
