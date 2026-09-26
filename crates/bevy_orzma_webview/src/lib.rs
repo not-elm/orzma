@@ -7,6 +7,8 @@ mod webview;
 use bevy::prelude::*;
 pub use error::{WebviewError, WebviewResult};
 use webview::assets::AssetsPlugin;
+pub use webview::focus::RequestWebviewFocus;
+use webview::focus::WebviewFocusPlugin;
 use webview::forward_keys::ForwardKeysPlugin;
 pub use webview::forward_keys::{ChordKey, ForwardKeys, NormalizedChord};
 use webview::mount::WebviewPlugin;
@@ -37,6 +39,7 @@ impl Plugin for OrzmaWebviewPlugin {
         app.add_plugins((
             AssetsPlugin::new(self.orzma_assets.clone()),
             ForwardKeysPlugin,
+            WebviewFocusPlugin,
             RenderPlugin,
             WebviewPlugin,
             PaintPlugin,

@@ -298,8 +298,8 @@ fn read_ime_events(
         };
         // NOTE: gate on `FocusedWebview` itself, NOT on "is the focused webview a
         // child of `surface`". A focused webview consumes the winit Ime events via
-        // bevy_cef, and `sync_focused_webview` deliberately keeps focus on an
-        // inline webview even when its pane is no longer the active surface — a
+        // bevy_cef, and focus can still sit on a webview of a pane that is no
+        // longer the active surface until the host's release reaches the GUI — a
         // surface-relative check would miss it and inject the commit into the
         // newly-active pane's shell.
         if focused_webview.0.is_some() {

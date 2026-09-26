@@ -13,7 +13,8 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_tty_renderer::prelude::{TerminalCellMetricsResource, TerminalOverlays};
 use bevy_orzma_webview::{
-    NonInteractive, Webview, focused_webview_of, webview_hit_at, webview_local_dip,
+    NonInteractive, RequestWebviewFocus, Webview, focused_webview_of, webview_hit_at,
+    webview_local_dip,
 };
 pub(in crate::input::mouse) use cef_sink::CefMouse;
 
@@ -43,7 +44,8 @@ pub(in crate::input::mouse) struct WebviewPress(pub Option<Entity>);
 /// sink is present; the other state effects still apply in both cases.
 #[derive(SystemParam)]
 pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
-    focused_webview: Option<ResMut<'w, FocusedWebview>>,
+    commands: Commands<'w, 's>,
+    focused_webview: Option<Res<'w, FocusedWebview>>,
     children: Query<'w, 's, &'static Children>,
     webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
     webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
@@ -56,11 +58,12 @@ pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
 /// Routes a left press through the webview layer for a resolved
 /// `(terminal, local_phys)`.
 ///
-/// A press inside an interactive rect sets `FocusedWebview`, issues
-/// `set_focus` before `send_mouse_click`, forwards the press in DIP, and
-/// records the in-flight press. A press outside every rect clears an inline
-/// `FocusedWebview`, leaving the press to the terminal. `FocusedWebview` is
-/// written only when the focus actually moves.
+/// A press inside an interactive rect asks for focus on its child with
+/// `RequestWebviewFocus`, issues `set_focus` before `send_mouse_click`,
+/// forwards the press in DIP, and records the in-flight press. A press
+/// outside every rect asks for an inline webview's focus to be released,
+/// leaving the press to the terminal. Focus is requested only when it would
+/// change.
 pub(in crate::input::mouse) fn route_webview_left_click(
     webview_press: &mut WebviewPress,
     route: &mut WebviewRouteParams,
@@ -83,23 +86,20 @@ pub(in crate::input::mouse) fn route_webview_left_click(
             scale,
         )
     });
+    let current = route
+        .focused_webview
+        .as_deref()
+        .and_then(|focused| focused.0);
     let Some(hit) = hit else {
-        let clears_inline = route
-            .focused_webview
-            .as_deref()
-            .and_then(|focused| focused.0)
-            .is_some_and(|current| route.webview_parents.contains(current));
-        if clears_inline && let Some(focused) = route.focused_webview.as_deref_mut() {
-            focused.0 = None;
+        if current.is_some_and(|current| route.webview_parents.contains(current)) {
+            route.commands.trigger(RequestWebviewFocus::new(None));
         }
         return;
     };
-    let moves_focus = route
-        .focused_webview
-        .as_deref()
-        .is_some_and(|focused| focused.0 != Some(hit.child));
-    if moves_focus && let Some(focused) = route.focused_webview.as_deref_mut() {
-        focused.0 = Some(hit.child);
+    if current != Some(hit.child) {
+        route
+            .commands
+            .trigger(RequestWebviewFocus::new(Some(hit.child)));
     }
     // NOTE: `set_focus` must precede `send_mouse_click`: it reaches any live
     // browser, while a click reaches only a browser that already has a focused

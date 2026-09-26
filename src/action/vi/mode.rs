@@ -9,8 +9,9 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::query::With;
-use bevy::ecs::system::{Commands, Query, ResMut};
+use bevy::ecs::system::{Commands, Query, Res};
 use bevy_cef::prelude::FocusedWebview;
+use bevy_orzma_webview::RequestWebviewFocus;
 use bevy_orzmux::prelude::{OrzmuxPane, RequestTtySelectionClear, RequestTtyViMode, ViModeSwitch};
 
 /// Adds vi-mode enter and exit handling.
@@ -42,13 +43,14 @@ pub struct ExitViMode {
     pub entity: Entity,
 }
 
-/// Inserts `ViModeState` on the target entity, releases any focused inline
-/// webview, and requests a selection clear followed by the vi-mode enter
-/// switch. An entity that carries no `OrzmuxPane` is left untouched.
+/// Inserts `ViModeState` on the target entity, asks for any focused inline
+/// webview to be released, and requests a selection clear followed by the
+/// vi-mode enter switch. An entity that carries no `OrzmuxPane` is left
+/// untouched.
 fn handle_enter_vi_mode_request(
     ev: On<EnterViModeActionEvent>,
     mut commands: Commands,
-    mut focused_webview: ResMut<FocusedWebview>,
+    focused_webview: Res<FocusedWebview>,
     terminals: Query<(), With<OrzmuxPane>>,
 ) {
     if terminals.get(ev.entity).is_err() {
@@ -58,7 +60,7 @@ fn handle_enter_vi_mode_request(
     // webview left focused here can no longer be dismissed by an off-rect
     // click and would keep swallowing the keyboard for the whole session.
     if focused_webview.0.is_some() {
-        focused_webview.0 = None;
+        commands.trigger(RequestWebviewFocus::new(None));
     }
     // NOTE: clear before entering vi mode — once a selection-reading
     // capability lands, the v/V toggle predicate must not misread a
@@ -201,16 +203,25 @@ mod tests {
         assert!(app.world().get::<TerminalMouseDisabled>(entity).is_some());
     }
 
-    /// Asserts that entering vi mode clears `FocusedWebview`.
+    /// Asserts that entering vi mode asks for a focused webview to be
+    /// released.
     ///
     /// Case: the user has clicked into a page mounted in a pane and then
     /// enters vi mode to scroll back through that pane's output.
     #[test]
-    fn enter_observer_releases_a_focused_webview() {
+    fn enter_observer_requests_the_release_of_a_focused_webview() {
+        #[derive(Resource, Default)]
+        struct Requested(Vec<Option<Entity>>);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<FocusedWebview>()
-            .add_observer(handle_enter_vi_mode_request);
+            .init_resource::<Requested>()
+            .add_observer(handle_enter_vi_mode_request)
+            .add_observer(
+                |ev: On<RequestWebviewFocus>, mut requested: ResMut<Requested>| {
+                    requested.0.push(ev.target());
+                },
+            );
         let entity = spawn_terminal_entity(&mut app);
         let child = app
             .world_mut()
@@ -224,11 +235,7 @@ mod tests {
         app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
 
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "a page left focused in vi mode takes the keyboard with no mouse route back"
-        );
+        assert_eq!(app.world().resource::<Requested>().0, vec![None]);
     }
 
     /// Asserts that exiting vi mode removes `KeyboardDisabled` and

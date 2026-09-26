@@ -3,6 +3,7 @@
 //! the terminal flow, and the CPU paint bridge.
 
 pub(crate) mod assets;
+pub(crate) mod focus;
 pub(crate) mod forward_keys;
 pub(crate) mod mount;
 pub(crate) mod paint;
