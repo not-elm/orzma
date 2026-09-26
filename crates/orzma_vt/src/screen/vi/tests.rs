@@ -516,3 +516,21 @@ fn a_growing_resize_carries_the_vi_cursor_down_with_reclaimed_rows() {
     let _ = screen.resize(GridSize { cols: 4, rows: 4 });
     assert_eq!(vi_point(&screen), Some(point(2, 0)));
 }
+
+/// Asserts that a reflow keeps a selection end set from the right side of
+/// a cell on that cell when the rewrap starts a new row right after it.
+///
+/// Case: the user selects `abcd` out of `abcdefgh` and then narrows the
+/// window so the line wraps right after `d`.
+#[test]
+fn a_reflow_keeps_a_right_side_selection_end_on_its_cell() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "abcdefgh");
+    screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
+    screen.extend_selection(point(0, 3), CellSide::Right);
+    let _ = screen.reflow(GridSize { cols: 4, rows: 3 }, ScrollbackOnGrow::Reclaim);
+    let (anchor, moving) = screen.selection.ends().expect("an active selection");
+    assert_eq!(moving.line(), anchor.line());
+    assert_eq!(moving.column(), 3);
+    assert_eq!(screen.selection_text().as_deref(), Some("abcd"));
+}

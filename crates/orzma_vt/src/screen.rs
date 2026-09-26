@@ -1714,24 +1714,52 @@ impl Screen {
     /// An end that stood on the right edge of a row ending its logical line
     /// lands on the right edge again.
     fn land_selection(&mut self, riders: &Riders, ends: [(usize, bool); 2], cols: u16) {
-        let ends = ends.map(|(index, on_line_end_edge)| {
-            riders.moved(index).and_then(|point| {
-                self.grid.line_id_at(point.line()).map(|line| SelectionEnd {
-                    line,
-                    boundary: if on_line_end_edge {
+        let Some((anchor, moving)) = self.selection.ends() else {
+            return;
+        };
+        let simple = self.selection.kind() == Some(SelectionKind::Simple);
+        let landed =
+            [(anchor, ends[0]), (moving, ends[1])].map(|(end, (index, on_line_end_edge))| {
+                riders.moved(index).and_then(|point| {
+                    let boundary = if on_line_end_edge {
                         cols
                     } else {
                         point.boundary().min(cols)
-                    },
+                    };
+                    self.land_selection_end(end, point.line(), boundary, cols, simple)
                 })
-            })
-        });
-        match ends {
+            });
+        match landed {
             [Some(anchor), Some(moving)] => self.selection.relocate(anchor, moving),
             _ => {
                 let _ = self.selection.clear();
             }
         }
+    }
+
+    /// The end `end` becomes once a reflow to `cols` columns carries its
+    /// boundary to `boundary` on `line`; `None` when the row is gone.
+    ///
+    /// In a character selection, an end set from the right side of a cell
+    /// that lands on a row's left edge moves to the right edge of the row
+    /// above, so it still names the same cell; without a row above it
+    /// becomes the left side of the row's first cell.
+    fn land_selection_end(
+        &self,
+        end: SelectionEnd,
+        line: GridLine,
+        boundary: u16,
+        cols: u16,
+        simple: bool,
+    ) -> Option<SelectionEnd> {
+        let id = self.grid.line_id_at(line)?;
+        if !(simple && boundary == 0 && end.side() == CellSide::Right) {
+            return Some(end.relocated(id, boundary));
+        }
+        Some(match self.grid.line_id_at(GridLine(line.0 - 1)) {
+            Some(above) => end.relocated(above, cols),
+            None => SelectionEnd::at(id, GridColumn(0), CellSide::Left),
+        })
     }
 
     /// Re-anchors each placement on the position a reflow to `cols`
@@ -2079,12 +2107,12 @@ impl Riders {
         let Some((anchor, moving)) = selection.ends() else {
             return;
         };
-        let lines = [anchor, moving].map(|end| grid.grid_line(end.line));
+        let lines = [anchor, moving].map(|end| grid.grid_line(end.line()));
         let anchor_on_top = lines[0].map(|line| line.0) <= lines[1].map(|line| line.0);
         let boundaries = match selection.kind() {
             Some(SelectionKind::Lines) if anchor_on_top => [0, cols],
             Some(SelectionKind::Lines) => [cols, 0],
-            _ => [anchor.boundary, moving.boundary],
+            _ => [anchor.boundary(), moving.boundary()],
         };
         self.selection = Some([
             self.carry_selection_end(grid, lines[0], boundaries[0], cols),

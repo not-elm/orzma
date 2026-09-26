@@ -103,13 +103,23 @@ pub(crate) struct ScreenSelection {
 ///
 /// `boundary` is a cell boundary in `0..=cols`: the left side of column
 /// `c` is boundary `c`, its right side is `c + 1`, so `cols` is the
-/// right edge of the row. Two `(column, side)` pairs that name the same
-/// boundary compare equal here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// right edge of the row. The end also remembers which side of that
+/// boundary the cell it was set from lies on. Two ends that name the same
+/// boundary compare equal whatever cell they were set from.
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct SelectionEnd {
-    pub line: LineId,
-    pub boundary: u16,
+    line: LineId,
+    boundary: u16,
+    side: CellSide,
 }
+
+impl PartialEq for SelectionEnd {
+    fn eq(&self, other: &Self) -> bool {
+        self.line == other.line && self.boundary == other.boundary
+    }
+}
+
+impl Eq for SelectionEnd {}
 
 /// What a selection resolves to at one instant.
 ///
@@ -140,7 +150,43 @@ impl SelectionEnd {
             CellSide::Left => column.0,
             CellSide::Right => column.0 + 1,
         };
-        Self { line, boundary }
+        Self {
+            line,
+            boundary,
+            side,
+        }
+    }
+
+    /// The row the end sits on.
+    pub fn line(&self) -> LineId {
+        self.line
+    }
+
+    /// The cell boundary the end sits on.
+    pub fn boundary(&self) -> u16 {
+        self.boundary
+    }
+
+    /// Which side of its cell the end was set from.
+    pub fn side(&self) -> CellSide {
+        self.side
+    }
+
+    /// The column of the cell the end was set from.
+    pub fn column(&self) -> u16 {
+        match self.side {
+            CellSide::Left => self.boundary,
+            CellSide::Right => self.boundary.saturating_sub(1),
+        }
+    }
+
+    /// The end moved to `boundary` on `line`, on the same side of its cell.
+    pub fn relocated(&self, line: LineId, boundary: u16) -> Self {
+        Self {
+            line,
+            boundary,
+            side: self.side,
+        }
     }
 }
 
@@ -152,30 +198,32 @@ impl ScreenSelection {
 
     /// Anchors a new selection with both ends on `end`, replacing any
     /// active one; returns whether the state changed.
+    ///
+    /// The new end is stored even when it names the same boundary as the
+    /// old one, so the side of its cell is always current.
     pub fn start(&mut self, end: SelectionEnd, kind: SelectionKind) -> bool {
         let next = SelectionState {
             anchor: end,
             moving: end,
             kind,
         };
-        if self.state == Some(next) {
-            return false;
-        }
+        let changed = self.state != Some(next);
         self.state = Some(next);
-        true
+        changed
     }
 
     /// Moves the active selection's moving end; returns whether it
     /// moved. A no-op without an active selection.
+    ///
+    /// The new end is stored even when it names the same boundary as the
+    /// old one, so the side of its cell is always current.
     pub fn extend(&mut self, end: SelectionEnd) -> bool {
         let Some(state) = &mut self.state else {
             return false;
         };
-        if state.moving == end {
-            return false;
-        }
+        let moved = state.moving != end;
         state.moving = end;
-        true
+        moved
     }
 
     /// Drops the selection; returns whether there was one.
@@ -202,6 +250,43 @@ impl ScreenSelection {
             state.anchor = anchor;
             state.moving = moving;
         }
+    }
+
+    /// Switches the active selection's granularity, keeping its ends;
+    /// returns whether it changed. A no-op without an active selection.
+    pub fn set_kind(&mut self, kind: SelectionKind) -> bool {
+        let Some(state) = &mut self.state else {
+            return false;
+        };
+        if state.kind == kind {
+            return false;
+        }
+        state.kind = kind;
+        true
+    }
+
+    /// Moves each end onto the far side of the cell it was set from, so the
+    /// selection covers both end cells; returns whether a boundary moved.
+    /// `anchor_first` says whether the anchor's cell comes first in reading
+    /// order. An end's cell is kept at `last_column` or before. A no-op
+    /// without an active selection.
+    pub fn include_both_cells(&mut self, anchor_first: bool, last_column: u16) -> bool {
+        let Some(state) = &mut self.state else {
+            return false;
+        };
+        let (anchor_side, moving_side) = if anchor_first {
+            (CellSide::Left, CellSide::Right)
+        } else {
+            (CellSide::Right, CellSide::Left)
+        };
+        let anchor_column = GridColumn(state.anchor.column().min(last_column));
+        let moving_column = GridColumn(state.moving.column().min(last_column));
+        let anchor = SelectionEnd::at(state.anchor.line, anchor_column, anchor_side);
+        let moving = SelectionEnd::at(state.moving.line, moving_column, moving_side);
+        let changed = anchor != state.anchor || moving != state.moving;
+        state.anchor = anchor;
+        state.moving = moving;
+        changed
     }
 
     /// Resolves the endpoints through `line_of` into the range a frame
@@ -321,8 +406,147 @@ mod tests {
     #[test]
     fn a_side_converts_to_the_adjacent_boundary() {
         let grid = grid();
-        assert_eq!(end(&grid, 0, 1, CellSide::Left).boundary, 1);
-        assert_eq!(end(&grid, 0, 1, CellSide::Right).boundary, 2);
+        assert_eq!(end(&grid, 0, 1, CellSide::Left).boundary(), 1);
+        assert_eq!(end(&grid, 0, 1, CellSide::Right).boundary(), 2);
+    }
+
+    /// Asserts that an end remembers the cell it was set from, while two
+    /// ends on the same boundary still compare equal.
+    ///
+    /// Case: one drag ends on the right half of a cell and another on the
+    /// left half of the next cell.
+    #[test]
+    fn an_end_remembers_the_cell_it_was_set_from() {
+        let grid = grid();
+        let right = end(&grid, 0, 1, CellSide::Right);
+        let left = end(&grid, 0, 2, CellSide::Left);
+        assert_eq!(right, left);
+        assert_eq!(right.column(), 1);
+        assert_eq!(left.column(), 2);
+    }
+
+    /// Asserts that an extend to the boundary the moving end already
+    /// occupies stores the new side while reporting no change.
+    ///
+    /// Case: in vi mode the user presses `l` after `v`, which asks for the
+    /// left side of the next cell on the boundary the selection already
+    /// ends on.
+    #[test]
+    fn an_extend_to_the_same_boundary_stores_the_new_side() {
+        let grid = grid();
+        let mut selection = ScreenSelection::new();
+        selection.start(end(&grid, 0, 2, CellSide::Right), SelectionKind::Simple);
+        assert!(!selection.extend(end(&grid, 0, 3, CellSide::Left)));
+        let (_, moving) = selection.ends().expect("an active selection");
+        assert_eq!(moving.column(), 3);
+    }
+
+    /// Asserts that a start on the boundary the selection already holds
+    /// stores the new side while reporting no change.
+    ///
+    /// Case: in vi mode the user clicks the left half of a cell right after
+    /// clicking the right half of the cell before it.
+    #[test]
+    fn a_start_on_the_same_boundary_stores_the_new_side() {
+        let grid = grid();
+        let mut selection = ScreenSelection::new();
+        selection.start(end(&grid, 0, 2, CellSide::Right), SelectionKind::Simple);
+        assert!(!selection.start(end(&grid, 0, 3, CellSide::Left), SelectionKind::Simple));
+        let (anchor, _) = selection.ends().expect("an active selection");
+        assert_eq!(anchor.column(), 3);
+    }
+
+    /// Asserts that including both cells keeps an end's cell inside the
+    /// row even when its boundary sits on the row's right edge.
+    ///
+    /// Case: a reflow rewrites a line selection's ends to the row edges and
+    /// the user then switches it to a character selection.
+    #[test]
+    fn including_both_cells_keeps_an_edge_end_inside_the_row() {
+        let grid = grid();
+        let mut selection = ScreenSelection::new();
+        selection.start(end(&grid, 0, 1, CellSide::Left), SelectionKind::Simple);
+        selection.extend(end(&grid, 0, COLS, CellSide::Left));
+        let last_column = COLS - 1;
+        selection.include_both_cells(true, last_column);
+        let (_, moving) = selection.ends().expect("an active selection");
+        assert_eq!(moving.column(), last_column);
+        assert_eq!(moving.boundary(), COLS);
+    }
+
+    /// Asserts that including both cells makes a forward selection cover
+    /// its moving end's cell.
+    ///
+    /// Case: in vi mode the user selects from one letter to a later one,
+    /// and both letters must be copied.
+    #[test]
+    fn including_both_cells_covers_a_forward_moving_end() {
+        let grid = grid();
+        let mut selection = ScreenSelection::new();
+        selection.start(end(&grid, 0, 1, CellSide::Left), SelectionKind::Simple);
+        selection.extend(end(&grid, 0, 3, CellSide::Left));
+        assert!(selection.include_both_cells(true, COLS - 1));
+        let range = range_of(resolve(&selection, &grid));
+        assert_eq!((range.start, range.end), (point(0, 1), point(0, 3)));
+    }
+
+    /// Asserts that including both cells makes a backward selection cover
+    /// its anchor's cell.
+    ///
+    /// Case: in vi mode the user starts a selection on a letter and moves
+    /// back to an earlier one.
+    #[test]
+    fn including_both_cells_covers_a_backward_anchor() {
+        let grid = grid();
+        let mut selection = ScreenSelection::new();
+        selection.start(end(&grid, 0, 3, CellSide::Left), SelectionKind::Simple);
+        selection.extend(end(&grid, 0, 1, CellSide::Left));
+        assert!(selection.include_both_cells(false, COLS - 1));
+        let range = range_of(resolve(&selection, &grid));
+        assert_eq!((range.start, range.end), (point(0, 1), point(0, 3)));
+    }
+
+    /// Asserts that including both cells makes a one-cell selection cover
+    /// that cell.
+    ///
+    /// Case: the user presses `v` in vi mode and yanks at once.
+    #[test]
+    fn including_both_cells_covers_a_single_cell() {
+        let grid = grid();
+        let mut selection = ScreenSelection::new();
+        selection.start(end(&grid, 0, 2, CellSide::Left), SelectionKind::Simple);
+        assert_eq!(resolve(&selection, &grid), Resolved::Empty);
+        assert!(selection.include_both_cells(true, COLS - 1));
+        let range = range_of(resolve(&selection, &grid));
+        assert_eq!((range.start, range.end), (point(0, 2), point(0, 2)));
+    }
+
+    /// Asserts that `set_kind` switches the granularity once, keeping the
+    /// ends, and does nothing without a selection.
+    ///
+    /// Case: the user presses `v` and then `V` in vi mode.
+    #[test]
+    fn set_kind_switches_the_granularity_once() {
+        let grid = grid();
+        let mut selection = ScreenSelection::new();
+        assert!(!selection.set_kind(SelectionKind::Lines));
+        selection.start(end(&grid, 0, 1, CellSide::Left), SelectionKind::Simple);
+        assert!(selection.set_kind(SelectionKind::Lines));
+        assert!(!selection.set_kind(SelectionKind::Lines));
+        assert_eq!(selection.kind(), Some(SelectionKind::Lines));
+    }
+
+    /// Asserts that a relocated end keeps the side of the cell it was set
+    /// from.
+    ///
+    /// Case: a reflow moves a vi-mode selection's anchor to a new column.
+    #[test]
+    fn a_relocated_end_keeps_its_side() {
+        let grid = grid();
+        let moved = end(&grid, 0, 1, CellSide::Right).relocated(id(&grid, 1), 3);
+        assert_eq!(moved.boundary(), 3);
+        assert_eq!(moved.column(), 2);
+        assert_eq!(moved.line(), id(&grid, 1));
     }
 
     /// Asserts that a selection with nothing selected resolves to
