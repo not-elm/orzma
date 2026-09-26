@@ -65,6 +65,13 @@ pub enum OrzmuxCommand {
         /// The neighbour direction to select.
         direction: PaneDirection,
     },
+    /// Moves the active pane's divider in `direction` by `cells`.
+    ResizePaneDirection {
+        /// The direction the divider moves.
+        direction: PaneDirection,
+        /// How many cells the divider moves.
+        cells: u16,
+    },
     /// Sets whether the primary window has keyboard focus. The active pane
     /// holds focus only while the window does, and the window counts as
     /// focused until the first `WindowFocus` arrives.
@@ -164,6 +171,7 @@ impl OrzmuxCommand {
             Self::KillPane { pane } => ("KillPane", Some(*pane)),
             Self::SelectPane { pane } => ("SelectPane", Some(PaneTarget::Id(*pane))),
             Self::SelectPaneDirection { .. } => ("SelectPaneDirection", None),
+            Self::ResizePaneDirection { .. } => ("ResizePaneDirection", None),
             Self::WindowFocus { .. } => ("WindowFocus", None),
             Self::KeyInput { pane, .. } => ("KeyInput", Some(*pane)),
             Self::Paste { pane, .. } => ("Paste", Some(*pane)),
@@ -315,8 +323,9 @@ impl EventLoop {
 
     /// Applies one command. An unresolvable target and a refused PTY
     /// write are logged and dropped; `CopySelection` always answers,
-    /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
-    /// publishes one only when the active pane moved.
+    /// `SelectPane` always publishes a layout, `SelectPaneDirection`
+    /// publishes one only when the active pane moved, and
+    /// `ResizePaneDirection` only when a divider moved.
     fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.backend.set_processed(seq);
         let (name, target) = command.log_context();
@@ -349,6 +358,10 @@ impl EventLoop {
             OrzmuxCommand::SelectPane { pane } => self.backend.select_pane(pane),
             OrzmuxCommand::SelectPaneDirection { direction } => {
                 self.backend.select_pane_direction(direction);
+                Ok(())
+            }
+            OrzmuxCommand::ResizePaneDirection { direction, cells } => {
+                self.backend.resize_pane_direction(direction, cells);
                 Ok(())
             }
             OrzmuxCommand::WindowFocus { focused } => {
@@ -1433,6 +1446,96 @@ mod tests {
         h.drain();
         h.send(OrzmuxCommand::SelectPaneDirection {
             direction: PaneDirection::Left,
+        });
+        assert!(h.drain().is_empty());
+    }
+
+    /// Asserts that a directional resize moves the active pane's divider
+    /// and answers with a `Layout` carrying the moved divider.
+    ///
+    /// Case: the user presses resize-left-pane in the right of two
+    /// side-by-side panes.
+    #[test]
+    fn resize_direction_moves_the_divider_and_publishes_a_layout() {
+        let mut h = Harness::new();
+        let (_root, _root_pane) = h.open_root();
+        split_active(&mut h, 2);
+        h.drain();
+        h.send(OrzmuxCommand::ResizePaneDirection {
+            direction: PaneDirection::Left,
+            cells: 5,
+        });
+        let layout = h
+            .drain()
+            .into_iter()
+            .find_map(|event| match event {
+                OrzmuxEvent::Layout { layout, .. } => Some(layout),
+                _ => None,
+            })
+            .expect("a Layout");
+        assert_eq!(layout.separators[0].x, 35);
+    }
+
+    /// Asserts that directional resizes queued back to back each apply
+    /// instead of collapsing into the last one.
+    ///
+    /// Case: the user holds resize-left-pane, so two presses are queued
+    /// before the loop wakes.
+    #[test]
+    fn back_to_back_directional_resizes_all_apply() {
+        let mut h = Harness::new();
+        let (_root, _root_pane) = h.open_root();
+        split_active(&mut h, 2);
+        h.drain();
+        for _ in 0..2 {
+            h.queue(OrzmuxCommand::ResizePaneDirection {
+                direction: PaneDirection::Left,
+                cells: 5,
+            });
+        }
+        h.event_loop_mut().drain_commands();
+        let layouts: Vec<Layout> = h
+            .drain()
+            .into_iter()
+            .filter_map(|event| match event {
+                OrzmuxEvent::Layout { layout, .. } => Some(layout),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(layouts.len(), 2);
+        assert_eq!(
+            layouts.last().map(|layout| layout.separators[0].x),
+            Some(30)
+        );
+    }
+
+    /// Asserts that a directional resize that moves nothing publishes
+    /// nothing, whether no divider lies on the key's axis or the divider
+    /// already sits at its limit.
+    ///
+    /// Case: the user presses resize-up-pane with only side-by-side panes
+    /// open, then keeps holding resize-left-pane after the left pane has
+    /// stopped shrinking.
+    #[test]
+    fn a_directional_resize_that_moves_nothing_publishes_nothing() {
+        let mut h = Harness::new();
+        let (_root, _root_pane) = h.open_root();
+        split_active(&mut h, 2);
+        h.drain();
+        h.send(OrzmuxCommand::ResizePaneDirection {
+            direction: PaneDirection::Up,
+            cells: 5,
+        });
+        assert!(h.drain().is_empty());
+
+        h.send(OrzmuxCommand::ResizePaneDirection {
+            direction: PaneDirection::Left,
+            cells: 80,
+        });
+        h.drain();
+        h.send(OrzmuxCommand::ResizePaneDirection {
+            direction: PaneDirection::Left,
+            cells: 5,
         });
         assert!(h.drain().is_empty());
     }

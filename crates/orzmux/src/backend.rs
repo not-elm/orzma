@@ -70,16 +70,16 @@ pub enum SplitOrientation {
     Horizontal,
 }
 
-/// A neighbour direction for directional pane selection.
+/// A direction for selecting a neighbouring pane or moving a divider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneDirection {
-    /// The pane to the left of the current one.
+    /// Toward the left edge of the window.
     Left,
-    /// The pane below the current one.
+    /// Toward the bottom edge of the window.
     Down,
-    /// The pane above the current one.
+    /// Toward the top edge of the window.
     Up,
-    /// The pane to the right of the current one.
+    /// Toward the right edge of the window.
     Right,
 }
 
@@ -403,6 +403,17 @@ impl Backend {
         if self
             .geometry
             .is_some_and(|g| self.tree.resize_split(split, position, g.size))
+        {
+            self.publish_layout();
+        }
+    }
+
+    /// Moves one divider of the active pane `cells` cells in `direction`,
+    /// publishing a layout only when the tree changed.
+    pub fn resize_pane_direction(&mut self, direction: PaneDirection, cells: u16) {
+        if self
+            .geometry
+            .is_some_and(|g| self.tree.resize_direction(direction, cells, g.size))
         {
             self.publish_layout();
         }
