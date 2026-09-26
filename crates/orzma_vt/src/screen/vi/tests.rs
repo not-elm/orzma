@@ -491,13 +491,28 @@ fn a_reflow_that_drops_the_vi_cursor_row_seats_it_top_left() {
 /// scrolls off the top.
 ///
 /// Case: the user shrinks the window while a full-screen program is shown
-/// and the vi cursor sits on its bottom row.
+/// and the vi cursor sits on its middle row.
 #[test]
 fn a_truncating_resize_carries_the_vi_cursor_with_its_row() {
     let mut screen = screen(4, 3, 0);
     print_text(&mut screen, "a\nb\nc");
     assert!(screen.enter_vi_mode());
-    screen.vi.set(point(2, 0));
+    screen.vi.set(point(1, 0));
     let _ = screen.resize(GridSize { cols: 4, rows: 2 });
-    assert_eq!(vi_point(&screen), Some(point(1, 0)));
+    assert_eq!(vi_point(&screen), Some(point(0, 0)));
+}
+
+/// Asserts that a growing resize carries the vi cursor down with the rows
+/// it reclaims from history.
+///
+/// Case: the user makes a pane taller while the vi cursor sits on a line of
+/// output.
+#[test]
+fn a_growing_resize_carries_the_vi_cursor_down_with_reclaimed_rows() {
+    let mut screen = screen(4, 3, 10);
+    print_text(&mut screen, "a\nb\nc\nd");
+    assert!(screen.enter_vi_mode());
+    screen.vi.set(point(1, 0));
+    let _ = screen.resize(GridSize { cols: 4, rows: 4 });
+    assert_eq!(vi_point(&screen), Some(point(2, 0)));
 }
