@@ -6,8 +6,8 @@ work on the documentation.
 
 ## Development setup
 
-orzma builds on macOS and on Windows 10 1809+ / 11 (x64). Linux is not
-supported yet.
+orzma builds on macOS, on Windows 10 1809+ / 11 (x64), and on Linux (x86_64,
+glibc 2.35 or later).
 
 You need:
 
@@ -17,14 +17,22 @@ You need:
   `package.json`): `npm install -g pnpm@10.30.2`.
 - [just](https://just.systems).
 - On Windows, CMake and Ninja: `winget install Kitware.CMake Ninja-build.Ninja`.
+- On Linux, the build packages the release build uses — on Ubuntu or Debian,
+  `sudo apt install build-essential pkg-config libasound2-dev libudev-dev
+  libwayland-dev libxkbcommon-dev libfontconfig1-dev` — and the runtime
+  libraries that [Getting Started](https://not-elm.github.io/orzma/getting-started.html#linux)
+  lists for the tarball.
 
 Then, from the repository root:
 
 ```sh
 pnpm install
-just setup-cef   # one-time: installs the Chromium Embedded Framework and its render process
+just setup-cef   # one-time, macOS and Windows: installs the Chromium Embedded Framework and its render process
 just run         # builds and runs orzma
 ```
+
+Linux has no `just setup-cef`: the build downloads CEF and copies it beside the
+binary.
 
 | Command | What it does |
 | --- | --- |

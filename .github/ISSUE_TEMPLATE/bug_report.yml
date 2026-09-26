@@ -12,16 +12,16 @@ body:
     id: version
     attributes:
       label: orzma version
-      description: Find it with `brew info --cask orzma`.
+      description: On macOS, run `brew info --cask orzma`. Elsewhere, use the version in the name of the file you downloaded (for the `.deb`, `apt show orzma` also shows it).
       placeholder: e.g. 0.1.0
     validations:
       required: true
   - type: input
     id: os
     attributes:
-      label: macOS version
-      description: Include the chip if relevant.
-      placeholder: e.g. 14.5 (Apple Silicon)
+      label: Operating system
+      description: The name and version, and the chip or architecture if relevant.
+      placeholder: e.g. macOS 14.5 (Apple Silicon), Windows 11 24H2, Ubuntu 24.04
     validations:
       required: true
   - type: textarea

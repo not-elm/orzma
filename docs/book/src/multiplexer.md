@@ -11,9 +11,9 @@ are part of orzma itself, so there is no separate multiplexer to start.
 | Leader, then `p` | Close the active pane and end its shell. |
 | Leader, then `Shift+H` / `Shift+J` / `Shift+K` / `Shift+L` | Move a divider of the active pane 5 cells left / down / up / right. |
 
-The leader is a tap of `Cmd` on macOS or `Alt` on Windows: press and release it
-on its own, then press the next key. See [Key Bindings](key-bindings.md) to
-change the leader or these keys.
+The leader is a tap of `Cmd` on macOS or `Alt` on Windows and Linux: press and
+release it on its own, then press the next key. See
+[Key Bindings](key-bindings.md) to change the leader or these keys.
 
 A new pane becomes the active pane. You can also click a pane to make it
 active, and drag the border between two panes to resize them. When the last
@@ -46,8 +46,8 @@ axis does nothing. In vi mode each step needs the leader again.
 A pane made by a split starts in the working directory of the pane it was split
 from:
 
-- On macOS, orzma asks the system for the directory of the pane's foreground
-  program. If the system does not report one, orzma uses the directory the
+- On macOS and Linux, orzma asks the system for the directory of the pane's
+  foreground program. If the system does not report one, orzma uses the directory the
   shell last reported with the OSC 7 or OSC 9;9 escape sequence, and then the
   directory the pane started in.
 - On Windows, the directory the shell last reported comes first. orzma makes

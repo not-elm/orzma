@@ -12,7 +12,7 @@ lines.
 > implemented yet: a double-click starts an ordinary selection, and an
 > `Alt`+click selects whole lines.
 
-| Action | macOS | Windows |
+| Action | macOS | Windows and Linux |
 | --- | --- | --- |
 | Copy the selection | `Cmd+C` | `Ctrl+C` |
 | Paste | `Cmd+V` | `Ctrl+V` |
@@ -50,7 +50,7 @@ down arrow keys. The amounts and the modifier are set in the
 
 ## Font zoom
 
-| Action | macOS | Windows |
+| Action | macOS | Windows and Linux |
 | --- | --- | --- |
 | Make text larger | `Cmd+Plus` | `Ctrl+Plus` |
 | Make text smaller | `Cmd+-` | `Ctrl+-` |
@@ -79,6 +79,6 @@ the size permanently.
 ## Hyperlinks
 
 Programs can turn text into a link with the OSC 8 escape sequence. Hold `Cmd`
-on macOS or `Ctrl` on Windows and click a link to open it with the system's
+on macOS or `Ctrl` on Windows and Linux and click a link to open it with the system's
 default handler; the pointer turns into a hand while the key is held over a
 link. orzma opens only `http`, `https`, `mailto`, and `ftp` links.

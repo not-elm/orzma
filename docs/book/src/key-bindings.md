@@ -8,7 +8,7 @@ a separate table, described on the [Vi Mode](vi-mode.md) page.
 
 Most actions are bound to the *leader* followed by one more key, written
 `<Leader>` in the configuration. By default the leader is a tap of a
-modifier: `Cmd` on macOS and `Alt` on Windows. Press and release the modifier
+modifier: `Cmd` on macOS and `Alt` on Windows and Linux. Press and release the modifier
 with no other key or mouse button in between, then press the action's key.
 Holding the modifier works as usual, so `Alt+h` still reaches the shell as a
 meta-prefixed key.

@@ -30,7 +30,8 @@ orzma checks the file when it starts. A problem has one of two effects:
 
 In both cases orzma writes the reason to standard error. To read it, start
 orzma from a terminal: on macOS, run `/Applications/orzma.app/Contents/MacOS/orzma`;
-on Windows, run `orzma 2> orzma-error.txt` and open the file.
+on Linux, run `orzma`; on Windows, run `orzma 2> orzma-error.txt` and open the
+file.
 
 Unknown keys in `[mouse]` and `[inactive_pane]` are silently ignored, and the
 few values that are silently clamped or reverted are noted in the comments
@@ -48,9 +49,9 @@ and the `[vi-mode]` table in [Vi Mode](vi-mode.md).
 ```toml
 [orzma]
 # Shell launched in new panes. Default: $SHELL when it is set (on Windows,
-# only when that program exists); otherwise /bin/sh on macOS, and on Windows
-# pwsh or powershell if installed, then %COMSPEC% when it is set, then
-# cmd.exe. No ~ expansion.
+# only when that program exists); otherwise /bin/sh on macOS and Linux, and
+# on Windows pwsh or powershell if installed, then %COMSPEC% when it is set,
+# then cmd.exe. No ~ expansion.
 # shell = "/bin/zsh"
 # Whether orzma injects a prompt hook into a recognized shell (pwsh,
 # powershell, cmd) so a split pane inherits its working directory. Has
