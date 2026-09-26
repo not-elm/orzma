@@ -123,8 +123,7 @@ mod tests {
 
     /// Asserts that a mount names the entity of its pane.
     ///
-    /// Case: a program in the first pane mounts its page, and the webview
-    /// layer has to parent the page under that pane's entity.
+    /// Case: a program in the first pane mounts its page.
     #[test]
     fn a_mount_names_the_entity_of_its_pane() {
         let (mut app, events) = app();
