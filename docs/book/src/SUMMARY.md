@@ -4,6 +4,7 @@
 
 # User Guide
 
+- [Terminal Features](terminal-features.md)
 - [Vi Mode](vi-mode.md)
 
 # Reference
