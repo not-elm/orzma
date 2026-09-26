@@ -18,6 +18,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 url = "2"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.2"
 windows-sys = { version = "0.61", features = [

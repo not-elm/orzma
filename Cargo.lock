@@ -5110,6 +5110,7 @@ dependencies = [
  "crossbeam-channel",
  "data-encoding",
  "getrandom 0.2.17",
+ "libc",
  "orzma_vt",
  "serde",
  "serde_json",

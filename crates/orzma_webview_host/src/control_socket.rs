@@ -2,9 +2,11 @@
 //! events it sends, the id of each connection, and the socket's path.
 
 use crate::boundary::{ForwardChord, HandleId};
-use crate::error::RegisterError;
+use crate::error::{RegisterError, WebviewHostResult};
 use crate::host::ValidatedRegistration;
+use crate::listener::spawn_listener;
 use crate::protocol::{NavAction, ServerMsg};
+use crate::runtime_root::RuntimeRoot;
 #[cfg(any(test, feature = "test-support"))]
 use crossbeam_channel::unbounded;
 use crossbeam_channel::{Receiver, Sender};
@@ -149,9 +151,36 @@ pub enum ControlEvent {
 pub struct ControlSocket {
     sock_path: PathBuf,
     events: Receiver<ControlEvent>,
+    #[expect(
+        dead_code,
+        reason = "held only for its Drop impl, which removes the socket directory"
+    )]
+    runtime: Option<RuntimeRoot>,
 }
 
 impl ControlSocket {
+    /// Resolves the runtime directory `<parent>/<pid>/control/`, binds its
+    /// `control.sock`, and starts the listener. Dropping the socket removes
+    /// the directory; the listener threads stay parked until the process
+    /// exits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeRootError`](crate::error::RuntimeRootError) when no
+    /// candidate directory keeps the socket path within `sun_path`, and an
+    /// I/O error when a directory cannot be created or restricted or the
+    /// socket cannot be bound.
+    pub fn bind(parent: &Path, pid: u32) -> WebviewHostResult<Self> {
+        let runtime = RuntimeRoot::resolve_in(parent, pid, "control")?;
+        let sock_path = runtime.socket_path("control");
+        let events = spawn_listener(&sock_path)?;
+        Ok(Self {
+            sock_path,
+            events,
+            runtime: Some(runtime),
+        })
+    }
+
     /// A socket with no listener behind it: the returned sender stands in
     /// for the listener, and `sock_path` is only advertised to panes.
     #[cfg(any(test, feature = "test-support"))]
@@ -160,6 +189,7 @@ impl ControlSocket {
         let socket = Self {
             sock_path: sock_path.into(),
             events,
+            runtime: None,
         };
         (socket, events_tx)
     }
@@ -172,5 +202,32 @@ impl ControlSocket {
     /// The events the listener sends.
     pub fn events(&self) -> &Receiver<ControlEvent> {
         &self.events
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::uds::UnixStream;
+    use std::io::Write;
+    use std::time::Duration;
+
+    /// Asserts that a bound socket lives at `<runtime root>/sock/control.sock`
+    /// and hands a connection's `hello` to the host.
+    ///
+    /// Case: orzma starts and a pane's shell connects.
+    #[test]
+    fn a_bound_socket_hands_a_hello_to_the_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = ControlSocket::bind(dir.path(), 4245).expect("the socket binds");
+        assert!(socket.sock_path().ends_with("control/sock/control.sock"));
+        let mut client = UnixStream::connect(socket.sock_path()).unwrap();
+        writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
+        client.flush().unwrap();
+        let event = socket
+            .events()
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the hello arrives");
+        assert!(matches!(event, ControlEvent::Hello { .. }));
     }
 }

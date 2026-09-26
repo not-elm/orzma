@@ -5,6 +5,7 @@ pub mod boundary;
 pub mod control_socket;
 pub mod error;
 pub mod host;
+mod listener;
 pub mod private_dir;
 pub mod protocol;
 pub mod runtime_root;
