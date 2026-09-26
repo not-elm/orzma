@@ -39,9 +39,23 @@ Download `orzma-<version>-x64.msi` from the [latest release](https://github.com/
 
 ### Linux (x86_64)
 
-Requires glibc 2.35 or later (for example Ubuntu 22.04 / Debian 12 or newer).
+Requires glibc 2.35 or later. Use either the `.deb` or the tarball, not both: with both installed, `~/.local/bin/orzma` usually shadows `/usr/bin/orzma`.
 
-Install the system libraries the embedded Chromium and orzma itself need:
+#### Ubuntu / Debian (.deb)
+
+Tested on Ubuntu 22.04 and 24.04; other Debian-based distributions with glibc 2.35 or later may work.
+
+Download `orzma_<version>_amd64.deb` from the [latest release](https://github.com/not-elm/orzma/releases/latest), then:
+
+```bash
+sudo apt install ./orzma_<version>_amd64.deb
+```
+
+apt installs the system libraries orzma needs along with it. To uninstall, run `sudo apt remove orzma` (your settings in `~/.config/orzma` are kept).
+
+#### Other distributions (tarball)
+
+Install the system libraries the embedded Chromium and orzma itself need. The package names below are Ubuntu/Debian's; install your distribution's equivalents.
 
 Ubuntu 22.04 / Debian 12:
 
@@ -49,7 +63,8 @@ Ubuntu 22.04 / Debian 12:
 sudo apt install libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
   libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 \
   libpango-1.0-0 libcairo2 libgtk-3-0 libasound2 libdbus-1-3 libglib2.0-0 \
-  libudev1 libwayland-client0 libfontconfig1
+  libudev1 libwayland-client0 libfontconfig1 \
+  libx11-6 libx11-xcb1 libxcursor1 libxi6 libxkbcommon-x11-0 libvulkan1 libegl1
 ```
 
 Ubuntu 24.04+ / Debian 13+ (where `libasound2` is renamed `libasound2t64`):
@@ -58,7 +73,8 @@ Ubuntu 24.04+ / Debian 13+ (where `libasound2` is renamed `libasound2t64`):
 sudo apt install libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
   libgbm1 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 \
   libpango-1.0-0 libcairo2 libgtk-3-0 libasound2t64 libdbus-1-3 libglib2.0-0 \
-  libudev1 libwayland-client0 libfontconfig1
+  libudev1 libwayland-client0 libfontconfig1 \
+  libx11-6 libx11-xcb1 libxcursor1 libxi6 libxkbcommon-x11-0 libvulkan1 libegl1
 ```
 
 Download `orzma-<version>-x86_64-linux.tar.gz` from the [latest release](https://github.com/not-elm/orzma/releases/latest), then:
