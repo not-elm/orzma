@@ -37,8 +37,8 @@ pub(crate) struct KeyboardFocused;
 /// When present on an `OrzmaTerminal` entity, the host's mouse dispatchers and
 /// hover-cursor system drop it from their hit-test candidate set, so the
 /// pointer falls through to the next terminal below it. The host marks a
-/// terminal `TerminalMouseDisabled` for vi mode, IME composition, or an
-/// unfocused window.
+/// terminal `TerminalMouseDisabled` for IME composition or an unfocused
+/// window.
 #[derive(Component)]
 pub(crate) struct TerminalMouseDisabled;
 
@@ -54,7 +54,7 @@ pub(crate) struct WebviewMouseDisabled;
 /// interactive inline webview rects. The host's mouse dispatchers and
 /// hover-cursor system skip it for a new press and for hover, though a
 /// gesture already held in it keeps reaching it, and the webview router
-/// still acts on it.
+/// still acts on it. It is never set while the terminal is in vi mode.
 #[derive(Component)]
 pub(crate) struct MouseClaimedByWebview;
 
@@ -146,7 +146,7 @@ pub(in crate::input) fn maintain_input_gates(
     // conditional folds below are safe only because neither can be live while an
     // inline webview still holds focus: `webview_modal` adds the composing case
     // only while the composition has no owner, and `handle_enter_vi_mode_request`
-    // releases the focused webview before `in_vi_mode` suppresses either gate.
+    // releases the focused webview before `in_vi_mode` suppresses the webview gate.
     let mouse_modal = ime.is_composing() || !focused;
     let webview_modal = !focused || (ime.is_composing() && focused_webview.0.is_none());
     let claimed = window.and_then(|w| cursor_claims_webview(w, &claim));
@@ -163,7 +163,7 @@ pub(in crate::input) fn maintain_input_gates(
             &mut commands,
             entity,
             TerminalMouseDisabled,
-            mouse_modal || in_vi_mode,
+            mouse_modal,
             has_terminal,
         );
         set_marker(
@@ -177,7 +177,7 @@ pub(in crate::input) fn maintain_input_gates(
             &mut commands,
             entity,
             MouseClaimedByWebview,
-            Some(entity) == claimed,
+            Some(entity) == claimed && !in_vi_mode,
             has_claim,
         );
     }
@@ -842,25 +842,44 @@ mod tests {
         );
     }
 
-    /// Asserts that vi mode sets both gates.
+    /// Asserts that vi mode sets the webview gate but leaves the terminal's
+    /// own mouse input enabled.
     ///
-    /// Case: the user enters vi mode to scroll back through output in a pane
+    /// Case: the user enters vi mode to select text with the mouse in a pane
     /// that has a page mounted in it.
     #[test]
-    fn vi_mode_sets_both_gates() {
+    fn vi_mode_sets_only_the_webview_gate() {
         let (mut app, shell) = make_gate_app();
         app.world_mut().entity_mut(shell).insert(ViModeState);
         set_gate_cursor(&mut app, Vec2::new(400.0, 400.0));
         app.update();
         assert!(
-            app.world()
+            !app.world()
                 .entity(shell)
                 .contains::<TerminalMouseDisabled>(),
-            "vi mode suppresses terminal mouse input"
+            "vi mode keeps terminal mouse selection and the wheel working"
         );
         assert!(
             app.world().entity(shell).contains::<WebviewMouseDisabled>(),
             "vi mode must reach the page too, or a click in vi mode still drives it"
+        );
+    }
+
+    /// Asserts that a webview rect under the cursor does not claim the
+    /// pointer while the terminal is in vi mode.
+    ///
+    /// Case: in vi mode the user starts a drag over a mounted page to select
+    /// the terminal text around it.
+    #[test]
+    fn vi_mode_keeps_a_webview_rect_from_claiming_the_pointer() {
+        let (mut app, shell) = make_gate_app();
+        app.world_mut().entity_mut(shell).insert(ViModeState);
+        set_gate_cursor(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        assert!(
+            !app.world()
+                .entity(shell)
+                .contains::<MouseClaimedByWebview>()
         );
     }
 

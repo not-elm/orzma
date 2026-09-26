@@ -316,7 +316,7 @@ pane scrolled back into its history always selects in orzma too, whether
 or not Shift is held.
 
 Two stock `[vi-mode]` keys share a chord with these defaults. Inside vi mode
-`Ctrl+V` toggles a rectangular selection (the paste action is inert there
+`Ctrl+V` runs `toggle-rect-selection` (the paste action is inert there
 anyway), and `Ctrl+C` leaves vi mode whenever there is no selection to copy.
 
 Binding `paste` to `Ctrl+V` does take that key away from the program running in
@@ -536,7 +536,7 @@ binding still runs:
 | `scroll-down` | `Ctrl+E` | Scroll one line down. |
 | `toggle-selection` | `v`, `Space` | Toggle a character-wise selection. |
 | `toggle-line-selection` | `V` | Toggle a line-wise selection. |
-| `toggle-rect-selection` | `Ctrl+V` | Toggle a rectangular (block) selection. |
+| `toggle-rect-selection` | `Ctrl+V` | Toggle a rectangular (block) selection (currently toggles a line-wise selection). |
 | `yank` | `y`, `Enter` | Copy the selection to the clipboard and leave vi mode. |
 | `exit` | `q`, `Escape`, `Ctrl+C` | Leave vi mode. |
 | `search-forward` | `/` | Open the search-down prompt (currently has no effect). |
@@ -555,8 +555,15 @@ The 8 prompt/search actions (`search-forward`, `search-backward`,
 `jump-to-forward`, `jump-to-backward` — i.e. the stock `/ ? n N f F t T`
 keys) currently have no effect: the key press is swallowed (no prompt opens,
 nothing happens) while vi mode is active. Local vi-mode search is a future
-feature. Every other action works today, including `toggle-rect-selection`
-(`Ctrl+V`), which toggles a real rectangular selection.
+feature. `toggle-rect-selection` (`Ctrl+V`) currently toggles a line-wise
+selection, because rectangular selection is not implemented yet. Every other
+action works.
+
+The mouse keeps working in vi mode: a click moves the vi cursor, a drag
+selects text (and moves the vi cursor to where the drag ends), and the wheel
+scrolls the scrollback, even while a program such as nvim tracks the mouse.
+A selection started with the mouse can be extended with the motion keys, and
+the other way round.
 
 ### Escape semantics
 

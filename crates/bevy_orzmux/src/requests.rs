@@ -33,8 +33,7 @@ pub use paste::{RequestActivePaste, RequestTtyPaste};
 pub use pointer::RequestTtyPointer;
 pub use scroll::RequestTtyScroll;
 pub use selection::{
-    CellSide, GridPoint, RequestTtySelectionClear, RequestTtySelectionKindChange,
-    RequestTtySelectionStartAtViCursor, RequestTtyViSelectionToggle, SelectionKind,
+    CellSide, GridPoint, RequestTtySelectionClear, RequestTtyViSelectionToggle, SelectionKind,
 };
 pub use split_resize::RequestSplitResize;
 pub use vi_mode::{RequestTtyViMode, ViModeSwitch};

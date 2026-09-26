@@ -7,28 +7,6 @@ use bevy::prelude::*;
 pub use orzma_vt::prelude::{CellSide, GridPoint, SelectionKind};
 use orzmux::prelude::OrzmuxCommand;
 
-/// Fired by the host UI to anchor a new selection at the vi cursor
-/// (vi-mode `v` / `V`). The backend has no vi mode, so applying it does
-/// nothing.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct RequestTtySelectionStartAtViCursor {
-    #[event_target]
-    pub terminal: Entity,
-    /// Granularity of the new selection.
-    pub kind: SelectionKind,
-}
-
-/// Fired by the host UI to switch selection granularity while keeping
-/// the anchor (vi-mode `v` while `V` is active, and the reverse). The
-/// backend has no vi mode, so applying it does nothing.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct RequestTtySelectionKindChange {
-    #[event_target]
-    pub terminal: Entity,
-    /// The granularity to switch to.
-    pub kind: SelectionKind,
-}
-
 /// Fired by the host UI to start, re-kind, or clear a vi-mode selection at
 /// the vi cursor (vi-mode `v` / `V`); the terminal resolves the toggle
 /// against its own selection.
@@ -51,16 +29,10 @@ pub(super) struct SelectionPlugin;
 
 impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(start_selection_at_vi_cursor)
-            .add_observer(change_selection_kind)
-            .add_observer(toggle_vi_selection.run_if(resource_exists::<OrzmuxConnection>))
+        app.add_observer(toggle_vi_selection.run_if(resource_exists::<OrzmuxConnection>))
             .add_observer(clear_selection.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
-
-fn start_selection_at_vi_cursor(_e: On<RequestTtySelectionStartAtViCursor>) {}
-
-fn change_selection_kind(_e: On<RequestTtySelectionKindChange>) {}
 
 fn toggle_vi_selection(e: On<RequestTtyViSelectionToggle>, panes: PaneSender) {
     panes.send_for(e.terminal, |pane| OrzmuxCommand::ViSelectionToggle {
