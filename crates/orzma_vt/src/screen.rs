@@ -1716,7 +1716,8 @@ impl Screen {
     /// either end is gone.
     ///
     /// An end that stood on the right edge of a row ending its logical line
-    /// lands on the right edge again.
+    /// lands on the right edge again. In vi mode the landed selection covers
+    /// both of its end cells.
     fn land_selection(&mut self, riders: &Riders, ends: [(usize, bool); 2], cols: u16) {
         let Some((anchor, moving)) = self.selection.ends() else {
             return;
@@ -1730,42 +1731,46 @@ impl Screen {
                     } else {
                         point.boundary().min(cols)
                     };
-                    self.land_selection_end(end, point.line(), boundary, cols, vi_simple)
+                    self.land_selection_end(end, point.line(), boundary, vi_simple)
                 })
             });
         match landed {
-            [Some(anchor), Some(moving)] => self.selection.relocate(anchor, moving),
+            [Some(anchor), Some(moving)] => {
+                self.selection.relocate(anchor, moving);
+                if self.is_vi_mode() {
+                    let _ = self.include_selection_cells();
+                }
+            }
             _ => {
                 let _ = self.selection.clear();
             }
         }
     }
 
-    /// The end `end` becomes once a reflow to `cols` columns carries its
-    /// boundary to `boundary` on `line`; `None` when the row is gone.
-    /// `vi_simple` says whether the selection is a character selection in
-    /// vi mode.
+    /// The end `end` becomes once a reflow carries its boundary to
+    /// `boundary` on `line`; `None` when the row is gone. `vi_simple` says
+    /// whether the selection is a character selection in vi mode.
     ///
     /// In a character selection in vi mode, an end set from the right side
     /// of a cell that lands on the left edge of a row the row above wraps
-    /// onto moves to the right edge of the row above, so it still names the
-    /// same cell.
+    /// onto moves to where the row above wraps, so it still names the same
+    /// cell.
     fn land_selection_end(
         &self,
         end: SelectionEnd,
         line: GridLine,
         boundary: u16,
-        cols: u16,
         vi_simple: bool,
     ) -> Option<SelectionEnd> {
         let id = self.grid.line_id_at(line)?;
         let above = GridLine(line.0 - 1);
-        let relands = vi_simple
-            && boundary == 0
-            && end.side() == CellSide::Right
-            && self.grid.wrap_at(above).is_some();
-        Some(match self.grid.line_id_at(above) {
-            Some(above_id) if relands => end.relocated(above_id, cols),
+        let wraps_above = if vi_simple && boundary == 0 && end.side() == CellSide::Right {
+            self.grid.wrap_at(above)
+        } else {
+            None
+        };
+        Some(match (wraps_above, self.grid.line_id_at(above)) {
+            (Some(cells), Some(above_id)) => end.relocated(above_id, cells),
             _ => end.relocated(id, boundary),
         })
     }

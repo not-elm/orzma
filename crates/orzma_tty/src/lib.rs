@@ -294,9 +294,12 @@ impl<V: Vt> OrzmaTty<V> {
     /// selection's moving end follows it onto the cell now under the
     /// pointer.
     pub fn scroll(&mut self, scroll: Scroll) {
+        let offset = self.vt.display_offset();
         if self.vt.scroll(scroll) {
             self.coalescer.arm_or_extend(Instant::now());
-            self.follow_drag_end();
+            if self.vt.display_offset() != offset {
+                self.follow_drag_end();
+            }
         }
     }
 

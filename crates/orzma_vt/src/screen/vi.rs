@@ -8,7 +8,7 @@ use crate::frame::damage::DamageSpan;
 use crate::screen::Screen;
 use crate::screen::cell::CellWidth;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint};
-use crate::screen::selection::{CellSide, Resolved, SelectionKind};
+use crate::screen::selection::{CellSide, SelectionKind};
 use crate::screen::viewport::Scroll;
 
 /// Vi-mode cursor position in active-grid coordinates.
@@ -89,9 +89,10 @@ impl SemanticEscapeChars {
         Self(chars.to_owned())
     }
 
-    /// Whether `c` ends a semantic word.
+    /// Whether `c` ends a semantic word: a blank, a tab, or one of the
+    /// characters the set was built from.
     pub fn contains(&self, c: char) -> bool {
-        self.0.contains(c)
+        matches!(c, ' ' | '\t') || self.0.contains(c)
     }
 }
 
@@ -312,7 +313,7 @@ impl Screen {
             return ViewChange::Unchanged;
         };
         let to =
-            MotionGrid::new(&self.grid, self.viewport.offset, escape_chars).apply(from, motion);
+            MotionGrid::new(&self.grid, self.viewport_lines(), escape_chars).apply(from, motion);
         let moved = self.vi.set(to);
         let damage = self.scroll_to_vi_cursor();
         let followed = self.follow_vi_cursor();
@@ -327,12 +328,11 @@ impl Screen {
     /// view. A page or half-page motion moves the vi cursor by the same
     /// number of rows onto that row's first non-blank cell, or onto its
     /// first column when the row is blank. `Top` and `Bottom` put the vi
-    /// cursor on the oldest row and on the bottom row and apply
-    /// [`ViMotion::FirstOccupied`] there, `Bottom` twice: the vi cursor
-    /// lands on the row's first non-blank cell, on the last column when the
-    /// row is blank, and, for `Bottom`, on the first non-blank cell of the
-    /// logical line when the bottom row continues a wrapped line. Outside
-    /// vi mode it moves only the viewport.
+    /// cursor on the oldest row and on the bottom row: it lands on the
+    /// row's first non-blank cell, or on the last column when the row is
+    /// blank, and for `Bottom` on the first non-blank cell of the logical
+    /// line when the bottom row continues a wrapped line. Outside vi mode it
+    /// moves only the viewport.
     ///
     /// A selection that covers a cell follows the vi cursor, covering both
     /// of its end cells. The damage is [`DamageSpan::Full`] exactly when
@@ -343,7 +343,7 @@ impl Screen {
         };
         let rows = i32::from(self.grid.size().rows);
         let target = {
-            let grid = MotionGrid::new(&self.grid, self.viewport.offset, escape_chars);
+            let grid = MotionGrid::new(&self.grid, self.viewport_lines(), escape_chars);
             match scroll {
                 Scroll::Delta(_) => None,
                 Scroll::PageUp => Some(grid.scroll_target(from, rows)),
@@ -389,7 +389,7 @@ impl Screen {
         let current = self
             .selection
             .kind()
-            .filter(|_| self.has_nonempty_selection());
+            .filter(|_| self.selection_range().is_some());
         match current {
             Some(current) if current == kind => self.selection.clear(),
             Some(_) => {
@@ -443,15 +443,6 @@ impl Screen {
         self.scroll(Scroll::Delta(delta))
     }
 
-    /// Whether a selection exists that covers at least one cell.
-    fn has_nonempty_selection(&self) -> bool {
-        matches!(
-            self.selection
-                .resolve(|id| self.grid.grid_line(id), self.grid.size().cols),
-            Resolved::Range(_)
-        )
-    }
-
     /// Moves a selection that covers a cell so its moving end sits on the
     /// vi cursor's cell and both end cells are covered; returns whether the
     /// selection changed.
@@ -459,7 +450,7 @@ impl Screen {
         let Some(point) = self.vi_cursor().map(|cursor| cursor.point) else {
             return false;
         };
-        if !self.has_nonempty_selection() {
+        if self.selection_range().is_none() {
             return false;
         }
         let Some(end) = self.selection_end(point, CellSide::Left) else {

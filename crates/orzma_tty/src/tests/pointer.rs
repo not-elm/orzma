@@ -125,7 +125,6 @@ fn a_viewport_scroll_moves_a_held_drag_end() {
         .expect("press");
     term.send_pointer(motion(5, 2)).expect("motion");
     term.vt.scroll_moves = true;
-    term.vt.display_offset = DisplayOffset(3);
     term.scroll(Scroll::Delta(3));
     assert_eq!(
         term.vt.selections.last(),

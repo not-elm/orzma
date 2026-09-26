@@ -201,10 +201,9 @@ pub trait Vt {
     /// scrolls out of view. A page or half-page motion moves the vi cursor
     /// by the same number of rows onto that row's first non-blank cell, or
     /// onto its first column when the row is blank. `Top` and `Bottom` put
-    /// the vi cursor on the oldest row and on the bottom row and apply
-    /// [`ViMotion::FirstOccupied`] there, `Bottom` twice: the vi cursor
-    /// lands on the row's first non-blank cell, on the last column when the
-    /// row is blank, and, for `Bottom`, on the first non-blank cell of the
+    /// the vi cursor on the oldest row and on the bottom row: it lands on
+    /// the row's first non-blank cell, or on the last column when the row
+    /// is blank, and for `Bottom` on the first non-blank cell of the
     /// logical line when the bottom row continues a wrapped line.
     ///
     /// In vi mode a selection that covers a cell then moves its moving end
@@ -265,11 +264,11 @@ pub trait Vt {
 
     /// Enters or leaves vi mode; returns whether the mode changed.
     ///
-    /// Entering drops the selection and seats the vi cursor on the write
-    /// cursor, or on the viewport's top-left cell when the viewport is
-    /// scrolled back past it. Leaving drops the vi cursor and the
-    /// selection and returns the viewport to the live tail. A switch to
-    /// the mode already in force returns `false`.
+    /// Entering drops the selection of both screens and seats the vi cursor
+    /// on the write cursor, or on the viewport's top-left cell when the
+    /// viewport is scrolled back past it. Leaving drops the vi cursor and
+    /// the selection of both screens and returns the viewport to the live
+    /// tail. A switch to the mode already in force returns `false`.
     fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> bool;
 
     /// Moves the vi cursor by `motion` and scrolls the viewport just far
@@ -499,11 +498,8 @@ impl Vt for OrzmaVt {
     }
 
     fn scroll(&mut self, scroll: Scroll) -> bool {
-        if self.device.is_vi_mode() {
-            let change = self.device.vi_scroll(scroll);
-            return self.settle_view_change(change);
-        }
-        self.tracker.stage_if_changed(self.device.scroll(scroll))
+        let change = self.device.scroll(scroll);
+        self.settle_view_change(change)
     }
 
     fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool {
@@ -1929,5 +1925,76 @@ mod tests {
         assert!(vt.toggle_vi_selection(SelectionKind::Simple));
         vt.vi_motion(ViMotion::SemanticRightEnd);
         assert_eq!(vt.selection_text().as_deref(), Some("hello"));
+    }
+
+    /// Asserts that entering vi mode also drops the selection the primary
+    /// screen keeps hidden under the alternate screen, so it does not come
+    /// back as a vi selection.
+    ///
+    /// Case: the user drag-selects a word at the shell, runs `less`, enters
+    /// vi mode over it, and `less` then exits on its own.
+    #[test]
+    fn entering_vi_mode_drops_the_hidden_primary_selection() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10);
+        vt.interpret(b"foo bar");
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(0, 2), CellSide::Right);
+        vt.interpret(b"\x1b[?1049h");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.interpret(b"\x1b[?1049l");
+        assert!(vt.is_vi_mode());
+        assert_eq!(vt.selection_text(), None);
+        assert!(vt.toggle_vi_selection(SelectionKind::Simple));
+        assert_eq!(
+            projected(&vt).map(|range| range.start),
+            vt.vi_cursor().map(|cursor| cursor.point)
+        );
+    }
+
+    /// Asserts that leaving vi mode on the alternate screen also drops a vi
+    /// selection the primary screen keeps hidden.
+    ///
+    /// Case: the user selects shell output in vi mode, a program opens the
+    /// alternate screen, the user leaves vi mode there, and the program
+    /// exits.
+    #[test]
+    fn leaving_vi_mode_drops_the_hidden_primary_selection() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10);
+        vt.interpret(b"foo bar");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::First);
+        vt.toggle_vi_selection(SelectionKind::Simple);
+        vt.vi_motion(ViMotion::Right);
+        vt.interpret(b"\x1b[?1049h");
+        assert!(vt.switch_vi_mode(ViModeSwitch::Exit));
+        vt.interpret(b"\x1b[?1049l");
+        assert!(!vt.is_vi_mode());
+        assert_eq!(vt.selection_text(), None);
+    }
+
+    /// Asserts that a flip back to the primary screen that rewraps it keeps
+    /// a vi selection's anchor on the cell it was set from.
+    ///
+    /// Case: in vi mode the user selects `bcd` backward from `d`, a program
+    /// opens the alternate screen, the window narrows so that `d` ends a
+    /// row, the program exits, and the user presses `H`.
+    #[test]
+    fn a_rewrapping_flip_back_keeps_a_vi_anchor_on_its_cell() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 4 }, 10);
+        vt.interpret(b"abcdefgh");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::First);
+        for _ in 0..3 {
+            vt.vi_motion(ViMotion::Right);
+        }
+        vt.toggle_vi_selection(SelectionKind::Simple);
+        vt.vi_motion(ViMotion::Left);
+        vt.vi_motion(ViMotion::Left);
+        assert_eq!(vt.selection_text().as_deref(), Some("bcd"));
+        vt.interpret(b"\x1b[?1049h");
+        let _ = vt.resize(GridSize { cols: 4, rows: 4 });
+        vt.interpret(b"\x1b[?1049l");
+        vt.vi_motion(ViMotion::High);
+        assert_eq!(vt.selection_text().as_deref(), Some("abcd"));
     }
 }

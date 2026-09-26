@@ -6,26 +6,26 @@ use crate::screen::grid::Grid;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint};
 use crate::screen::grid::run::Style;
 use crate::screen::vi::{SemanticEscapeChars, ViMotion};
-use crate::screen::viewport::DisplayOffset;
 
 /// The grid a vi motion reads, with the viewport and the word separators
 /// the motion resolves against.
 pub(crate) struct MotionGrid<'a> {
     grid: &'a Grid,
-    offset: DisplayOffset,
+    viewport: (GridLine, GridLine),
     escape_chars: &'a SemanticEscapeChars,
 }
 
 impl<'a> MotionGrid<'a> {
-    /// Builds the reader for `grid` shown at `offset`.
+    /// Builds the reader for `grid`, whose viewport shows the lines
+    /// `viewport.0` through `viewport.1`.
     pub fn new(
         grid: &'a Grid,
-        offset: DisplayOffset,
+        viewport: (GridLine, GridLine),
         escape_chars: &'a SemanticEscapeChars,
     ) -> Self {
         Self {
             grid,
-            offset,
+            viewport,
             escape_chars,
         }
     }
@@ -203,11 +203,8 @@ impl<'a> MotionGrid<'a> {
     }
 
     fn viewport_row(&self, rows_below_top: i32) -> GridPoint {
-        let offset = i32::try_from(self.offset.0).unwrap_or(i32::MAX);
-        let rows = i32::from(self.grid.size().rows);
-        let top = -offset;
-        let bottom = rows - 1 - offset;
-        let line = GridLine((top + rows_below_top).clamp(top, bottom));
+        let (top, bottom) = self.viewport;
+        let line = GridLine((top.0 + rows_below_top).clamp(top.0, bottom.0));
         let column = self
             .first_occupied_in_line(line)
             .map_or(GridColumn(0), |occupied| occupied.column);
@@ -463,9 +460,8 @@ impl<'a> MotionGrid<'a> {
     /// Whether the glyph at `point` ends a semantic word: a blank, a tab, or
     /// one of the configured separators.
     fn is_separator(&self, point: GridPoint) -> bool {
-        self.cell(point).is_some_and(|cell| {
-            !is_spacer(cell) && (matches!(cell.c, ' ' | '\t') || self.escape_chars.contains(cell.c))
-        })
+        self.cell(point)
+            .is_some_and(|cell| !is_spacer(cell) && self.escape_chars.contains(cell.c))
     }
 
     fn is_wrap(&self, point: GridPoint) -> bool {

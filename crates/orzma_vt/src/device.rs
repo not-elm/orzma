@@ -120,29 +120,29 @@ impl DeviceState {
         }
     }
 
-    /// Moves the active viewport; `None` for a clamped or zero motion.
-    ///
-    /// # Invariants
-    ///
-    /// A motion that moves the viewport reports [`DamageSpan::Full`].
-    pub fn scroll(&mut self, scroll: Scroll) -> Option<DamageSpan> {
-        self.active_screen_mut().scroll(scroll)
-    }
-
     /// Enters or leaves vi mode on the screen on show; returns what the
     /// next frame owes for it, [`ViewChange::Unchanged`] when that mode was
     /// already in force.
     ///
-    /// Entering drops the selection and seats the vi cursor on the write
-    /// cursor, or on the viewport's top-left cell when the viewport is
-    /// scrolled back past the write cursor. Leaving drops the vi cursor and
-    /// the selection and returns the viewport to the live tail.
+    /// Entering drops the selection of both screens and seats the vi cursor
+    /// on the write cursor, or on the viewport's top-left cell when the
+    /// viewport is scrolled back past the write cursor. Leaving drops the vi
+    /// cursor and the selection of both screens and returns the viewport to
+    /// the live tail.
     pub fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> ViewChange {
-        let screen = self.active_screen_mut();
-        match switch {
-            ViModeSwitch::Enter => ViewChange::classify(screen.enter_vi_mode(), None),
-            ViModeSwitch::Exit => screen.exit_vi_mode(),
+        let change = match switch {
+            ViModeSwitch::Enter => {
+                ViewChange::classify(self.active_screen_mut().enter_vi_mode(), None)
+            }
+            ViModeSwitch::Exit => self.active_screen_mut().exit_vi_mode(),
+        };
+        if change.is_changed() {
+            let _ = self
+                .screens
+                .other_mut(self.modes.active_screen)
+                .clear_selection();
         }
+        change
     }
 
     /// Whether vi mode is on.
@@ -168,12 +168,13 @@ impl DeviceState {
     }
 
     /// Applies a viewport motion to the screen on show; returns what the
-    /// next frame owes for it.
+    /// next frame owes for it, [`ViewChange::Repainted`] exactly when the
+    /// viewport moved.
     ///
     /// In vi mode the vi cursor moves with the viewport, and a selection
     /// that covers a cell then moves its moving end onto the vi cursor's
     /// cell, covering both of its end cells.
-    pub fn vi_scroll(&mut self, scroll: Scroll) -> ViewChange {
+    pub fn scroll(&mut self, scroll: Scroll) -> ViewChange {
         let screen = self.screens.get_mut(self.modes.active_screen);
         screen.vi_scroll(scroll, &self.semantic_escape_chars)
     }
@@ -777,7 +778,14 @@ impl DeviceState {
         // only on a real flip, so a repeated set on the screen already
         // shown leaves such a link open.
         self.active_hyperlink = None;
-        let evicted = match to {
+        // NOTE: The vi cursor must be seated before the primary screen's
+        // deferred reflow below. Seated after it, the reflow lands a vi-mode
+        // selection by the rules outside vi mode, and a selection end set from
+        // the right side of a cell can come to name the next cell.
+        if vi_mode {
+            let _ = self.active_screen_mut().seat_vi_cursor();
+        }
+        match to {
             ScreenKind::Alternate => Vec::new(),
             ScreenKind::Primary => {
                 self.screens.alternate.clear_selection();
@@ -786,11 +794,7 @@ impl DeviceState {
                 let _ = self.screens.primary.reflow(size, self.scrollback_on_grow);
                 evicted
             }
-        };
-        if vi_mode {
-            let _ = self.active_screen_mut().seat_vi_cursor();
         }
-        evicted
     }
 
     fn supersede_placement(&mut self, id: InstanceId) {
@@ -816,6 +820,14 @@ impl Screens {
         match kind {
             ScreenKind::Primary => &mut self.primary,
             ScreenKind::Alternate => &mut self.alternate,
+        }
+    }
+
+    /// The screen `kind` does not name.
+    fn other_mut(&mut self, kind: ScreenKind) -> &mut Screen {
+        match kind {
+            ScreenKind::Primary => &mut self.alternate,
+            ScreenKind::Alternate => &mut self.primary,
         }
     }
 }
@@ -929,7 +941,7 @@ mod tests {
             device.active_screen_mut().move_cursor_to(Some(3), None);
             device.active_screen_mut().line_feed();
         }
-        assert_eq!(device.scroll(Scroll::Top), Some(DamageSpan::Full));
+        assert_eq!(device.scroll(Scroll::Top), ViewChange::Repainted);
         assert_eq!(device.display_offset(), DisplayOffset(5));
         device.switch_screen(ScreenKind::Alternate);
         assert_eq!(device.display_offset(), DisplayOffset(0));
@@ -943,8 +955,8 @@ mod tests {
     fn a_scroll_on_the_alternate_screen_reports_nothing() {
         let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
         device.switch_screen(ScreenKind::Alternate);
-        assert_eq!(device.scroll(Scroll::Top), None);
-        assert_eq!(device.scroll(Scroll::PageUp), None);
+        assert_eq!(device.scroll(Scroll::Top), ViewChange::Unchanged);
+        assert_eq!(device.scroll(Scroll::PageUp), ViewChange::Unchanged);
         assert_eq!(device.display_offset(), DisplayOffset(0));
     }
 

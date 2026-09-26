@@ -145,8 +145,9 @@ fn exiting_at_the_live_tail_repaints_nothing() {
 /// Asserts that a change is classified by whether the viewport moved
 /// first and by whether carried state changed second.
 ///
-/// Case: a vi operation reports a viewport motion, a carried change, both,
-/// or neither.
+/// Case: the user presses `k` on the viewport's top row with scrollback
+/// above it, so one motion both moves the vi cursor and scrolls the
+/// viewport.
 #[test]
 fn a_view_change_is_classified_by_the_viewport_first() {
     assert_eq!(ViewChange::classify(false, None), ViewChange::Unchanged);
@@ -552,8 +553,59 @@ fn a_reflow_keeps_a_right_side_selection_end_on_its_blank_line() {
     let _ = screen.reflow(GridSize { cols: 4, rows: 4 }, ScrollbackOnGrow::Reclaim);
     let (_, moving) = screen.selection.ends().expect("an active selection");
     assert_eq!(Some(moving.line()), screen.grid.line_id_at(GridLine(2)));
-    assert!(screen.selection.include_both_cells(true, 3));
     assert_eq!(screen.selection_text().as_deref(), Some("abcdefgh\n"));
+}
+
+/// Asserts that a reflow in vi mode keeps a selection end set from the
+/// right side of a cell on that cell when the row above ends in a wrap
+/// filler.
+///
+/// Case: in vi mode the user selects backward from `b` in `ab日xy`,
+/// narrows the window so `日` no longer fits after `b`, and presses `j`.
+#[test]
+fn a_reflow_keeps_a_right_side_end_on_its_cell_before_a_wrap_filler() {
+    let mut screen = screen(6, 3, 10);
+    print_text(&mut screen, "ab日xy");
+    assert!(screen.enter_vi_mode());
+    screen.vi.set(point(0, 1));
+    assert!(screen.toggle_vi_selection(SelectionKind::Simple));
+    let _ = screen.vi_motion(ViMotion::Left, &chars());
+    let _ = screen.reflow(GridSize { cols: 3, rows: 3 }, ScrollbackOnGrow::Reclaim);
+    let (anchor, _) = screen.selection.ends().expect("an active selection");
+    assert_eq!(anchor.column(), 1);
+    let _ = screen.vi_motion(ViMotion::Down, &chars());
+    assert_eq!(screen.selection_text().as_deref(), Some("b日"));
+}
+
+/// Asserts that a copy right after a reflow in vi mode still includes a
+/// blank line the selection ended on.
+///
+/// Case: in vi mode the user presses `v`, moves down onto an empty line,
+/// narrows the window, and yanks at once.
+#[test]
+fn a_reflow_in_vi_mode_keeps_a_blank_end_line_selected() {
+    let mut screen = screen(10, 4, 10);
+    print_text(&mut screen, "abcdefgh\n\nxy");
+    assert!(screen.enter_vi_mode());
+    screen.vi.set(point(0, 0));
+    assert!(screen.toggle_vi_selection(SelectionKind::Simple));
+    let _ = screen.vi_motion(ViMotion::Down, &chars());
+    let _ = screen.reflow(GridSize { cols: 4, rows: 4 }, ScrollbackOnGrow::Reclaim);
+    assert_eq!(screen.selection_text().as_deref(), Some("abcdefgh\n"));
+}
+
+/// Asserts that a blank and a tab end a semantic word whatever characters
+/// the separator set was built from.
+///
+/// Case: the user sets `semantic_escape_chars = "-"`, which leaves the
+/// blank out.
+#[test]
+fn whitespace_ends_a_semantic_word_in_any_separator_set() {
+    let chars = SemanticEscapeChars::new("-");
+    assert!(chars.contains(' '));
+    assert!(chars.contains('\t'));
+    assert!(chars.contains('-'));
+    assert!(!chars.contains('a'));
 }
 
 /// A 10×3 screen reading `hello` on its top row, in vi mode with the vi

@@ -37,6 +37,11 @@ fn push_history(grid: &mut Grid, count: usize) {
     }
 }
 
+/// The first and the last lines of `grid`'s viewport at the live tail.
+fn live_viewport(grid: &Grid) -> (GridLine, GridLine) {
+    (GridLine(0), GridLine(i32::from(grid.size().rows) - 1))
+}
+
 /// Applies each of `motions` in turn from `from`, returning every point
 /// visited.
 fn walk(grid: &Grid, from: GridPoint, motions: &[ViMotion]) -> Vec<GridPoint> {
@@ -49,7 +54,7 @@ fn walk_with(
     from: GridPoint,
     motions: &[ViMotion],
 ) -> Vec<GridPoint> {
-    let motion_grid = MotionGrid::new(grid, DisplayOffset(0), chars);
+    let motion_grid = MotionGrid::new(grid, live_viewport(grid), chars);
     let mut at = from;
     motions
         .iter()
@@ -431,7 +436,7 @@ fn page_targets_stop_at_the_grid_edges() {
     let mut grid = grid();
     push_history(&mut grid, 40);
     let chars = SemanticEscapeChars::default();
-    let motion_grid = MotionGrid::new(&grid, DisplayOffset(0), &chars);
+    let motion_grid = MotionGrid::new(&grid, live_viewport(&grid), &chars);
     let mut at = point(19, 0);
     let up: Vec<GridPoint> = (0..4)
         .map(|_| {
@@ -527,7 +532,7 @@ fn a_row_ending_in_a_leading_spacer_wraps_at_its_last_column() {
     grid.set_wrap_at(GridLine(0), 19);
     put_wide(&mut grid, 1, 0, '汉');
     let chars = SemanticEscapeChars::default();
-    let motion_grid = MotionGrid::new(&grid, DisplayOffset(0), &chars);
+    let motion_grid = MotionGrid::new(&grid, live_viewport(&grid), &chars);
     assert!(motion_grid.is_wrap(point(0, 19)));
     assert!(!motion_grid.is_wrap(point(0, 18)));
     assert_eq!(

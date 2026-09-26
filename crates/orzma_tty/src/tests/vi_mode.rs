@@ -191,3 +191,30 @@ fn a_release_after_entering_vi_mode_still_reaches_the_app() {
     assert_eq!(written.iter().filter(|&&byte| byte == 0x1b).count(), 2);
     assert!(written.ends_with(b"m"));
 }
+
+/// Asserts that a vi page motion that cannot move the viewport still moves
+/// the vi cursor while a mouse drag is held.
+///
+/// Case: in vi mode at the live tail the user holds a drag across a word
+/// and presses `Ctrl+D`.
+#[test]
+fn a_page_motion_during_a_held_drag_moves_the_vi_cursor() {
+    let (mut term, _sink) = real_term(4);
+    term.feed_bytes(b"ab\r\ncd\r\nef\r\ngh")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.send_pointer(pointer(
+        PointerKind::Press,
+        Some(PointerButton::Left),
+        1,
+        CellSide::Left,
+    ))
+    .expect("send_pointer");
+    term.send_pointer(pointer(PointerKind::Motion, None, 2, CellSide::Left))
+        .expect("send_pointer");
+    term.scroll(Scroll::HalfPageDown);
+    assert_eq!(
+        term.vt.vi_cursor().map(|cursor| cursor.point.line),
+        Some(GridLine(2))
+    );
+}

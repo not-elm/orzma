@@ -477,8 +477,8 @@ mod tests {
     /// Asserts that including both cells makes a forward selection cover
     /// its moving end's cell.
     ///
-    /// Case: in vi mode the user selects from one letter to a later one,
-    /// and both letters must be copied.
+    /// Case: in vi mode the user presses `v` on one letter and moves right
+    /// to a later one.
     #[test]
     fn including_both_cells_covers_a_forward_moving_end() {
         let grid = grid();
