@@ -168,8 +168,8 @@ impl ControlSocket {
     ///
     /// Returns [`RuntimeRootError`](crate::error::RuntimeRootError) when no
     /// candidate directory keeps the socket path within `sun_path`, and an
-    /// I/O error when a directory cannot be created or restricted or the
-    /// socket cannot be bound.
+    /// I/O error when a directory cannot be created or restricted, the
+    /// socket cannot be bound, or the listener thread cannot be started.
     pub fn bind(parent: &Path, pid: u32) -> WebviewHostResult<Self> {
         let runtime = RuntimeRoot::resolve_in(parent, pid, "control")?;
         let sock_path = runtime.socket_path("control");

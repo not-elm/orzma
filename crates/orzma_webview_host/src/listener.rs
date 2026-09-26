@@ -8,13 +8,18 @@ use crate::host::ValidatedRegistration;
 use crate::protocol::{ClientMsg, ServerMsg};
 use crate::uds::{UnixListener, UnixStream};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::ops::ControlFlow;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::thread;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+/// How long the accept loop waits after a failed accept before it accepts
+/// again.
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// Binds `sock_path` (replacing a stale socket file there), spawns the
 /// accept loop, and returns the receiver of the events its connections
@@ -23,39 +28,63 @@ use std::thread;
 ///
 /// # Errors
 ///
-/// Returns an I/O error when the socket cannot be bound.
+/// Returns an I/O error when the socket cannot be bound or the accept
+/// thread cannot be started.
 pub(crate) fn spawn_listener(sock_path: &Path) -> WebviewHostResult<Receiver<ControlEvent>> {
     let _ = std::fs::remove_file(sock_path);
     let listener = UnixListener::bind(sock_path)?;
     let (events_tx, events) = unbounded();
-    thread::spawn(move || accept_loop(listener, events_tx));
+    thread::Builder::new()
+        .name("orzma-control-accept".to_string())
+        .spawn(move || accept_loop(listener, events_tx))?;
     Ok(events)
 }
 
 /// Accepts connections forever, serving each authenticated one on its own
-/// thread under a fresh connection id.
+/// thread under a fresh connection id. A failed accept is retried after
+/// [`ACCEPT_RETRY_DELAY`], and only the first failure of a run is logged. A
+/// connection whose thread cannot be started is closed.
 fn accept_loop(listener: UnixListener, events: Sender<ControlEvent>) {
     let mut next_id: u64 = 1;
+    let mut failing = false;
     for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(error) => {
+                if !failing {
+                    tracing::warn!(%error, "the control socket failed to accept a connection; retrying");
+                }
+                failing = true;
+                thread::sleep(ACCEPT_RETRY_DELAY);
+                continue;
+            }
+        };
+        failing = false;
         if !accepts(&stream) {
             continue;
         }
         let connection = ConnectionId::new(next_id);
         next_id = next_id.wrapping_add(1);
         let events = events.clone();
-        thread::spawn(move || serve_connection(stream, connection, events));
+        let spawned = thread::Builder::new()
+            .name("orzma-control-reader".to_string())
+            .spawn(move || serve_connection(stream, connection, events));
+        if let Err(error) = spawned {
+            tracing::warn!(%error, ?connection, "a control connection was closed because its thread could not start");
+        }
     }
 }
 
 /// Serves one connection: requires a `hello` first and hands it to the host,
 /// relays each later line as a `ControlEvent` until the peer closes, then
-/// tears the connection down and reports `Disconnect`.
+/// tears the connection down and reports `Disconnect`. A connection whose
+/// writer thread cannot be started is closed before its `hello` reaches the
+/// host.
 fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender<ControlEvent>) {
     let Ok(read_half) = stream.try_clone() else {
         return;
     };
-    let Ok(mut write_half) = stream.try_clone() else {
+    let Ok(write_half) = stream.try_clone() else {
         return;
     };
     let mut lines = BufReader::new(read_half);
@@ -63,6 +92,13 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
         return;
     };
     let (out_tx, out_rx) = unbounded::<String>();
+    let writer = match spawn_writer(write_half, out_rx) {
+        Ok(writer) => writer,
+        Err(error) => {
+            tracing::warn!(%error, ?connection, "a control connection was closed because its writer thread could not start");
+            return;
+        }
+    };
     let (answer_tx, answer_rx) = bounded::<bool>(1);
     let hello = ControlEvent::Hello {
         connection,
@@ -71,18 +107,13 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
         reply: answer_tx,
     };
     if events.send(hello).is_err() || !answer_rx.recv().unwrap_or(false) {
+        // NOTE: the host keeps no clone of `out_tx` for a `hello` it refused
+        // or dropped unanswered; if it kept one, this join would never
+        // return and the connection would never close.
+        drop(out_tx);
+        let _ = writer.join();
         return;
     }
-    let writer = thread::spawn(move || {
-        while let Ok(line) = out_rx.recv() {
-            if write_half.write_all(line.as_bytes()).is_err()
-                || write_half.write_all(b"\n").is_err()
-                || write_half.flush().is_err()
-            {
-                break;
-            }
-        }
-    });
     read_requests(&mut lines, connection, &events, &out_tx);
     // NOTE: the host holds a clone of `out_tx`, so dropping ours does not end
     // the writer thread; only the host dropping its clone when it applies
@@ -95,6 +126,28 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
     let _ = events.send(ControlEvent::Disconnect { connection });
     drop(out_tx);
     let _ = writer.join();
+}
+
+/// Starts the thread that writes each line `lines` yields to `stream`,
+/// newline-terminated, until every sender of `lines` is gone or a write
+/// fails.
+///
+/// # Errors
+///
+/// Returns the OS error when the thread cannot be started.
+fn spawn_writer(mut stream: UnixStream, lines: Receiver<String>) -> io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("orzma-control-writer".to_string())
+        .spawn(move || {
+            while let Ok(line) = lines.recv() {
+                if stream.write_all(line.as_bytes()).is_err()
+                    || stream.write_all(b"\n").is_err()
+                    || stream.flush().is_err()
+                {
+                    break;
+                }
+            }
+        })
 }
 
 /// Reads the first line and returns its token when it is a `hello`.
@@ -402,7 +455,7 @@ mod tests {
     fn a_refused_hello_closes_the_connection() {
         let (_dir, sock, events) = listen();
         let mut client = UnixStream::connect(&sock).unwrap();
-        let _writer = hello(&events, &mut client, false);
+        drop(hello(&events, &mut client, false));
         let _ = writeln!(client, r#"{{"op":"unregister","handle":"h"}}"#);
         assert!(events.recv_timeout(Duration::from_millis(300)).is_err());
         let mut rest = Vec::new();
