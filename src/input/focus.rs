@@ -285,10 +285,13 @@ mod tests {
     use orzmux::prelude::PaneId;
 
     /// Asserts that an accepted active change moves `KeyboardFocused`,
-    /// tints the previous pane, and tolerates a despawned previous.
+    /// tints the previous pane, leaves `FocusedWebview` on the webview it
+    /// names, and tolerates a despawned previous.
     ///
-    /// Case: the backend confirms select-right; later the previously
-    /// active pane is already gone when its inactive style would apply.
+    /// Case: the user switches to the right pane with a leader-key shortcut
+    /// while a page in the left pane holds keyboard focus, and the backend
+    /// confirms the switch. Later, the previously active pane is already
+    /// gone when its inactive style would apply.
     #[test]
     fn active_pane_change_moves_focus_and_inactive_style() {
         let mut app = App::new();
@@ -304,6 +307,14 @@ mod tests {
             .world_mut()
             .spawn((OrzmaTerminal, OrzmuxPane(PaneId(2))))
             .id();
+        let page = app
+            .world_mut()
+            .spawn((
+                ChildOf(a),
+                Webview::new("w".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
         app.world_mut().trigger(OrzmuxActivePaneChanged {
             previous: Some(a),
             current: Some(b),
@@ -313,6 +324,7 @@ mod tests {
         assert!(app.world().get::<KeyboardFocused>(b).is_some());
         assert!(app.world().get::<PaneInactiveStyle>(a).is_some());
         assert!(app.world().get::<PaneInactiveStyle>(b).is_none());
+        assert_eq!(app.world().resource::<FocusedWebview>().0, Some(page));
 
         app.world_mut().entity_mut(b).despawn();
         app.world_mut().trigger(OrzmuxActivePaneChanged {
