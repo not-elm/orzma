@@ -1,6 +1,7 @@
 //! Grabbing and dragging the divider between two panes.
 
 use super::{TerminalSurfaces, on_any_mouse_message};
+use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::mouse::MousePhase;
 use crate::surface::geometry::phys_to_pane_local;
 use bevy::input::ButtonState;
@@ -59,12 +60,15 @@ impl SeparatorHit {
     /// physical px. `scale` is the window's scale factor, physical px
     /// per logical px. Overlapping bands resolve to the nearer painted
     /// line, and an exact tie to the lower [`SplitId`]. `cell_px` is the
-    /// `(width, height)` cell pitch in physical px. A cursor on the
-    /// line's own axis but past its painted end returns `None`.
+    /// `(width, height)` cell pitch in physical px. `half_band_logical` is
+    /// the grab band's half-width in logical px, floored at half a cell. A
+    /// cursor on the line's own axis but past its painted end returns
+    /// `None`.
     pub(crate) fn resolve<'a>(
         cursor_phys: Vec2,
         scale: f32,
         cell_px: (f32, f32),
+        half_band_logical: f32,
         separators: impl Iterator<
             Item = (
                 Entity,
@@ -81,7 +85,7 @@ impl SeparatorHit {
                 SplitOrientation::Vertical => cell_px.0,
                 SplitOrientation::Horizontal => cell_px.1,
             };
-            let half_band = grab_half_band_phys(scale, pitch);
+            let half_band = grab_half_band_phys(half_band_logical, scale, pitch);
             let (across, along, half_len) = match marker.orientation {
                 SplitOrientation::Vertical => (
                     (cursor_phys.x - centre.x).abs(),
@@ -121,6 +125,7 @@ impl SeparatorHit {
     pub(in crate::input) fn at<'a>(
         cursor_phys: Vec2,
         geometry: &PaneGeometry,
+        half_band_logical: f32,
         separators: impl Iterator<
             Item = (
                 Entity,
@@ -134,6 +139,7 @@ impl SeparatorHit {
             cursor_phys,
             geometry.scale_factor,
             geometry.cell_pitch(),
+            half_band_logical,
             separators,
         )
     }
@@ -173,17 +179,10 @@ impl GrabbedSeparator {
     }
 }
 
-/// Half the grab band's thickness in logical px, measured from the
-/// painted line's centre.
-///
-/// TODO: make the grab band configurable.
-const SEPARATOR_GRAB_HALF_BAND_LOGICAL_PX: f32 = 4.0;
-
-/// Half the grab band in physical px: never below
-/// [`SEPARATOR_GRAB_HALF_BAND_LOGICAL_PX`] logical px, and never below
-/// half a cell.
-fn grab_half_band_phys(scale: f32, cell_pitch_phys: f32) -> f32 {
-    (SEPARATOR_GRAB_HALF_BAND_LOGICAL_PX * scale).max(cell_pitch_phys / 2.0)
+/// Half the grab band in physical px: `half_band_logical` logical px, and
+/// never below half a cell.
+fn grab_half_band_phys(half_band_logical: f32, scale: f32, cell_pitch_phys: f32) -> f32 {
+    (half_band_logical * scale).max(cell_pitch_phys / 2.0)
 }
 
 fn drive_separator_drag(
@@ -196,6 +195,7 @@ fn drive_separator_drag(
     terminals: TerminalSurfaces,
     geometry: Option<Res<PaneGeometry>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    mouse: Res<OrzmaMouseConfig>,
 ) {
     let Some(geometry) = geometry else {
         buttons.clear();
@@ -233,7 +233,12 @@ fn drive_separator_drag(
     let Some(cursor) = cursor else {
         return;
     };
-    let Some(hit) = SeparatorHit::at(cursor, &geometry, separators.iter()) else {
+    let Some(hit) = SeparatorHit::at(
+        cursor,
+        &geometry,
+        mouse.divider_grab_tolerance_px,
+        separators.iter(),
+    ) else {
         return;
     };
     let Some(local) = container_local(&container, cursor) else {
@@ -331,6 +336,7 @@ mod tests {
 
     const SCALE: f32 = 1.0;
     const CELL: (f32, f32) = (8.0, 16.0);
+    const GRAB: f32 = 4.0;
 
     /// A vertical divider one physical px wide, centred at `x`, running
     /// from y=0 to y=`len_px`.
@@ -374,6 +380,7 @@ mod tests {
             Vec2::new(103.0, 200.0),
             SCALE,
             CELL,
+            GRAB,
             [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
         );
         assert_eq!(hit.as_ref().map(|h| h.entity), Some(Entity::PLACEHOLDER));
@@ -383,6 +390,7 @@ mod tests {
             Vec2::new(140.0, 200.0),
             SCALE,
             CELL,
+            GRAB,
             [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
         );
         assert!(miss.is_none());
@@ -391,6 +399,7 @@ mod tests {
             Vec2::new(106.0, 200.0),
             SCALE,
             CELL,
+            GRAB,
             [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
         );
         assert!(just_past_the_band.is_none());
@@ -399,6 +408,7 @@ mod tests {
             Vec2::new(100.0, 250.0),
             SCALE,
             CELL,
+            GRAB,
             [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
         );
         assert_eq!(along_the_line.map(|h| h.split), Some(SplitId(1)));
@@ -422,6 +432,7 @@ mod tests {
             Vec2::new(100.0, 320.0),
             SCALE,
             CELL,
+            GRAB,
             [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
         );
         assert!(hit.is_none());
@@ -449,6 +460,7 @@ mod tests {
             Vec2::new(101.0, 200.0),
             SCALE,
             CELL,
+            GRAB,
             [
                 (Entity::PLACEHOLDER, &far, &far_node, &far_transform),
                 (Entity::PLACEHOLDER, &near, &near_node, &near_transform),
@@ -463,6 +475,7 @@ mod tests {
             Vec2::new(100.0, 200.0),
             SCALE,
             CELL,
+            GRAB,
             [
                 (Entity::PLACEHOLDER, &near, &a_node, &a_transform),
                 (Entity::PLACEHOLDER, &far, &b_node, &b_transform),
@@ -472,8 +485,8 @@ mod tests {
         assert_eq!(tie.map(|h| h.split), Some(SplitId(1)));
     }
 
-    /// Asserts that the grab band is the logical-px constant converted
-    /// to physical px, so a high-DPI window gets the same band in
+    /// Asserts that the grab band is the configured logical-px tolerance
+    /// converted to physical px, so a high-DPI window gets the same band in
     /// logical terms rather than a halved one.
     ///
     /// Case: the user works on a Retina display, where every physical
@@ -493,6 +506,7 @@ mod tests {
             Vec2::new(106.0, 200.0),
             RETINA_SCALE,
             SMALL_CELL,
+            GRAB,
             [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
         );
         assert_eq!(hit.map(|h| h.split), Some(SplitId(1)));
@@ -501,6 +515,7 @@ mod tests {
             Vec2::new(109.0, 200.0),
             RETINA_SCALE,
             SMALL_CELL,
+            GRAB,
             [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
         );
         assert!(miss.is_none());
@@ -525,6 +540,7 @@ mod tests {
                 cursor,
                 SCALE,
                 CELL,
+                GRAB,
                 [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
             )
         };
@@ -539,6 +555,52 @@ mod tests {
             Some(SplitId(1))
         );
         assert!(at(Vec2::new(450.0, 100.0)).is_none());
+    }
+
+    /// Asserts that a wider grab tolerance widens the band around the line.
+    ///
+    /// Case: a user who finds the divider hard to hit sets
+    /// `divider_grab_tolerance_px = 12.0`.
+    #[test]
+    fn a_wider_grab_tolerance_widens_the_band() {
+        let marker = OrzmuxSeparator {
+            split: SplitId(1),
+            orientation: SplitOrientation::Vertical,
+        };
+        let (node, transform) = vertical(100.0, 400.0);
+        let at = |x: f32| {
+            SeparatorHit::resolve(
+                Vec2::new(x, 200.0),
+                SCALE,
+                CELL,
+                12.0,
+                [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
+            )
+        };
+        assert!(at(110.0).is_some());
+        assert!(at(113.0).is_none());
+    }
+
+    /// Asserts that a grab tolerance below half a cell still grabs half a
+    /// cell.
+    ///
+    /// Case: a user sets `divider_grab_tolerance_px = 1.0` hoping for a
+    /// thinner band.
+    #[test]
+    fn a_grab_tolerance_below_half_a_cell_keeps_the_half_cell_floor() {
+        let marker = OrzmuxSeparator {
+            split: SplitId(1),
+            orientation: SplitOrientation::Vertical,
+        };
+        let (node, transform) = vertical(100.0, 400.0);
+        let hit = SeparatorHit::resolve(
+            Vec2::new(103.0, 200.0),
+            SCALE,
+            CELL,
+            1.0,
+            [(Entity::PLACEHOLDER, &marker, &node, &transform)].into_iter(),
+        );
+        assert!(hit.is_some());
     }
 
     #[derive(Resource, Default)]
@@ -557,6 +619,7 @@ mod tests {
             .add_message::<MouseButtonInput>()
             .add_message::<CursorMoved>()
             .init_resource::<Requested>()
+            .init_resource::<OrzmaMouseConfig>()
             .insert_resource(PaneGeometry {
                 cell_px: CellPixels {
                     width: (CELL.0 * scale) as u16,

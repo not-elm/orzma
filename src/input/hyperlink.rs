@@ -3,6 +3,7 @@
 //! writer of the window's `CursorIcon` everywhere except over an inline
 //! webview that owns the pointer, where the cursor is CEF's.
 
+use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled, WebviewMouseDisabled};
 use crate::input::mouse::separator::{GrabbedSeparator, SeparatorHit, SeparatorNodes};
 use crate::input::{InputPhase, current_modifiers};
@@ -180,6 +181,7 @@ struct HoverTargetParams<'w, 's> {
     grabbed: Query<'w, 's, &'static OrzmuxSeparator, With<GrabbedSeparator>>,
     metrics: Res<'w, TerminalCellMetricsResource>,
     geometry: Option<Res<'w, PaneGeometry>>,
+    mouse: Res<'w, OrzmaMouseConfig>,
 }
 
 impl HoverTargetParams<'_, '_> {
@@ -214,7 +216,13 @@ impl HoverTargetParams<'_, '_> {
     /// geometry is unknown.
     fn hovered(&self, cursor_phys: Vec2) -> Option<SplitOrientation> {
         let geometry = self.geometry.as_deref()?;
-        SeparatorHit::at(cursor_phys, geometry, self.separators.iter()).map(|hit| hit.orientation)
+        SeparatorHit::at(
+            cursor_phys,
+            geometry,
+            self.mouse.divider_grab_tolerance_px,
+            self.separators.iter(),
+        )
+        .map(|hit| hit.orientation)
     }
 
     /// The region for the topmost terminal surface under `cursor_phys`, in
@@ -458,6 +466,7 @@ mod tests {
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(hover_test_metrics());
         app.init_resource::<CefCursor>();
+        app.init_resource::<OrzmaMouseConfig>();
         app.add_systems(Update, hyperlink_hover_and_cursor);
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(10.0, 10.0)));
@@ -522,6 +531,7 @@ mod tests {
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(hover_test_metrics());
         app.init_resource::<CefCursor>();
+        app.init_resource::<OrzmaMouseConfig>();
         app.add_systems(Update, hyperlink_hover_and_cursor);
 
         {
@@ -596,6 +606,7 @@ mod tests {
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(hover_test_metrics());
         app.init_resource::<CefCursor>();
+        app.init_resource::<OrzmaMouseConfig>();
         app.add_systems(Update, hyperlink_hover_and_cursor);
 
         {
@@ -659,6 +670,7 @@ mod tests {
             .init_resource::<HyperlinkHoverState>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<CefCursor>()
+            .init_resource::<OrzmaMouseConfig>()
             .insert_resource(hover_test_metrics())
             .add_observer(record_cef_cursor)
             .add_systems(Update, hyperlink_hover_and_cursor);
@@ -881,6 +893,7 @@ mod tests {
             .init_resource::<HyperlinkHoverState>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<CefCursor>()
+            .init_resource::<OrzmaMouseConfig>()
             .insert_resource(hover_test_metrics())
             .insert_resource(PaneGeometry {
                 cell_px: CellPixels {

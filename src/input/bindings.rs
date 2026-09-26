@@ -36,6 +36,9 @@ pub(crate) struct OrzmaMouseConfig {
     pub click_drift_px: f32,
     /// Which modifier activates fine scrolling.
     pub fine_modifier: FineModifier,
+    /// Half-width (logical px) of a pane divider's grab band; the band never
+    /// shrinks below half a cell.
+    pub divider_grab_tolerance_px: f32,
 }
 
 impl OrzmaMouseConfig {
@@ -52,6 +55,7 @@ impl OrzmaMouseConfig {
                 CfgFineModifier::Alt => FineModifier::Alt,
                 CfgFineModifier::None => FineModifier::None,
             },
+            divider_grab_tolerance_px: mc.divider_grab_tolerance_px,
         }
     }
 }
@@ -64,6 +68,7 @@ impl Default for OrzmaMouseConfig {
             double_click_timeout: Duration::from_millis(400),
             click_drift_px: 8.0,
             fine_modifier: FineModifier::Alt,
+            divider_grab_tolerance_px: 4.0,
         }
     }
 }
@@ -84,18 +89,21 @@ mod tests {
         assert_eq!(cfg.double_click_timeout, Duration::from_millis(400));
         assert_eq!(cfg.click_drift_px, 8.0);
         assert_eq!(cfg.fine_modifier, FineModifier::Alt);
+        assert_eq!(cfg.divider_grab_tolerance_px, 4.0);
     }
 
     /// Asserts that each `[mouse]` field lands on its counterpart.
     ///
     /// Case: a user sets `fine_modifier = "ctrl"`, `cells_per_notch = 1.0`,
-    /// and `axis_lock_ratio = 0.5` in config.toml.
+    /// `axis_lock_ratio = 0.5`, and `divider_grab_tolerance_px = 9.0` in
+    /// config.toml.
     #[test]
     fn mouse_config_maps_from_orzma_config() {
         let mc = MouseConfig {
             fine_modifier: CfgFineModifier::Ctrl,
             cells_per_notch: 1.0,
             axis_lock_ratio: 0.5,
+            divider_grab_tolerance_px: 9.0,
             ..MouseConfig::default()
         };
         let out = OrzmaMouseConfig::from_config(&mc);
@@ -110,5 +118,6 @@ mod tests {
             Duration::from_millis(mc.double_click_timeout_ms as u64)
         );
         assert_eq!(out.click_drift_px, mc.click_drift_px);
+        assert_eq!(out.divider_grab_tolerance_px, 9.0);
     }
 }

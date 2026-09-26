@@ -91,13 +91,8 @@ cells_per_notch = 0.5            # f32. Wheel accumulation threshold per notch, 
 axis_lock_ratio = 0.9            # f32 in 0.0..=1.0. Trackpad dominant-axis lock: horizontal scroll kept only when |x|/hypot(x,y) >= this. 0.0 disables; 1.0 = pure-horizontal only.
 double_click_timeout_ms = 400    # u32. Max ms between clicks to count as double/triple.
 click_drift_px = 8.0             # f32. Max pointer drift (logical px) between clicks of a multi-click.
-drag_threshold_px = 4.0          # f32. Pointer travel (logical px) before a press becomes a drag.
-divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divider grab zone.
-# --- advanced drag-autoscroll tuning (rarely changed) ---
-autoscroll_base_period_ms = 50     # u32. Tick interval when drag-scrolling at the pane edge.
-autoscroll_min_period_ms = 16      # u32. Floor on the autoscroll interval.
-autoscroll_step_ms = 4             # u32. Interval decrement per cell past the edge.
-# Mouse numbers are not range-checked; out-of-range values are used as-is.
+divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divider grab zone; never below half a cell. inf / nan revert to 4.0.
+# Mouse numbers are not range-checked, except that axis_lock_ratio is clamped to 0.0..=1.0 and a non-finite axis_lock_ratio or divider_grab_tolerance_px reverts to its default.
 
 [inactive_pane]
 # Visual treatment of panes that don't have focus. Float fields are clamped
