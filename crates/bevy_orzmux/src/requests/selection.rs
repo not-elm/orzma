@@ -1,8 +1,5 @@
 //! Per-operation selection request events the host UI fires at a
 //! terminal entity.
-//!
-//! TODO: apply the vi-cursor start and the kind change once vi mode
-//! lands in the backend.
 
 use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
@@ -32,6 +29,17 @@ pub struct RequestTtySelectionKindChange {
     pub kind: SelectionKind,
 }
 
+/// Fired by the host UI to start, re-kind, or clear a vi-mode selection at
+/// the vi cursor (vi-mode `v` / `V`); the terminal resolves the toggle
+/// against its own selection.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct RequestTtyViSelectionToggle {
+    #[event_target]
+    pub terminal: Entity,
+    /// The selection granularity the toggle names.
+    pub kind: SelectionKind,
+}
+
 /// Fired by the host UI to drop any active selection.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtySelectionClear {
@@ -45,6 +53,7 @@ impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(start_selection_at_vi_cursor)
             .add_observer(change_selection_kind)
+            .add_observer(toggle_vi_selection.run_if(resource_exists::<OrzmuxConnection>))
             .add_observer(clear_selection.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
@@ -52,6 +61,13 @@ impl Plugin for SelectionPlugin {
 fn start_selection_at_vi_cursor(_e: On<RequestTtySelectionStartAtViCursor>) {}
 
 fn change_selection_kind(_e: On<RequestTtySelectionKindChange>) {}
+
+fn toggle_vi_selection(e: On<RequestTtyViSelectionToggle>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::ViSelectionToggle {
+        pane,
+        kind: e.kind,
+    });
+}
 
 fn clear_selection(e: On<RequestTtySelectionClear>, panes: PaneSender) {
     panes.send_for(e.terminal, |pane| OrzmuxCommand::SelectionClear { pane });
@@ -82,6 +98,29 @@ mod tests {
         assert!(matches!(
             sent[0],
             OrzmuxCommand::SelectionClear { pane: PaneId(3) }
+        ));
+    }
+
+    /// Asserts that a vi selection toggle becomes a `ViSelectionToggle`
+    /// command for the addressed pane.
+    ///
+    /// Case: the user presses `V` in vi mode on a pane.
+    #[test]
+    fn a_toggle_request_becomes_a_vi_selection_toggle_for_the_pane() {
+        let (mut app, commands) = app_with_connection(SelectionPlugin);
+        let pane = spawn_pane(&mut app, PaneId(6));
+        app.world_mut().trigger(RequestTtyViSelectionToggle {
+            terminal: pane,
+            kind: SelectionKind::Lines,
+        });
+        let sent = sent(&commands);
+        assert_eq!(sent.len(), 1);
+        assert!(matches!(
+            sent[0],
+            OrzmuxCommand::ViSelectionToggle {
+                pane: PaneId(6),
+                kind: SelectionKind::Lines
+            }
         ));
     }
 }
