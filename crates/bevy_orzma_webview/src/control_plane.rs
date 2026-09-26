@@ -7,17 +7,17 @@ use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
 use crate::webview::apc::NonInteractive;
 use crate::webview::mount::{ForwardKeys, Webview};
+use crate::webview::scheme::WebviewAssetRegistry;
 use bevy::ecs::entity::Entities;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
-use bevy_orzma_webview_host::WebviewAssetRegistry;
-use bevy_orzma_webview_host::host::RuntimeRoot;
 use bevy_orzmux::prelude::{OrzmuxPane, RequestTtyWebviewMount, RequestTtyWebviewRemove};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use orzma_vt::prelude::{GridColumn, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize, ScreenLine};
+use orzma_webview_host::host::RuntimeRoot;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -1880,7 +1880,7 @@ mod apply_tests {
 
     #[test]
     fn apply_register_inline_populates_dyn_asset_registry_with_html_bytes() {
-        use bevy_orzma_webview_host::WebviewAsset;
+        use orzma_webview_host::WebviewAsset;
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let orzma_assets = WebviewAssetRegistry::default();

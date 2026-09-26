@@ -3,10 +3,9 @@
 //! emits to the registering program over the control socket.
 
 use crate::control_plane::{ConnectionWriters, OrzmaRpc, WebviewOwner};
+use crate::webview::scheme::{WebviewAssetRegistry, custom_orzma_scheme};
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
-use bevy_orzma_webview_host::WebviewAssetRegistry;
-use bevy_orzma_webview_host::orzma_scheme::custom_orzma_scheme;
 use serde_json::Value;
 use std::path::Path;
 

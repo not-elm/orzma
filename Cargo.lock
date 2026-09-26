@@ -1307,7 +1307,6 @@ dependencies = [
  "bevy_cef",
  "bevy_cef_core",
  "bevy_orzma_tty_renderer",
- "bevy_orzma_webview_host",
  "bevy_orzmux",
  "crossbeam-channel",
  "data-encoding",
@@ -1315,24 +1314,13 @@ dependencies = [
  "libc",
  "log",
  "orzma_vt",
+ "orzma_webview_host",
  "orzmux",
  "serde",
  "serde_json",
  "tempfile",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "bevy_orzma_webview_host"
-version = "0.2.0-dev"
-dependencies = [
- "bevy",
- "bevy_cef_core",
- "tempfile",
- "thiserror 2.0.18",
- "uds_windows",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5052,7 +5040,6 @@ dependencies = [
  "bevy_cef_core",
  "bevy_orzma_tty_renderer",
  "bevy_orzma_webview",
- "bevy_orzma_webview_host",
  "bevy_orzmux",
  "crossbeam-channel",
  "data-encoding",
@@ -5064,6 +5051,7 @@ dependencies = [
  "orzma_configs",
  "orzma_tty",
  "orzma_vt",
+ "orzma_webview_host",
  "orzmux",
  "serde",
  "serde_json",
@@ -5112,6 +5100,16 @@ dependencies = [
  "thiserror 2.0.18",
  "unicode-width 0.2.0",
  "vtparse",
+]
+
+[[package]]
+name = "orzma_webview_host"
+version = "0.2.0-dev"
+dependencies = [
+ "tempfile",
+ "thiserror 2.0.18",
+ "uds_windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -6,3 +6,4 @@ pub(crate) mod apc;
 pub(crate) mod mount;
 pub(crate) mod paint;
 pub(crate) mod render;
+pub(crate) mod scheme;

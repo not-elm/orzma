@@ -1,26 +1,18 @@
 //! `orzma://<handle>/<path>` custom-scheme handler for Tier 1 dynamic
 //! webviews: `<handle>` resolves through a shared `WebviewAssetRegistry` to a
-//! directory root or to inline HTML bytes. Behind the `cef` feature.
+//! directory root or to inline HTML bytes.
 
-#[cfg(feature = "cef")]
-use crate::asset::{AssetOutcome, serve_static_asset};
-#[cfg(feature = "cef")]
+use crate::webview::scheme::asset::{AssetOutcome, serve_static_asset};
 use bevy_cef_core::prelude::{
     CefCustomScheme, CefSchemeBody, CefSchemeHandler, CefSchemeOptions, CefSchemeRequest,
     CefSchemeResponse,
 };
+use orzma_webview_host::WebviewAsset;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-/// The content backing one dynamic handle.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WebviewAsset {
-    /// Files served under this absolute root directory.
-    Dir(PathBuf),
-    /// A single inline HTML document served from memory.
-    Inline(Vec<u8>),
-}
+mod asset;
 
 /// A shared, interior-mutable map of dynamic `handle → WebviewAsset` for
 /// Tier 1 dynamic webview registrations. Every clone sees the same handles.
@@ -55,10 +47,27 @@ impl WebviewAssetRegistry {
     }
 }
 
+/// Builds the `orzma` scheme registration to pass to `CefPlugin`, dispatching
+/// every `orzma://<handle>/…` URL through the shared `WebviewAssetRegistry`.
+pub(crate) fn custom_orzma_scheme(registry: WebviewAssetRegistry) -> CefCustomScheme {
+    CefCustomScheme {
+        name: SCHEME_NAME.to_string(),
+        options: CefSchemeOptions::STANDARD
+            | CefSchemeOptions::SECURE
+            | CefSchemeOptions::CORS_ENABLED
+            | CefSchemeOptions::FETCH_ENABLED
+            | CefSchemeOptions::DISPLAY_ISOLATED,
+        domain: None,
+        handler: Arc::new(OrzmaScheme::new(registry)),
+    }
+}
+
+/// The custom scheme name registered with CEF for dynamic Tier 1 webviews.
+const SCHEME_NAME: &str = "orzma";
+
 /// Parses `orzma://<handle>/<path>[?query]` into `(handle, path)`; strips
 /// the query/fragment and defaults an empty path to `"index.html"`. Returns
 /// `None` unless it is a well-formed `orzma://` URL with a non-empty handle.
-#[cfg_attr(not(feature = "cef"), allow(dead_code))]
 fn parse_orzma_url(url: &str) -> Option<(&str, &str)> {
     let rest = url.strip_prefix("orzma://")?;
     let rest = rest
@@ -76,7 +85,6 @@ fn parse_orzma_url(url: &str) -> Option<(&str, &str)> {
 }
 
 /// The resolved outcome of an `orzma://` URL lookup.
-#[cfg_attr(not(feature = "cef"), allow(dead_code))]
 enum ResolvedOrzma<'a> {
     /// Serve files from this directory root; `path` is the relative file path.
     Dir { root: PathBuf, path: &'a str },
@@ -86,7 +94,6 @@ enum ResolvedOrzma<'a> {
 
 /// Resolves an `orzma://<handle>/<path>` URL via the registry, or `Err(404)`
 /// for an unknown or unparseable handle.
-#[cfg_attr(not(feature = "cef"), allow(dead_code))]
 fn resolve_request<'a>(
     registry: &WebviewAssetRegistry,
     url: &'a str,
@@ -106,7 +113,6 @@ fn resolve_request<'a>(
 /// Returns the bare media type (drops any `;`-delimited parameters) for CEF's
 /// `mime_type` field, flooring an empty or blank input to
 /// `application/octet-stream`.
-#[cfg(feature = "cef")]
 fn bare_mime(content_type: &str) -> String {
     let bare = content_type.split(';').next().unwrap_or("").trim();
     if bare.is_empty() {
@@ -117,7 +123,6 @@ fn bare_mime(content_type: &str) -> String {
 }
 
 /// A minimal text `CefSchemeResponse` for error statuses.
-#[cfg(feature = "cef")]
 fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
     CefSchemeResponse {
         status,
@@ -127,37 +132,30 @@ fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
     }
 }
 
-/// The custom scheme name registered with CEF for dynamic Tier 1 webviews.
-#[cfg(feature = "cef")]
-pub const SCHEME_NAME: &str = "orzma";
-
 /// Serves `orzma://<handle>/<path>` by dispatching `<handle>` through a
 /// shared `WebviewAssetRegistry` to `serve_static_asset` (Dir) or memory (Inline).
-#[cfg(feature = "cef")]
 struct OrzmaScheme {
     registry: WebviewAssetRegistry,
 }
 
-#[cfg(feature = "cef")]
 impl OrzmaScheme {
     fn new(registry: WebviewAssetRegistry) -> Self {
         Self { registry }
     }
 }
 
-#[cfg(feature = "cef")]
 impl CefSchemeHandler for OrzmaScheme {
     fn handle(&self, request: &CefSchemeRequest) -> CefSchemeResponse {
         match resolve_request(&self.registry, &request.url) {
             Err(_) => {
-                bevy::log::debug!(
+                tracing::debug!(
                     url = %request.url,
                     "orzma request unresolved (unknown handle or non-index inline path) -> 404"
                 );
                 CefSchemeResponse::not_found()
             }
             Ok(ResolvedOrzma::Inline(html)) => {
-                bevy::log::debug!(
+                tracing::debug!(
                     url = %request.url,
                     bytes = html.len(),
                     "orzma inline html served"
@@ -172,7 +170,7 @@ impl CefSchemeHandler for OrzmaScheme {
             Ok(ResolvedOrzma::Dir { root, path }) => match serve_static_asset(&root, path) {
                 AssetOutcome::Ok { content_type, body } => {
                     let mime = bare_mime(&content_type);
-                    bevy::log::debug!(
+                    tracing::debug!(
                         url = %request.url,
                         mime = %mime,
                         bytes = body.len(),
@@ -190,22 +188,6 @@ impl CefSchemeHandler for OrzmaScheme {
                 AssetOutcome::TooLarge => status_text(413, "asset too large"),
             },
         }
-    }
-}
-
-/// Builds the `orzma` scheme registration to pass to `CefPlugin`, dispatching
-/// every `orzma://<handle>/…` URL through the shared `WebviewAssetRegistry`.
-#[cfg(feature = "cef")]
-pub fn custom_orzma_scheme(registry: WebviewAssetRegistry) -> CefCustomScheme {
-    CefCustomScheme {
-        name: SCHEME_NAME.to_string(),
-        options: CefSchemeOptions::STANDARD
-            | CefSchemeOptions::SECURE
-            | CefSchemeOptions::CORS_ENABLED
-            | CefSchemeOptions::FETCH_ENABLED
-            | CefSchemeOptions::DISPLAY_ISOLATED,
-        domain: None,
-        handler: Arc::new(OrzmaScheme::new(registry)),
     }
 }
 
@@ -314,7 +296,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "cef")]
     #[test]
     fn bare_mime_strips_charset_parameter() {
         assert_eq!(bare_mime("text/html; charset=utf-8"), "text/html");
@@ -325,7 +306,6 @@ mod tests {
         assert_eq!(bare_mime("application/wasm"), "application/wasm");
     }
 
-    #[cfg(feature = "cef")]
     #[test]
     fn bare_mime_floors_empty_to_octet_stream() {
         assert_eq!(bare_mime(""), "application/octet-stream");

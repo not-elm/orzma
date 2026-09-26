@@ -8,7 +8,6 @@ mod test_support;
 mod webview;
 
 use bevy::prelude::*;
-use bevy_orzma_webview_host::WebviewAssetRegistry;
 use control_plane::ControlPlanePlugin;
 pub use control_plane::{ChordKey, ControlPlaneHandle, HandleId, NormalizedChord, TokenRegistry};
 use std::task::Waker;
@@ -21,6 +20,7 @@ pub use webview::mount::{
 use webview::paint::PaintPlugin;
 use webview::render::RenderPlugin;
 pub use webview::render::cef_plugin;
+pub use webview::scheme::WebviewAssetRegistry;
 
 /// The in-process webview subsystem: CEF render wiring, the `window.orzma`
 /// back-channel, APC mount and unmount, and the control socket.

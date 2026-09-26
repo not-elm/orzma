@@ -7,8 +7,8 @@ use crate::control_plane::HandleId;
 use crate::control_plane::TokenRegistry;
 use crate::control_plane::protocol::{ClientMsg, HostKeyChord, NavAction, RegisterKind, ServerMsg};
 use bevy::prelude::Entity;
-use bevy_orzma_webview_host::uds::{UnixListener, UnixStream};
 use crossbeam_channel::{Receiver, SendError, Sender, bounded, unbounded};
+use orzma_webview_host::uds::{UnixListener, UnixStream};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::ops::ControlFlow;
@@ -1009,8 +1009,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn the_bound_socket_file_is_private_to_the_current_user() {
-        use bevy_orzma_webview_host::host::RuntimeRoot;
-        use bevy_orzma_webview_host::private_dir::{
+        use orzma_webview_host::host::RuntimeRoot;
+        use orzma_webview_host::private_dir::{
             canonical_sddl, current_user_sid, security_descriptor_sddl,
         };
         let dir = tempfile::tempdir().unwrap();
