@@ -1,12 +1,21 @@
 # Vi Mode
 
-Vi mode lets you scroll a pane's screen and scrollback with vi keys. Press
-`<Leader>s` to enter it, and `q` or `Escape` to leave.
+Vi mode moves a cursor over the pane's screen and scrollback with vi keys, so
+you can select and copy text without the mouse. Press `<Leader>s` to enter it.
+Press `y` or `Enter` to copy the selection and leave, or `q` or `Escape` to
+leave without copying.
 
 > [!NOTE]
-> Only scrolling and leaving work in this version. The vi cursor is not
-> implemented yet, so the cursor motions, the selection toggles, search, and
-> jump do nothing, and `yank` leaves vi mode without copying anything.
+> The search and jump actions (`/`, `?`, `n`, `N`, `f`, `F`, `t`, `T`) are not
+> implemented yet: vi mode swallows those keys and does nothing.
+> `toggle-rect-selection` (`Ctrl+V`) currently selects whole lines, because
+> rectangular selection is not implemented yet.
+
+The mouse keeps working in vi mode: a click moves the vi cursor, a drag
+selects text (and moves the vi cursor to where the drag ends), and the wheel
+scrolls the scrollback, even while a program such as nvim tracks the mouse.
+A selection started with the mouse can be extended with the motion keys, and
+the other way round.
 
 ## Keys
 
@@ -54,25 +63,25 @@ binding still runs:
 
 | Action | Default | What it does |
 | --- | --- | --- |
-| `cursor-left` | `h`, `ArrowLeft` | Move the cursor one cell left (not implemented yet). |
-| `cursor-down` | `j`, `ArrowDown` | Move the cursor one cell down (not implemented yet). |
-| `cursor-up` | `k`, `ArrowUp` | Move the cursor one cell up (not implemented yet). |
-| `cursor-right` | `l`, `ArrowRight` | Move the cursor one cell right (not implemented yet). |
-| `line-start` | `0` | Jump to column 0 (not implemented yet). |
-| `line-end` | `$` | Jump to the last column (not implemented yet). |
-| `line-first-char` | `^` | Jump to the first non-blank column (not implemented yet). |
-| `next-word` | `w` | Jump to the next (semantic) word start (not implemented yet). |
-| `previous-word` | `b` | Jump to the previous (semantic) word start (not implemented yet). |
-| `next-word-end` | `e` | Jump to the next (semantic) word end (not implemented yet). |
-| `next-space` | `W` | Jump to the next space-delimited word start (not implemented yet). |
-| `previous-space` | `B` | Jump to the previous space-delimited word start (not implemented yet). |
-| `next-space-end` | `E` | Jump to the next space-delimited word end (not implemented yet). |
-| `screen-top` | `H` | Jump to the top visible line (not implemented yet). |
-| `screen-middle` | `M` | Jump to the middle visible line (not implemented yet). |
-| `screen-bottom` | `L` | Jump to the bottom visible line (not implemented yet). |
-| `previous-paragraph` | `{` | Jump to the previous paragraph boundary (not implemented yet). |
-| `next-paragraph` | `}` | Jump to the next paragraph boundary (not implemented yet). |
-| `matching-bracket` | `%` | Jump to the matching bracket (not implemented yet). |
+| `cursor-left` | `h`, `ArrowLeft` | Move the cursor one cell left. |
+| `cursor-down` | `j`, `ArrowDown` | Move the cursor one cell down. |
+| `cursor-up` | `k`, `ArrowUp` | Move the cursor one cell up. |
+| `cursor-right` | `l`, `ArrowRight` | Move the cursor one cell right. |
+| `line-start` | `0` | Jump to column 0. |
+| `line-end` | `$` | Jump to the last column. |
+| `line-first-char` | `^` | Jump to the first non-blank column. |
+| `next-word` | `w` | Jump to the next (semantic) word start. |
+| `previous-word` | `b` | Jump to the previous (semantic) word start. |
+| `next-word-end` | `e` | Jump to the next (semantic) word end. |
+| `next-space` | `W` | Jump to the next space-delimited word start. |
+| `previous-space` | `B` | Jump to the previous space-delimited word start. |
+| `next-space-end` | `E` | Jump to the next space-delimited word end. |
+| `screen-top` | `H` | Jump to the top visible line. |
+| `screen-middle` | `M` | Jump to the middle visible line. |
+| `screen-bottom` | `L` | Jump to the bottom visible line. |
+| `previous-paragraph` | `{` | Jump to the previous paragraph boundary. |
+| `next-paragraph` | `}` | Jump to the next paragraph boundary. |
+| `matching-bracket` | `%` | Jump to the matching bracket. |
 | `history-top` | `g` | Scroll to the oldest history line. |
 | `history-bottom` | `G` | Scroll to the live tail. |
 | `page-up` | `Ctrl+B` | Scroll one page up. |
@@ -81,10 +90,10 @@ binding still runs:
 | `half-page-down` | `Ctrl+D` | Scroll half a page down. |
 | `scroll-up` | `Ctrl+Y` | Scroll one line up. |
 | `scroll-down` | `Ctrl+E` | Scroll one line down. |
-| `toggle-selection` | `v`, `Space` | Toggle a character-wise selection (not implemented yet). |
-| `toggle-line-selection` | `V` | Toggle a line-wise selection (not implemented yet). |
-| `toggle-rect-selection` | `Ctrl+V` | Toggle a rectangular selection (not implemented yet). |
-| `yank` | `y`, `Enter` | Copy the selection to the clipboard and leave vi mode (copying is not implemented yet, so it only leaves). |
+| `toggle-selection` | `v`, `Space` | Toggle a character-wise selection. |
+| `toggle-line-selection` | `V` | Toggle a line-wise selection. |
+| `toggle-rect-selection` | `Ctrl+V` | Toggle a rectangular selection. Currently selects whole lines. |
+| `yank` | `y`, `Enter` | Copy the selection to the clipboard and leave vi mode. |
 | `exit` | `q`, `Escape`, `Ctrl+C` | Leave vi mode. |
 | `search-forward` | `/` | Open the search-down prompt (not implemented yet). |
 | `search-backward` | `?` | Open the search-up prompt (not implemented yet). |
@@ -95,10 +104,14 @@ binding still runs:
 | `jump-to-forward` | `t` | Open the jump-till-char-forward prompt (not implemented yet). |
 | `jump-to-backward` | `T` | Open the jump-till-char-backward prompt (not implemented yet). |
 
+The semantic word motions (`w`, `b`, `e`) stop at whitespace and at the
+characters in [`[selection] semantic_escape_chars`](configuration.md#selection).
+
 ## Escape and unbound keys
 
 By default, `Escape` is bound to the `exit` action, which leaves vi mode
-entirely.
+entirely. To deselect a selection in orzma without leaving vi mode, press `v`
+(toggle-selection is a toggle: with a selection active, it clears it).
 
 Keys not bound to any `[vi-mode]` action are swallowed while vi mode is
 active (they never reach the pane) — this includes stock `copy-mode-vi` keys
@@ -117,8 +130,7 @@ The stock `[vi-mode]` table:
 # Vi-mode key bindings. See "Keys" above for the key
 # syntax and the duplicate-key rule.
 
-# --- cursor motion (not implemented yet — see the note at the top) ---
-# (trailing comment: ViMotion variant / copy-mode command, for reference)
+# --- cursor motion (trailing comment: ViMotion variant / copy-mode command, for reference) ---
 cursor-left        = ["h", "ArrowLeft"]     # Left            / cursor-left
 cursor-down        = ["j", "ArrowDown"]     # Down            / cursor-down
 cursor-up          = ["k", "ArrowUp"]       # Up              / cursor-up
@@ -149,7 +161,7 @@ half-page-down     = ["Ctrl+D"]             # HalfDown / halfpage-down
 scroll-up          = ["Ctrl+Y"]             # LineUp   / scroll-up
 scroll-down        = ["Ctrl+E"]             # LineDown / scroll-down
 
-# --- selection (not implemented yet — see the note at the top) ---
+# --- selection ---
 toggle-selection      = ["v", "Space"]      # Simple / begin-selection
 toggle-line-selection = ["V"]               # Lines  / select-line
 toggle-rect-selection = ["Ctrl+V"]          # Block  / rectangle-toggle

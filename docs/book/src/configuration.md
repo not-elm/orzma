@@ -21,8 +21,8 @@ orzma checks the file when it starts. A problem has one of two effects:
 - **orzma ignores the whole file** and starts with every setting at its
   default when the file cannot be read as a configuration: a TOML syntax
   error, an unknown section, an unknown key in `[cursor]`, `[orzma]`,
-  `[keyboard]`, `[shortcuts]`, `[vi-mode]`, or `[font]`, a value of the wrong
-  type or an unknown word, or a malformed key binding.
+  `[keyboard]`, `[shortcuts]`, `[vi-mode]`, `[selection]`, or `[font]`, a
+  value of the wrong type or an unknown word, or a malformed key binding.
 - **orzma does not start** when the settings conflict or cannot be applied: a
   key bound to more than one action, a leader that shadows another binding or
   cannot be used, a font size or style outside the allowed values, or a font
@@ -71,6 +71,15 @@ thickness = 0.15          # f32 0..=1, fraction of the cell width. Out-of-range 
 unfocused_hollow = true
 # The caret starts blinking. DECSCUSR and DECSET 12 / DECRST 12 both
 # change it from there, and a DECSCUSR 0 or 7 restores the blink.
+```
+
+### `[selection]`
+
+```toml
+[selection]
+# Characters that end a word for the vi-mode `w` / `b` / `e` motions,
+# besides whitespace. Read at startup. Omit the key to keep this default.
+semantic_escape_chars = ",│`|:\"' ()[]{}<>\t"
 ```
 
 ### `[font]`
