@@ -269,6 +269,12 @@ shell within the window re-fires the action instead of reaching the terminal.
 If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 `:r` marker from that binding.
 
+In vi mode a repeatable binding fires only on the key pressed right after the
+leader: the window closes on the next key event, and holding the key does not
+keep firing. A second press or an auto-repeat is read as a `[vi-mode]` key
+instead — with the stock bindings, `Shift+H` and `Shift+L` jump to the top and
+bottom visible line, and `Shift+J` and `Shift+K` do nothing.
+
 ## Platform defaults
 
 Seven defaults differ by platform, because macOS has a `Cmd` key and the other
@@ -331,10 +337,10 @@ the seven that differ elsewhere.
 | `select-down-pane` | `<Leader>j` | Focus the pane below. |
 | `select-up-pane` | `<Leader>k` | Focus the pane above. |
 | `select-right-pane` | `<Leader>l` | Focus the pane to the right. |
-| `resize-left-pane` | `<Leader:r>Shift+H` | Resize the active pane's border left by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
-| `resize-down-pane` | `<Leader:r>Shift+J` | Resize the active pane's border down by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
-| `resize-up-pane` | `<Leader:r>Shift+K` | Resize the active pane's border up by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
-| `resize-right-pane` | `<Leader:r>Shift+L` | Resize the active pane's border right by 5 cells, repeatable (no effect until the built-in multiplexer lands). |
+| `resize-left-pane` | `<Leader:r>Shift+H` | Move a divider of the active pane 5 cells left, repeatable (see "Note on resizing" below). |
+| `resize-down-pane` | `<Leader:r>Shift+J` | Move a divider of the active pane 5 cells down, repeatable (see "Note on resizing" below). |
+| `resize-up-pane` | `<Leader:r>Shift+K` | Move a divider of the active pane 5 cells up, repeatable (see "Note on resizing" below). |
+| `resize-right-pane` | `<Leader:r>Shift+L` | Move a divider of the active pane 5 cells right, repeatable (see "Note on resizing" below). |
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side by side (vertical divider); the new pane becomes active. |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (horizontal divider); the new pane becomes active. |
 | `kill-pane` | `<Leader>p` | Kill the active pane; its shell is terminated. |
@@ -357,15 +363,31 @@ the seven that differ elsewhere.
 
 Note: some actions have no effect yet. `paste`, `copy`, `quit`,
 `release-webview-focus`, `enter-vi-mode` (Alacritty vi mode), `select-*-pane`,
-`split-*-pane`, and `kill-pane` all work today through the built-in
-multiplexer backend. The remaining 20 window/zoom/resize/rename actions above
-(`zoom-pane`, `resize-*-pane`, `new-window`, `kill-window`, `next-window`,
+`resize-*-pane`, `split-*-pane`, and `kill-pane` all work today through the
+built-in multiplexer backend. The remaining 16 window/zoom/rename actions
+above (`zoom-pane`, `new-window`, `kill-window`, `next-window`,
 `previous-window`, `select-window-0`…`9`, `rename-window`) are no-ops until
-the built-in multiplexer grows zoom, resize, and window support — the
-bindings are accepted and validated at startup, but pressing them does
-nothing. This applies whether an action is bound directly or as a
-leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is
-a chord or a modifier tap.
+the built-in multiplexer grows zoom and window support — the bindings are
+accepted and validated at startup, but pressing them does nothing. This
+applies whether an action is bound directly or as a leader-scoped key (e.g.
+`<Leader>s`), and regardless of whether the leader is a chord or a modifier
+tap.
+
+Note on resizing: `resize-*-pane` moves one divider of the active pane 5
+cells in the key's direction, picking it the way tmux's `resize-pane` does.
+Left and right look at the row of side-by-side panes the active pane belongs
+to (up and down at its column of stacked panes): the divider after the pane
+moves when there is one, and otherwise the divider before it. So left and
+right move the active pane's right border unless the pane is the last one in
+its row. Panes nested inside the area that grows or shrinks keep their
+proportions; when the active pane is one of them, it changes by only its share
+of the 5 cells (possibly none) and its other border can move as well. A
+divider stops once the side it shrinks reaches 4 columns or 2 rows per pane
+(less when the area the divider splits is too small to give both sides that
+much), so a small pane nested on that side can still end up narrower. A
+divider never moves against the key, and a key with no divider to move on its
+axis does nothing. In vi mode each step needs the leader again (see
+"Repeatable bindings" above).
 
 Note on the leader: because the stock defaults above bind more than two dozen
 actions to `<Leader>...`, the tap leader is armed by default — tapping and

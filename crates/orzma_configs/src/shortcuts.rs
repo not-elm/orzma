@@ -415,25 +415,25 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub zoom_pane: Option<Binding>,
-    /// Resize the active pane's border left by 5 cells, repeatable (no effect).
+    /// Moves a divider of the active pane 5 cells left; repeatable.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_left_pane: Option<Binding>,
-    /// Resize the active pane's border down by 5 cells, repeatable (no effect).
+    /// Moves a divider of the active pane 5 cells down; repeatable.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_down_pane: Option<Binding>,
-    /// Resize the active pane's border up by 5 cells, repeatable (no effect).
+    /// Moves a divider of the active pane 5 cells up; repeatable.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_up_pane: Option<Binding>,
-    /// Resize the active pane's border right by 5 cells, repeatable (no effect).
+    /// Moves a divider of the active pane 5 cells right; repeatable.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -774,16 +774,17 @@ impl Shortcuts {
     }
 }
 
-/// A neighbor direction for the `select-pane` shortcut actions.
+/// A direction for the `select-*-pane` and `resize-*-pane` shortcut
+/// actions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaneDirection {
-    /// Focus the pane to the left.
+    /// Toward the left edge of the window.
     Left,
-    /// Focus the pane below.
+    /// Toward the bottom edge of the window.
     Down,
-    /// Focus the pane above.
+    /// Toward the top edge of the window.
     Up,
-    /// Focus the pane to the right.
+    /// Toward the right edge of the window.
     Right,
 }
 
@@ -830,7 +831,7 @@ pub enum Shortcut {
     KillPane,
     /// Toggles zoom on the active pane (no effect).
     ZoomPane,
-    /// Resizes the active pane's border in the given direction (no effect).
+    /// Moves a divider of the active pane in the given direction.
     ResizePane(PaneDirection),
     /// Opens a new window in the current session (no effect).
     NewWindow,
