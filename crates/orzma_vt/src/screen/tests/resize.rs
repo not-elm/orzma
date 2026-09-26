@@ -417,14 +417,14 @@ fn a_shrink_without_scrollback_evicts_a_placement_below_the_new_bottom() {
     assert_eq!(screen.evict_lost_anchors(), vec![InstanceId(1)]);
 }
 
-/// Asserts that a shrink of a screen without scrollback clamps the saved
-/// cursor onto the new last row instead of moving it up.
+/// Asserts that a shrink of a screen without scrollback clamps a saved
+/// cursor on a dropped row onto the new last row.
 ///
 /// Case: a full-screen program saves its cursor near the bottom with
 /// `DECSC`, the user drags the pane shorter, and the program restores the
 /// cursor with `DECRC`.
 #[test]
-fn a_shrink_without_scrollback_clamps_the_saved_cursor_in_place() {
+fn a_shrink_without_scrollback_clamps_the_saved_cursor_to_the_new_last_row() {
     let mut screen = Screen::new(GridSize { cols: 4, rows: 4 }, 0);
     screen.state.line = ScreenLine(2);
     screen.save_checkpoint();
@@ -434,6 +434,26 @@ fn a_shrink_without_scrollback_clamps_the_saved_cursor_in_place() {
         Some(DamageSpan::Full)
     );
     assert_eq!(screen.state.line, ScreenLine(1));
+    screen.restore_checkpoint();
+    assert_eq!(screen.state.line, ScreenLine(1));
+}
+
+/// Asserts that a shrink of a screen without scrollback leaves a saved
+/// cursor on a row the shrink keeps where it was.
+///
+/// Case: a full-screen program saves its cursor on the second row with
+/// `DECSC` while its live cursor sits on the bottom row, the user drags
+/// the pane shorter, and the program restores the cursor with `DECRC`.
+#[test]
+fn a_shrink_without_scrollback_leaves_a_saved_cursor_on_a_kept_row() {
+    let mut screen = Screen::new(GridSize { cols: 4, rows: 4 }, 0);
+    screen.state.line = ScreenLine(1);
+    screen.save_checkpoint();
+    screen.state.line = ScreenLine(3);
+    assert_eq!(
+        screen.resize(GridSize { cols: 4, rows: 2 }),
+        Some(DamageSpan::Full)
+    );
     screen.restore_checkpoint();
     assert_eq!(screen.state.line, ScreenLine(1));
 }

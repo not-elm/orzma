@@ -83,11 +83,11 @@ impl DeviceState {
     /// [`GridSize::new`] does.
     ///
     /// While the primary screen is shown it is reflowed with
-    /// [`Screen::reflow`] under the device's [`ScrollbackOnGrow`], and the
-    /// alternate screen is truncated from the bottom, keeping its top
-    /// rows. While the alternate screen is shown only it is resized, and
-    /// the primary screen keeps its size until [`Self::switch_screen`]
-    /// shows it again.
+    /// [`Screen::reflow`] under the device's [`ScrollbackOnGrow`]. The
+    /// alternate screen is always truncated from the bottom, keeping its
+    /// top rows. While the alternate screen is shown only it is resized,
+    /// and the primary screen keeps its size until
+    /// [`Self::switch_screen`] shows it again.
     ///
     /// Placements this strands are not named here: their anchors stop
     /// resolving, and the next [`Self::evict_lost_anchors`] names them.
