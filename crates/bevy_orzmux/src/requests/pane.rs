@@ -1,5 +1,6 @@
-//! Pane management the host asks for (directional selection, kill,
-//! selection of a given pane), sent as the matching `OrzmuxCommand`.
+//! Pane management the host asks for (directional selection and
+//! resizing, kill, selection of a given pane), sent as the matching
+//! `OrzmuxCommand`.
 
 use crate::layout::{CurrentLayout, OrzmuxActivePaneChanged};
 use crate::registry::PaneRegistry;
@@ -14,6 +15,13 @@ pub enum PaneAction {
     SelectDirection(PaneDirection),
     /// Kill the active pane.
     Kill,
+    /// Moves the active pane's divider in `direction` by `cells`.
+    Resize {
+        /// The direction the divider moves.
+        direction: PaneDirection,
+        /// How many cells the divider moves.
+        cells: u16,
+    },
     /// Make the pane behind `entity` active. Applied optimistically: the
     /// GUI treats it as the active pane at once and the confirming
     /// `Layout` reconciles.
@@ -58,6 +66,11 @@ fn apply_pane_action(
             connection.0.send(OrzmuxCommand::KillPane {
                 pane: PaneTarget::Active,
             });
+        }
+        PaneAction::Resize { direction, cells } => {
+            connection
+                .0
+                .send(OrzmuxCommand::ResizePaneDirection { direction, cells });
         }
         PaneAction::Select(entity) => {
             let Ok(pane) = panes.get(entity) else {
@@ -132,6 +145,29 @@ mod tests {
             app.world().resource::<PaneRegistry>().last_select,
             Some(CommandSeq(3))
         );
+    }
+
+    /// Asserts that a resize action becomes a directional resize command
+    /// and leaves the selection sequence untouched.
+    ///
+    /// Case: the user presses resize-left-pane.
+    #[test]
+    fn a_resize_action_sends_a_directional_resize_command() {
+        let (mut app, commands) = app_with_connection(PaneActionPlugin);
+        app.world_mut().trigger(RequestPaneAction {
+            action: PaneAction::Resize {
+                direction: PaneDirection::Left,
+                cells: 5,
+            },
+        });
+        assert!(matches!(
+            sent(&commands).as_slice(),
+            [OrzmuxCommand::ResizePaneDirection {
+                direction: PaneDirection::Left,
+                cells: 5
+            }]
+        ));
+        assert_eq!(app.world().resource::<PaneRegistry>().last_select, None);
     }
 
     /// Asserts that a `Select` applies the pane as active at once and
