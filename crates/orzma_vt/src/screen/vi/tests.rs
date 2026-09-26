@@ -327,3 +327,132 @@ fn a_page_scroll_without_history_moves_only_the_vi_cursor() {
     );
     assert_eq!(vi_point(&screen), Some(point(0, 0)));
 }
+
+/// Asserts that a line feed at the live tail carries the vi cursor up with
+/// its text.
+///
+/// Case: the user sits in vi mode on the last output line while the
+/// program prints another line.
+#[test]
+fn a_line_feed_carries_the_vi_cursor_with_its_text() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "a\nb\nc");
+    assert!(screen.enter_vi_mode());
+    screen.vi.set(point(2, 0));
+    screen.line_feed();
+    assert_eq!(vi_point(&screen), Some(point(1, 0)));
+}
+
+/// Asserts that a line feed at the live tail keeps a vi cursor on the top
+/// row there rather than letting it leave the viewport.
+///
+/// Case: the user sits in vi mode on the top row while output keeps
+/// scrolling the screen.
+#[test]
+fn a_line_feed_keeps_a_top_row_vi_cursor_on_the_top_row() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "a\nb\nc");
+    assert!(screen.enter_vi_mode());
+    screen.vi.set(point(0, 0));
+    screen.line_feed();
+    assert_eq!(vi_point(&screen), Some(point(0, 0)));
+}
+
+/// Asserts that a line feed while the viewport is scrolled back keeps the
+/// vi cursor on the text the held viewport still shows.
+///
+/// Case: the user browses scrollback in vi mode while a build keeps
+/// printing.
+#[test]
+fn a_line_feed_while_scrolled_back_keeps_the_vi_cursor_on_its_text() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "1\n2\n3\n4");
+    assert!(screen.enter_vi_mode());
+    let _ = screen.scroll(Scroll::Delta(1));
+    screen.vi.set(point(-1, 0));
+    screen.line_feed();
+    assert_eq!(screen.display_offset(), DisplayOffset(2));
+    assert_eq!(vi_point(&screen), Some(point(-2, 0)));
+}
+
+/// Asserts that a line feed at the history cap, with the viewport on the
+/// oldest row, keeps the vi cursor inside the viewport.
+///
+/// Case: the user reads the oldest retained output in vi mode while the
+/// program keeps printing past the scrollback limit.
+#[test]
+fn a_line_feed_at_the_history_cap_keeps_the_vi_cursor_in_view() {
+    let mut screen = screen(10, 3, 2);
+    print_text(&mut screen, "1\n2\n3\n4\n5");
+    assert!(screen.enter_vi_mode());
+    let _ = screen.scroll(Scroll::Top);
+    screen.vi.set(point(-2, 0));
+    screen.line_feed();
+    assert_eq!(screen.display_offset(), DisplayOffset(2));
+    assert_eq!(vi_point(&screen), Some(point(-2, 0)));
+}
+
+/// Asserts that a region scroll moves a vi cursor inside the region and
+/// leaves one above it alone.
+///
+/// Case: a pager with a status line scrolls its text region while the
+/// user sits in vi mode.
+#[test]
+fn a_region_scroll_moves_only_a_vi_cursor_inside_the_region() {
+    let mut inside = screen(10, 4, 10);
+    print_text(&mut inside, "a\nb\nc\nd");
+    inside.set_scroll_region(Some(2), Some(3));
+    assert!(inside.enter_vi_mode());
+    inside.vi.set(point(2, 0));
+    inside.scroll_region_up(1);
+    assert_eq!(vi_point(&inside), Some(point(1, 0)));
+
+    let mut above = screen(10, 4, 10);
+    print_text(&mut above, "a\nb\nc\nd");
+    above.set_scroll_region(Some(2), Some(3));
+    assert!(above.enter_vi_mode());
+    above.vi.set(point(0, 0));
+    above.scroll_region_up(1);
+    assert_eq!(vi_point(&above), Some(point(0, 0)));
+}
+
+/// Asserts that a reverse index at the top pushes the vi cursor down with
+/// its text and stops it at the bottom row.
+///
+/// Case: a full-screen program scrolls its view back one line while the
+/// user sits in vi mode.
+#[test]
+fn a_reverse_index_pushes_the_vi_cursor_down() {
+    let mut middle = screen(10, 3, 10);
+    print_text(&mut middle, "a\nb\nc");
+    middle.move_cursor_to(Some(1), Some(1));
+    assert!(middle.enter_vi_mode());
+    middle.vi.set(point(1, 0));
+    middle.reverse_index();
+    assert_eq!(vi_point(&middle), Some(point(2, 0)));
+
+    let mut bottom = screen(10, 3, 10);
+    print_text(&mut bottom, "a\nb\nc");
+    bottom.move_cursor_to(Some(1), Some(1));
+    assert!(bottom.enter_vi_mode());
+    bottom.vi.set(point(2, 0));
+    bottom.reverse_index();
+    assert_eq!(vi_point(&bottom), Some(point(2, 0)));
+}
+
+/// Asserts that a downward region scroll while the viewport is scrolled
+/// back pulls the vi cursor back inside the viewport.
+///
+/// Case: the user browses scrollback in vi mode with the vi cursor on the
+/// bottom visible row when the program sends `SD`.
+#[test]
+fn a_scroll_down_while_scrolled_back_keeps_the_vi_cursor_in_view() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "1\n2\n3\n4\n5");
+    assert!(screen.enter_vi_mode());
+    let _ = screen.scroll(Scroll::Delta(1));
+    screen.vi.set(point(1, 0));
+    let _ = screen.scroll_region_down(1);
+    assert_eq!(screen.display_offset(), DisplayOffset(1));
+    assert_eq!(vi_point(&screen), Some(point(1, 0)));
+}

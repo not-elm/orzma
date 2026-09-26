@@ -183,6 +183,26 @@ impl ScreenVi {
         };
         self.set(clamped)
     }
+
+    /// Moves a vi cursor on a row in `top..=bottom` up by `count` rows,
+    /// stopping at `top`.
+    pub fn follow_rows_up(&mut self, top: GridLine, bottom: GridLine, count: u16) {
+        if let Some(point) = &mut self.point
+            && (top.0..=bottom.0).contains(&point.line.0)
+        {
+            point.line = GridLine((point.line.0 - i32::from(count)).max(top.0));
+        }
+    }
+
+    /// Moves a vi cursor on a row in `first..=bottom` down by `count`
+    /// rows, stopping at `bottom`.
+    pub fn follow_rows_down(&mut self, first: GridLine, bottom: GridLine, count: u16) {
+        if let Some(point) = &mut self.point
+            && (first.0..=bottom.0).contains(&point.line.0)
+        {
+            point.line = GridLine((point.line.0 + i32::from(count)).min(bottom.0));
+        }
+    }
 }
 
 /// Vi mode.

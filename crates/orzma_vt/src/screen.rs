@@ -855,6 +855,10 @@ impl Screen {
     /// departing row to history and holds a scrolled-back viewport on
     /// the row it was showing. It also clears the cursor's landing
     /// cell, since the rows moved under it.
+    ///
+    /// A vi cursor inside the shifted rows moves up with them, stopping at
+    /// the first shifted row, or at the viewport's top row when the shift
+    /// feeds history, and stays inside the viewport.
     fn shift_rows_up(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
@@ -867,6 +871,13 @@ impl Screen {
                 self.hold_scrolled_viewport();
             }
         }
+        let top = if feeds_history {
+            self.viewport_lines().0
+        } else {
+            GridLine::from(first)
+        };
+        self.vi.follow_rows_up(top, GridLine::from(bottom), count);
+        let _ = self.clamp_vi_cursor();
         Some(DamageSpan::Full)
     }
 
@@ -877,6 +888,9 @@ impl Screen {
     /// The rows pushed past the bottom margin are discarded, and nothing
     /// reaches history. It also clears the cursor's landing cell, since
     /// the rows moved under it.
+    ///
+    /// A vi cursor inside the shifted rows moves down with them, stopping
+    /// at the bottom margin, and is pulled back inside the viewport.
     fn shift_rows_down(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
@@ -885,6 +899,9 @@ impl Screen {
         for _ in 0..count {
             self.grid.scroll_down_one(first, bottom, fill.clone());
         }
+        self.vi
+            .follow_rows_down(GridLine::from(first), GridLine::from(bottom), count);
+        let _ = self.clamp_vi_cursor();
         Some(DamageSpan::Full)
     }
 
