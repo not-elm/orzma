@@ -3,12 +3,17 @@
 
 from __future__ import annotations
 
+import argparse
+import gzip
 import json
+import os
 import re
 import shutil
 import subprocess
+import tarfile
 from pathlib import Path
 
+from build_linux_icons import ICON_SIZES, icon_path
 from stage_windows import cargo_version, locked_version, sha256_file, verify_orzmd_web_assets
 
 APP_NAME = "orzma"
@@ -24,6 +29,8 @@ CEF_SYS_CRATE = "cef-dll-sys"
 CEF_PLATFORM_DIR = "cef_linux_x86_64"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+LINUX_DIR = REPO_ROOT / "build" / "linux"
+DEFAULT_OUT_DIR = REPO_ROOT / "target" / "dist"
 
 CEF_EXCLUDED_ENTRIES = frozenset({
     "include",
@@ -163,5 +170,192 @@ def verify_deps(tree: Path) -> None:
     print("==> dependency check passed (ldd reports nothing missing)")
 
 
+def dist_name(version: str) -> str:
+    return f"{APP_NAME}-{version}-{ARCH}-linux"
+
+
+def cargo_build_argv(triple: str, profile: str) -> list[str]:
+    return ["cargo", "build", "--profile", profile, "--target", triple, "--locked",
+            "--no-default-features", "-p", BIN_NAME, "-p", RENDER_PROCESS_PACKAGE]
+
+
+def companion_cargo_build_argv(triple: str, profile: str, names: tuple[str, ...]) -> list[str]:
+    argv = ["cargo", "build", "--profile", profile, "--target", triple, "--locked"]
+    for name in names:
+        argv += ["-p", name]
+    return argv
+
+
+def stage_binaries(built_dir: Path, tree: Path) -> None:
+    for name in (BIN_NAME, *COMPANION_BINS, RENDER_PROCESS_BIN):
+        src = built_dir / name
+        if not src.is_file():
+            raise SystemExit(f"binary not found: {src} (build first, or omit --skip-build)")
+        shutil.copy2(src, tree / name)
+        print(f"==> staged {name}")
+
+
+def stage_licenses(repo_root: Path, tree: Path) -> None:
+    shutil.copy2(repo_root / "LICENSE", tree / "LICENSE")
+    shutil.copy2(repo_root / "licenses" / "THIRD-PARTY-LICENSES.md", tree / "THIRD-PARTY-LICENSES.md")
+    (tree / "chromium").mkdir(exist_ok=True)
+    shutil.copy2(repo_root / "licenses" / "chromium" / "CREDITS.html", tree / "chromium" / "CREDITS.html")
+
+
+def stage_desktop_integration(linux_dir: Path, tree: Path) -> None:
+    placements = [
+        (linux_dir / "install.sh", tree / "install.sh"),
+        (linux_dir / "uninstall.sh", tree / "uninstall.sh"),
+        (linux_dir / "orzma.desktop", tree / "share" / "applications" / "orzma.desktop"),
+    ]
+    placements += [
+        (icon_path(linux_dir / "icons", size),
+         tree / "share" / "icons" / "hicolor" / f"{size}x{size}" / "apps" / "orzma.png")
+        for size in ICON_SIZES
+    ]
+    missing = [str(src) for src, _ in placements if not src.is_file()]
+    if missing:
+        raise SystemExit(
+            f"desktop integration files missing: {', '.join(missing)} "
+            "(run `just linux-icons` for the icons)"
+        )
+    for src, dest in placements:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+    for script in ("install.sh", "uninstall.sh"):
+        (tree / script).chmod(0o755)
+
+
+def shared_objects(tree: Path) -> list[Path]:
+    return sorted(
+        path for path in tree.iterdir()
+        if path.is_file() and (path.suffix == ".so" or ".so." in path.name)
+    )
+
+
+def strip_argv(paths: list[Path]) -> list[str]:
+    return ["strip", "--strip-debug", *(str(path) for path in paths)]
+
+
+def strip_debug_info(tree: Path) -> None:
+    libraries = shared_objects(tree)
+    subprocess.run(strip_argv(libraries), check=True)
+    print(f"==> stripped debug info from {len(libraries)} shared libraries")
+
+
+def normalized_mode(path: Path) -> int:
+    if path.is_dir() or path.stat().st_mode & 0o111:
+        return 0o755
+    return 0o644
+
+
+def write_archive(tree: Path, out: Path) -> None:
+    rels = sorted(path.relative_to(tree).as_posix() for path in tree.rglob("*"))
+    members = [(tree, tree.name)] + [(tree / rel, f"{tree.name}/{rel}") for rel in rels]
+    # NOTE: tarfile's "w:gz" mode stamps the current time and the output file name into
+    # the gzip header, so the archive would differ on every run; wrap it explicitly.
+    with open(out, "wb") as raw, \
+            gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as compressed, \
+            tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for path, arcname in members:
+            info = _tar_info(path, arcname)
+            if info.isdir():
+                tar.addfile(info)
+            else:
+                with open(path, "rb") as f:
+                    tar.addfile(info, f)
+
+
+def write_sidecar(archive: Path) -> Path:
+    sidecar = archive.with_name(f"{archive.name}.sha256")
+    sidecar.write_text(f"{sha256_file(archive)}  {archive.name}\n", encoding="ascii", newline="\n")
+    return sidecar
+
+
+def package(stage_root: Path, version: str, out_dir: Path) -> Path:
+    tree = stage_root / dist_name(version)
+    if not tree.is_dir():
+        raise SystemExit(
+            f"stage tree not found: {tree}; run `just stage` first with the same --version"
+        )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    archive = out_dir / f"{dist_name(version)}.tar.gz"
+    write_archive(tree, archive)
+    sidecar = write_sidecar(archive)
+    print(f"==> wrote {archive} and {sidecar.name}")
+    return archive
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Stage and package orzma for Linux")
+    p.add_argument("--version", help="version in the archive name; defaults to the Cargo version")
+    p.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR))
+    p.add_argument("--skip-build", action="store_true",
+                   help="reuse already-built binaries instead of running cargo build")
+    p.add_argument("--package-only", action="store_true",
+                   help="only archive an existing stage tree; builds and stages nothing")
+    p.add_argument("--check-deps", action="store_true",
+                   help="fail when ldd reports an unresolved shared library in the stage tree")
+    return p
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_arg_parser().parse_args(argv)
+    version = args.version or cargo_version(BIN_NAME)
+    out_dir = Path(args.out_dir).expanduser()
+    stage_root = out_dir / "stage"
+    if args.package_only:
+        package(stage_root, version, out_dir)
+        return
+    cef_path = os.environ.get("CEF_PATH")
+    if not cef_path:
+        raise SystemExit(
+            "CEF_PATH is not set; run through `just stage`, which points it at ~/.cache/orzma/cef"
+        )
+    verify_orzmd_web_assets()
+    tree = stage_root / dist_name(version)
+    if tree.exists():
+        shutil.rmtree(tree)
+    tree.mkdir(parents=True)
+    if not args.skip_build:
+        _cargo_build()
+    stage_cef(Path(cef_path).expanduser(), tree)
+    strip_debug_info(tree)
+    stage_binaries(REPO_ROOT / "target" / TARGET_TRIPLE / CARGO_PROFILE, tree)
+    stage_licenses(REPO_ROOT, tree)
+    stage_desktop_integration(LINUX_DIR, tree)
+    verify_runpaths(tree)
+    if args.check_deps:
+        verify_deps(tree)
+    print(f"version={version}")
+    print(f"stage={tree}")
+
+
 def _capture(argv: list[str]) -> str:
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout
+
+
+def _cargo_build() -> None:
+    for argv in (
+        cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE),
+        companion_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, COMPANION_BINS),
+    ):
+        print(f"==> {' '.join(argv)}")
+        subprocess.run(argv, check=True, cwd=str(REPO_ROOT))
+
+
+def _tar_info(path: Path, arcname: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(arcname)
+    info.mode = normalized_mode(path)
+    info.mtime = 0
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    if path.is_dir():
+        info.type = tarfile.DIRTYPE
+    else:
+        info.size = path.stat().st_size
+    return info
+
+
+if __name__ == "__main__":
+    main()

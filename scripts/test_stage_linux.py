@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -195,6 +198,212 @@ class ElfChecks(unittest.TestCase):
 
     def test_fully_resolved_ldd_output_yields_nothing(self):
         self.assertEqual(sl.unresolved_libraries("\tlibc.so.6 => /lib/libc.so.6 (0x1)\n"), [])
+
+
+def _make_linux_dir(root: Path) -> Path:
+    linux = root / "linux"
+    _write(linux / "install.sh", b"#!/bin/sh\n")
+    _write(linux / "uninstall.sh", b"#!/bin/sh\n")
+    _write(linux / "orzma.desktop", b"[Desktop Entry]\n")
+    for size in sl.ICON_SIZES:
+        _write(sl.icon_path(linux / "icons", size), f"png{size}".encode())
+    return linux
+
+
+def _make_tree(root: Path, version: str = "0.2.0") -> Path:
+    tree = root / "stage" / sl.dist_name(version)
+    _write(tree / "orzma", b"bin")
+    (tree / "orzma").chmod(0o700)
+    _write(tree / "LICENSE", b"mit")
+    (tree / "LICENSE").chmod(0o600)
+    _write(tree / "locales" / "ja.pak", b"ja")
+    return tree
+
+
+class Naming(unittest.TestCase):
+    def test_dist_name_carries_version_arch_and_os(self):
+        self.assertEqual(sl.dist_name("0.2.0"), "orzma-0.2.0-x86_64-linux")
+
+
+class CargoArgv(unittest.TestCase):
+    def test_main_build_targets_orzma_and_render_process(self):
+        self.assertEqual(
+            sl.cargo_build_argv("x86_64-unknown-linux-gnu", "dist"),
+            ["cargo", "build", "--profile", "dist", "--target", "x86_64-unknown-linux-gnu",
+             "--locked", "--no-default-features", "-p", "orzma", "-p", "cef_render_process"],
+        )
+
+    def test_companion_build_keeps_default_features(self):
+        self.assertEqual(
+            sl.companion_cargo_build_argv("x86_64-unknown-linux-gnu", "dist", ("orzbrowser", "orzmd")),
+            ["cargo", "build", "--profile", "dist", "--target", "x86_64-unknown-linux-gnu",
+             "--locked", "-p", "orzbrowser", "-p", "orzmd"],
+        )
+
+
+class StageFiles(unittest.TestCase):
+    def test_stage_binaries_copies_all_four(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            built, tree = Path(tmp) / "built", Path(tmp) / "tree"
+            tree.mkdir()
+            for name in ("orzma", "orzmd", "orzbrowser", "bevy_cef_render_process"):
+                _write(built / name, name.encode())
+            sl.stage_binaries(built, tree)
+            self.assertEqual(
+                sorted(p.name for p in tree.iterdir()),
+                ["bevy_cef_render_process", "orzbrowser", "orzma", "orzmd"],
+            )
+
+    def test_stage_binaries_rejects_missing_binary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            built, tree = Path(tmp) / "built", Path(tmp) / "tree"
+            tree.mkdir()
+            _write(built / "orzma", b"bin")
+            with self.assertRaises(SystemExit) as ctx:
+                sl.stage_binaries(built, tree)
+            self.assertIn("binary not found", str(ctx.exception))
+
+    def test_stage_licenses_places_chromium_credits_in_a_subdir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, tree = Path(tmp) / "repo", Path(tmp) / "tree"
+            tree.mkdir()
+            _write(repo / "LICENSE", b"mit")
+            _write(repo / "licenses" / "THIRD-PARTY-LICENSES.md", b"3p")
+            _write(repo / "licenses" / "chromium" / "CREDITS.html", b"credits")
+            sl.stage_licenses(repo, tree)
+            self.assertEqual((tree / "LICENSE").read_bytes(), b"mit")
+            self.assertEqual((tree / "THIRD-PARTY-LICENSES.md").read_bytes(), b"3p")
+            self.assertEqual((tree / "chromium" / "CREDITS.html").read_bytes(), b"credits")
+
+    def test_stage_desktop_integration_lays_out_share_and_scripts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            linux, tree = _make_linux_dir(Path(tmp)), Path(tmp) / "tree"
+            tree.mkdir()
+            sl.stage_desktop_integration(linux, tree)
+            for script in ("install.sh", "uninstall.sh"):
+                self.assertEqual(stat.S_IMODE((tree / script).stat().st_mode), 0o755)
+            self.assertTrue((tree / "share" / "applications" / "orzma.desktop").is_file())
+            for size in sl.ICON_SIZES:
+                icon = tree / "share" / "icons" / "hicolor" / f"{size}x{size}" / "apps" / "orzma.png"
+                self.assertEqual(icon.read_bytes(), f"png{size}".encode())
+
+    def test_stage_desktop_integration_rejects_missing_icon(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            linux, tree = _make_linux_dir(Path(tmp)), Path(tmp) / "tree"
+            tree.mkdir()
+            sl.icon_path(linux / "icons", 256).unlink()
+            with self.assertRaises(SystemExit) as ctx:
+                sl.stage_desktop_integration(linux, tree)
+            self.assertIn("orzma-256.png", str(ctx.exception))
+
+
+class DebugInfo(unittest.TestCase):
+    def test_shared_objects_include_versioned_sonames_only_at_top_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp)
+            for name in ("libcef.so", "libvulkan.so.1", "orzma", "icudtl.dat"):
+                _write(tree / name, b"x")
+            _write(tree / "locales" / "ja.pak", b"ja")
+            self.assertEqual(
+                [p.name for p in sl.shared_objects(tree)], ["libcef.so", "libvulkan.so.1"]
+            )
+
+    def test_strip_argv_strips_debug_info_only(self):
+        self.assertEqual(
+            sl.strip_argv([Path("/t/libcef.so"), Path("/t/libEGL.so")]),
+            ["strip", "--strip-debug", "/t/libcef.so", "/t/libEGL.so"],
+        )
+
+
+class Archive(unittest.TestCase):
+    def test_modes_are_normalized(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = _make_tree(Path(tmp))
+            self.assertEqual(sl.normalized_mode(tree / "orzma"), 0o755)
+            self.assertEqual(sl.normalized_mode(tree / "LICENSE"), 0o644)
+            self.assertEqual(sl.normalized_mode(tree / "locales"), 0o755)
+
+    def test_archive_is_byte_identical_across_mtimes_and_umasks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = _make_tree(Path(tmp))
+            first, second = Path(tmp) / "a.tar.gz", Path(tmp) / "b.tar.gz"
+            sl.write_archive(tree, first)
+            for path in tree.rglob("*"):
+                os.utime(path, (1_700_000_000, 1_700_000_000))
+            (tree / "LICENSE").chmod(0o640)
+            sl.write_archive(tree, second)
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+
+    def test_gzip_header_carries_no_time_or_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = _make_tree(Path(tmp))
+            out = Path(tmp) / "a.tar.gz"
+            sl.write_archive(tree, out)
+            header = out.read_bytes()[:10]
+            self.assertEqual(header[4:8], b"\0\0\0\0")
+            self.assertEqual(header[3] & 0x08, 0)
+
+    def test_entries_are_rooted_sorted_and_anonymous(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = _make_tree(Path(tmp))
+            out = Path(tmp) / "a.tar.gz"
+            sl.write_archive(tree, out)
+            with tarfile.open(out, "r:gz") as tar:
+                members = tar.getmembers()
+            root = sl.dist_name("0.2.0")
+            self.assertEqual(
+                [m.name for m in members],
+                [root, f"{root}/LICENSE", f"{root}/locales", f"{root}/locales/ja.pak", f"{root}/orzma"],
+            )
+            by_name = {m.name: m for m in members}
+            self.assertEqual(by_name[f"{root}/orzma"].mode, 0o755)
+            self.assertEqual(by_name[f"{root}/LICENSE"].mode, 0o644)
+            for member in members:
+                self.assertEqual((member.mtime, member.uid, member.gid, member.uname, member.gname),
+                                 (0, 0, 0, "", ""))
+
+    def test_sidecar_matches_sha256sum_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "orzma-0.2.0-x86_64-linux.tar.gz"
+            archive.write_bytes(b"payload")
+            sidecar = sl.write_sidecar(archive)
+            self.assertEqual(sidecar.name, "orzma-0.2.0-x86_64-linux.tar.gz.sha256")
+            self.assertEqual(
+                sidecar.read_text(encoding="ascii"),
+                f"{sl.sha256_file(archive)}  orzma-0.2.0-x86_64-linux.tar.gz\n",
+            )
+
+    def test_package_requires_stage_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(SystemExit) as ctx:
+                sl.package(Path(tmp) / "stage", "0.2.0", Path(tmp))
+            self.assertIn("just stage", str(ctx.exception))
+
+    def test_package_writes_archive_and_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_tree(Path(tmp))
+            archive = sl.package(Path(tmp) / "stage", "0.2.0", Path(tmp))
+            self.assertEqual(archive, Path(tmp) / "orzma-0.2.0-x86_64-linux.tar.gz")
+            self.assertTrue(archive.is_file())
+            self.assertTrue(Path(f"{archive}.sha256").is_file())
+
+
+class Cli(unittest.TestCase):
+    def test_package_only_does_not_need_cef_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _make_tree(Path(tmp))
+            env = {k: v for k, v in os.environ.items() if k != "CEF_PATH"}
+            with mock.patch.dict(os.environ, env, clear=True):
+                sl.main(["--package-only", "--version", "0.2.0", "--out-dir", tmp])
+            self.assertTrue((Path(tmp) / "orzma-0.2.0-x86_64-linux.tar.gz").is_file())
+
+    def test_staging_requires_cef_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {k: v for k, v in os.environ.items() if k != "CEF_PATH"}
+            with mock.patch.dict(os.environ, env, clear=True):
+                with self.assertRaises(SystemExit) as ctx:
+                    sl.main(["--version", "0.2.0", "--out-dir", tmp, "--skip-build"])
+            self.assertIn("CEF_PATH", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -164,6 +164,24 @@ release *args: setup-cef-release orzmd-web
 licenses-refresh-cef:
     cp "{{ cef_dir }}/CREDITS.html" licenses/chromium/CREDITS.html
 
+# stage the Linux distribution tree into target/dist/stage (ORZMA_STAGE_CHECK_DEPS=1 adds the ldd gate)
+[linux]
+stage *args:
+    CEF_PATH="${CEF_PATH:-{{ cef_cache_dir }}}" python3 scripts/stage_linux.py {{ if env("ORZMA_STAGE_CHECK_DEPS", "") == "1" { "--check-deps" } else { "" } }} {{ args }}
+
+# archive the staged Linux tree into target/dist/orzma-<version>-x86_64-linux.tar.gz (+ .sha256)
+[linux]
+tarball version="":
+    python3 scripts/stage_linux.py --package-only {{ if version == "" { "" } else { "--version " + version } }}
+
+# build, stage and archive the Linux release (e.g. `just bundle 0.2.0`)
+[linux]
+bundle version="":
+    pnpm i
+    pnpm build
+    just stage {{ if version == "" { "" } else { "--version " + version } }}
+    just tarball {{ version }}
+
 # stage the Windows distribution tree into target/dist/stage
 [windows]
 stage *args:
