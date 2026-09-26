@@ -1,5 +1,5 @@
-//! The server side of orzma's webviews: the control socket's runtime
-//! directory, and the plain-data vocabulary the host shares with the GUI.
+//! The server side of orzma's webviews: serves the control socket and keeps
+//! every client's webview state, free of Bevy and CEF.
 
 pub mod boundary;
 pub mod control_socket;

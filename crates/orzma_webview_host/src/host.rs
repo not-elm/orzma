@@ -457,6 +457,9 @@ impl<P: PaneKey> WebviewHost<P> {
                 output
             }
             Err(error) => {
+                if !error.is_refusal() {
+                    tracing::warn!(%error, ?connection, "a register failed in the host");
+                }
                 let _ = reply.send(ServerMsg::err(error.wire_code()));
                 HostOutput::default()
             }
@@ -495,7 +498,12 @@ impl<P: PaneKey> WebviewHost<P> {
     ) {
         let answer = match self.try_new_instance(connection, handle) {
             Ok(instance) => ServerMsg::instanced(instance),
-            Err(error) => ServerMsg::err(error.wire_code()),
+            Err(error) => {
+                if !error.is_refusal() {
+                    tracing::warn!(%error, ?connection, %handle, "a new_instance failed in the host");
+                }
+                ServerMsg::err(error.wire_code())
+            }
         };
         let _ = reply.send(answer);
     }

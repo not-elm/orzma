@@ -589,6 +589,10 @@ impl Backend {
     }
 
     /// The next queued control-socket event, if any.
+    ///
+    /// The first call after the listener is gone drops the webview host's
+    /// socket, so [`control_events`](Self::control_events) returns `None`
+    /// from then on.
     pub fn try_recv_control(&mut self) -> Option<ControlEvent> {
         self.webview.try_recv_control()
     }

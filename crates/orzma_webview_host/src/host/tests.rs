@@ -235,6 +235,23 @@ fn a_host_without_a_socket_hands_panes_no_environment() {
     assert!(host.try_recv_control().is_none());
 }
 
+/// Asserts that the first receive after the listener is gone drops the
+/// host's socket, so the control channel reads as absent and later panes
+/// start without the control variables.
+///
+/// Case: the control socket's listener stops while no program is connected,
+/// and the user then opens another pane.
+#[test]
+fn a_stopped_listener_drops_the_socket() {
+    let (socket, events) = ControlSocket::injected(SOCK);
+    let mut host = WebviewHost::<u32>::with_socket(socket);
+    assert!(host.control_events().is_some());
+    drop(events);
+    assert!(host.try_recv_control().is_none());
+    assert!(host.control_events().is_none());
+    assert!(host.bind_pane(1).expect("never fails").is_empty());
+}
+
 /// Asserts that a `hello` with a bound token is accepted, and one with an
 /// unknown token or the token of a closed pane is refused.
 ///
