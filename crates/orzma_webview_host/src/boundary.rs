@@ -1,6 +1,8 @@
 //! The plain-data vocabulary the webview host and the GUI exchange: what
 //! the host tells the GUI to show, and what the GUI reports back.
 
+use crate::error::WebviewHostResult;
+use crate::host::mint::random_base32;
 use orzma_vt::prelude::{InstanceId, PlacementSize};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,6 +31,17 @@ impl HandleId {
     /// Borrows the wire spelling.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// A fresh handle: 128 random bits in lowercase unpadded base32,
+    /// usable verbatim as an `orzma://` host.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WebviewHostError::Csprng`](crate::error::WebviewHostError::Csprng)
+    /// when the OS random source fails.
+    pub(crate) fn mint() -> WebviewHostResult<Self> {
+        random_base32().map(Self)
     }
 }
 
@@ -66,6 +79,11 @@ impl MountId {
     /// The mount spelled `raw`.
     pub const fn new(raw: u64) -> Self {
         Self(raw)
+    }
+
+    /// The mount minted after this one.
+    pub(crate) fn next(self) -> Self {
+        Self(self.0.wrapping_add(1))
     }
 }
 
