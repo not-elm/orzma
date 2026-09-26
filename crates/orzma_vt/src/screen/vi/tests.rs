@@ -676,3 +676,53 @@ fn a_page_scroll_extends_the_selection() {
     let _ = screen.vi_scroll(Scroll::PageUp, &chars());
     assert_eq!(screen.selection_text().as_deref(), Some("3\n4\n5\n6"));
 }
+
+/// Asserts that a click in vi mode moves the vi cursor to the clicked
+/// cell.
+///
+/// Case: the user clicks a word in vi mode to jump there.
+#[test]
+fn a_click_in_vi_mode_moves_the_vi_cursor() {
+    let mut screen = hello_screen();
+    assert!(screen.start_selection(point(0, 3), CellSide::Left, SelectionKind::Simple));
+    assert_eq!(vi_point(&screen), Some(point(0, 3)));
+}
+
+/// Asserts that a drag in vi mode moves the vi cursor to the dragged cell
+/// and covers both end cells.
+///
+/// Case: the user drags across `ell` in vi mode.
+#[test]
+fn a_drag_in_vi_mode_covers_both_end_cells() {
+    let mut screen = hello_screen();
+    screen.start_selection(point(0, 1), CellSide::Left, SelectionKind::Simple);
+    assert!(screen.extend_selection(point(0, 3), CellSide::Left));
+    assert_eq!(vi_point(&screen), Some(point(0, 3)));
+    assert_eq!(screen.selection_text().as_deref(), Some("ell"));
+}
+
+/// Asserts that a drag outside vi mode keeps the boundary it was given and
+/// leaves no vi cursor.
+///
+/// Case: the user drags across `el` without vi mode.
+#[test]
+fn a_drag_outside_vi_mode_is_unchanged() {
+    let mut screen = screen(10, 3, 10);
+    print_text(&mut screen, "hello");
+    screen.start_selection(point(0, 1), CellSide::Left, SelectionKind::Simple);
+    screen.extend_selection(point(0, 3), CellSide::Left);
+    assert_eq!(screen.selection_text().as_deref(), Some("el"));
+    assert_eq!(screen.vi_cursor(), None);
+}
+
+/// Asserts that an extend without a selection leaves the vi cursor where
+/// it was.
+///
+/// Case: a stray drag event arrives in vi mode after the selection was
+/// cleared.
+#[test]
+fn an_extend_without_a_selection_leaves_the_vi_cursor() {
+    let mut screen = hello_screen();
+    assert!(!screen.extend_selection(point(0, 3), CellSide::Left));
+    assert_eq!(vi_point(&screen), Some(point(0, 1)));
+}

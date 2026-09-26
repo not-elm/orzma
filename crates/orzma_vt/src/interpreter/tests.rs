@@ -214,5 +214,6 @@ mod tabulation;
 mod text_cursor_enable;
 mod title;
 mod unsupported_sequences;
+mod vi_invariants;
 mod webview_apc;
 mod wide_invariants;

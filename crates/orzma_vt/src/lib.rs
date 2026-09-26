@@ -210,6 +210,8 @@ pub trait Vt {
     /// The return value reports the stored state, not the projection:
     /// a start whose projection is empty still returns `true`, and it
     /// says nothing about whether a frame is owed.
+    ///
+    /// In vi mode the vi cursor also moves to `cell`.
     fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool;
 
     /// Moves the active selection's moving end to `cell`; returns
@@ -218,6 +220,9 @@ pub trait Vt {
     ///
     /// Two cells naming the same boundary — the right half of one and
     /// the left half of the next — are the same moving end.
+    ///
+    /// In vi mode the vi cursor also moves to `cell`, and the selection
+    /// covers both of its end cells.
     fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool;
 
     /// Drops the active selection; returns whether there was one.

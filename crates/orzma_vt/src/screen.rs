@@ -1947,6 +1947,8 @@ impl Screen {
     /// Anchors a new selection at `cell`, replacing any active one;
     /// returns whether the state changed. A cell outside the grid is
     /// rejected and leaves the current selection untouched.
+    ///
+    /// In vi mode the vi cursor also moves to `cell`.
     pub fn start_selection(
         &mut self,
         cell: GridPoint,
@@ -1956,17 +1958,31 @@ impl Screen {
         let Some(end) = self.selection_end(cell, side) else {
             return false;
         };
-        self.selection.start(end, kind)
+        let started = self.selection.start(end, kind);
+        let moved = self.is_vi_mode() && self.vi.set(cell);
+        let _ = self.clamp_vi_cursor();
+        started || moved
     }
 
     /// Moves the active selection's moving end to `cell`; returns
     /// whether it moved. It is a no-op without an active selection or for
     /// a cell outside the grid.
+    ///
+    /// In vi mode the vi cursor also moves to `cell`, and the selection
+    /// covers both of its end cells.
     pub fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool {
         let Some(end) = self.selection_end(cell, side) else {
             return false;
         };
-        self.selection.extend(end)
+        let before = self.selection.ends();
+        let extended = self.selection.extend(end);
+        if before.is_none() || !self.is_vi_mode() {
+            return extended;
+        }
+        let moved = self.vi.set(cell);
+        let _ = self.clamp_vi_cursor();
+        let _ = self.include_selection_cells();
+        moved || self.selection.ends() != before
     }
 
     /// Drops the active selection; returns whether there was one, even
