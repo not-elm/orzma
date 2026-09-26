@@ -108,6 +108,7 @@ mod tests {
     use bevy::prelude::{ChildOf, MinimalPlugins};
     use bevy_orzma_webview::Webview;
     use orzma_vt::prelude::InstanceId;
+    use orzma_webview_host::prelude::MountId;
     use orzmux::prelude::PaneId;
 
     fn spawn_terminal_entity(app: &mut App) -> Entity {
@@ -215,13 +216,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(entity),
-                Webview {
-                    handle: "h1".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("h1".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);

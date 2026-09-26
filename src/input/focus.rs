@@ -372,6 +372,7 @@ fn set_marker<C: Component>(
 mod tests {
     use super::*;
     use orzma_vt::prelude::InstanceId;
+    use orzma_webview_host::prelude::MountId;
     use orzmux::prelude::PaneId;
 
     #[test]
@@ -454,13 +455,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                Webview {
-                    handle: "v".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("v".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
@@ -486,13 +481,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                Webview {
-                    handle: "v".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("v".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
@@ -525,13 +514,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(surface),
-                Webview {
-                    handle: "h1".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("h1".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
 
@@ -682,13 +665,7 @@ mod tests {
             .id();
         app.world_mut().spawn((
             ChildOf(shell),
-            Webview {
-                handle: "w".into(),
-                instance: InstanceId(1),
-                slot: 0,
-                rows: 10,
-                cols: 40,
-            },
+            Webview::new("w".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
         ));
         app.world_mut().spawn((
             Window {
@@ -875,13 +852,14 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                Webview {
-                    handle: format!("h{id}").into(),
-                    instance: InstanceId(u128::from(id)),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new(
+                    format!("h{id}").into(),
+                    InstanceId(u128::from(id)),
+                    MountId::new(u64::from(id)),
+                    0,
+                    10,
+                    40,
+                ),
             ))
             .id();
         (pane, child)

@@ -287,6 +287,7 @@ mod tests {
     use bevy::window::WindowResolution;
     use bevy_orzma_tty_renderer::prelude::CellMetrics;
     use orzma_vt::prelude::InstanceId;
+    use orzma_webview_host::prelude::MountId;
 
     fn test_metrics() -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
@@ -333,13 +334,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(shell),
-                Webview {
-                    handle: "webview".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
         app.world_mut().spawn((

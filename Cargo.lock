@@ -1309,10 +1309,6 @@ dependencies = [
  "bevy_orzma_tty_renderer",
  "bevy_orzmux",
  "crossbeam-channel",
- "data-encoding",
- "getrandom 0.2.17",
- "libc",
- "log",
  "orzma_vt",
  "orzma_webview_host",
  "orzmux",
@@ -1321,7 +1317,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
- "url",
 ]
 
 [[package]]

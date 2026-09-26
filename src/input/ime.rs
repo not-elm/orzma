@@ -341,7 +341,7 @@ fn webview_ime_position(
     child: Entity,
 ) -> Option<Vec2> {
     let terminal = webview_parents.get(child).ok()?.parent();
-    let slot = webview_slots.get(child).ok()?.slot;
+    let slot = webview_slots.get(child).ok()?.slot();
     let (node, ui_xform, _) = anchors.get(terminal).ok()?;
     let rect = *overlays.get(terminal).ok()?.rects.get(usize::from(slot))?;
     if rect.z == 0 {
@@ -383,6 +383,7 @@ mod tests {
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_orzma_tty_renderer::prelude::CellMetrics;
     use orzma_vt::prelude::{Cursor, InstanceId};
+    use orzma_webview_host::prelude::MountId;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {
@@ -702,13 +703,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(terminal),
-                Webview {
-                    handle: "webview".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
@@ -749,13 +744,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(terminal_entity),
-                Webview {
-                    handle: "webview".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);

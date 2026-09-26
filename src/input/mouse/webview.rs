@@ -279,7 +279,7 @@ fn webview_release_dip(
     let (view, _) = route.webviews.get(child).ok()?;
     webview_local_dip(
         route.overlay_rects.get(terminal).ok()?,
-        view.slot,
+        view.slot(),
         local_phys,
         cell_w_phys,
         cell_h_phys,

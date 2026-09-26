@@ -93,7 +93,7 @@ fn main() {
             OrzmaUiPlugin,
         ))
         .add_plugins((
-            OrzmaWebviewPlugin::new(orzma_registry, wakers.input().clone()),
+            OrzmaWebviewPlugin::new(orzma_registry),
             WindowTitlePlugin,
             WindowIconPlugin,
             RedrawPlugin::new(wakers),
