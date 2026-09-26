@@ -1751,4 +1751,18 @@ mod tests {
         assert_eq!(frame.vi_cursor, None);
         assert!(!vt.is_vi_mode());
     }
+
+    /// Asserts that every frame carries the number of history rows the
+    /// active screen retains.
+    ///
+    /// Case: a command prints more lines than the terminal is tall, and
+    /// the vi-mode indicator shows how much scrollback exists.
+    #[test]
+    fn a_frame_carries_the_history_length() {
+        let mut vt = vt();
+        vt.frame();
+        vt.interpret(b"1\r\n2\r\n3\r\n4\r\n5");
+        let frame = vt.frame().expect("output emits");
+        assert_eq!(frame.history_len, 2);
+    }
 }

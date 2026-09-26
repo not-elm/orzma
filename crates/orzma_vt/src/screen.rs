@@ -1269,6 +1269,11 @@ impl Screen {
         self.grid.size()
     }
 
+    /// Number of history rows this screen retains.
+    pub fn history_len(&self) -> u32 {
+        u32::try_from(self.grid.history_len()).unwrap_or(u32::MAX)
+    }
+
     /// The write cursor as an emitted frame carries it.
     ///
     /// The screen supplies the position; `text_cursor` supplies every

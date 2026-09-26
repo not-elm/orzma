@@ -96,6 +96,7 @@ fn a_frame() -> Frame {
         rows: Vec::new(),
         cursor: Cursor::default(),
         display_offset: DisplayOffset(0),
+        history_len: 0,
         vi_cursor: None,
         selection: None,
         placements: None,
