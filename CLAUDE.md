@@ -29,7 +29,9 @@ The workspace root package is the one and only binary; library crates live under
   supported for the `orzma` binary, the `ratatui_orzma` SDK, and the companion
   apps (`apps/orzmd`, `apps/orzbrowser`); the SDK reaches the control socket
   through `uds_windows` there and mounts webviews with the socket `mount` op,
-  since ConPTY drops the APC verb. Linux is planned.
+  since ConPTY drops the APC verb. Linux (x86_64, glibc 2.35+) is supported
+  for the `orzma` binary and the companion apps through the tar.gz and the
+  `.deb` built by `release-linux.yml` (`just bundle` on Linux).
 
 In-process webview rendering is provided by the external `bevy_cef` crate (crates.io `0.13`, CEF v152 pinned to `152.4.0+152.0.8` in the justfile). Both the renderer and the helper render process come from `bevy_cef` / `export-cef-dir`; see `just setup-cef`.
 

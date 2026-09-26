@@ -69,7 +69,7 @@ workspace = true
 
 [workspace]
 resolver = "2"
-members = ["crates/*", "sdk/ratatui_orzma", "apps/orzmd", "apps/orzbrowser"]
+members = ["crates/*", "sdk/ratatui_orzma", "apps/orzmd", "apps/orzbrowser", "apps/cef_render_process"]
 
 [workspace.package]
 version = "0.2.0-dev"

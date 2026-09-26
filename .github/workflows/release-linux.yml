@@ -1,0 +1,284 @@
+name: release-linux
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - ".github/workflows/release-linux.yml"
+      - "scripts/stage_linux.py"
+      - "scripts/stage_windows.py"
+      - "scripts/package_deb.py"
+      - "scripts/test_package_deb.py"
+      - "scripts/build_linux_icons.py"
+      - "scripts/build_icon.py"
+      - "build/linux/**"
+      - "apps/cef_render_process/**"
+      - "build.rs"
+      - "src/main.rs"
+      - "justfile"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version in the archive name (dry run only; defaults to the Cargo version)"
+        required: false
+        type: string
+
+# NOTE: macOS and Windows share `release-${{ github.ref }}`. A third member would
+# cancel whichever run is pending there, so Linux keeps its own group.
+concurrency:
+  group: release-linux-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CEF_VERSION: "152.4.0+152.0.8"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    # Building inside 22.04 keeps the shipped binaries' glibc floor at 2.35 now that
+    # the ubuntu-22.04 runner image is being retired.
+    container:
+      image: ubuntu:22.04
+      volumes:
+        - /usr/local/lib/android:/host/android
+        - /usr/share/dotnet:/host/dotnet
+        - /opt/ghc:/host/ghc
+        - /usr/local/.ghcup:/host/ghcup
+        - /opt/hostedtoolcache/CodeQL:/host/codeql
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Free runner disk space
+        run: rm -rf /host/android/* /host/dotnet/* /host/ghc/* /host/ghcup/* /host/codeql/*
+
+      # libcef.so's runtime libraries let the stage's ldd gate prove the shipped tree
+      # resolves on the glibc 2.35 baseline; README lists the same packages for users.
+      - name: Install system packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential pkg-config python3 binutils xz-utils bzip2 zstd \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev \
+            libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 \
+            libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 \
+            libpango-1.0-0 libcairo2 libgtk-3-0 libasound2 libdbus-1-3 libglib2.0-0 \
+            libudev1 libwayland-client0 libfontconfig1
+
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Trust the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: dtolnay/rust-toolchain@1.95
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Resolve version
+        id: ver
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          CARGO_VERSION="$(cargo metadata --format-version 1 --no-deps | python3 -c '
+          import json, sys
+          pkgs = json.load(sys.stdin)["packages"]
+          v = next((p["version"] for p in pkgs if p["name"] == "orzma"), None)
+          if v is None:
+              sys.exit("package orzma not found in cargo metadata")
+          print(v)')"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "${TAG_VERSION}" != "${CARGO_VERSION}" ]; then
+              echo "Tag v${TAG_VERSION} does not match Cargo version ${CARGO_VERSION}; bump Cargo.toml or fix the tag." >&2
+              exit 1
+            fi
+            VERSION="${TAG_VERSION}"
+          elif [ -n "${DISPATCH_VERSION}" ]; then
+            VERSION="${DISPATCH_VERSION}"
+          else
+            VERSION="${CARGO_VERSION}"
+          fi
+          if ! printf '%s' "${VERSION}" | grep -Eq '^[0-9][0-9A-Za-z.+-]*$'; then
+            echo "Version '${VERSION}' must start with a digit and contain only [0-9A-Za-z.+-]." >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-linux"
+
+      - name: Install just
+        uses: taiki-e/install-action@just
+
+      # NOTE: container jobs cannot share caches with host jobs such as ci-rust: the
+      # cache version hashes the workspace-relative path, which differs here. Tag runs
+      # read only default-branch caches, so a tag run usually downloads CEF afresh.
+      - name: Cache the CEF build dependency
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/orzma/cef
+          key: cef-container-${{ runner.os }}-${{ env.CEF_VERSION }}
+
+      - name: Point cef-dll-sys at the cached CEF
+        run: echo "CEF_PATH=$HOME/.cache/orzma/cef" >> "$GITHUB_ENV"
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Runs through just so the release builds exactly what `just bundle` builds
+      # locally; duplicating the steps here is how local and CI builds drift apart.
+      - name: Build, stage, archive and package
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          ORZMA_STAGE_CHECK_DEPS: "1"
+        run: just bundle "$VERSION"
+
+      # download-cef keeps its ~400MB source archive beside the extracted runtime;
+      # dropping it keeps the saved cache entry to what cef-dll-sys actually reads.
+      - name: Trim the CEF cache
+        run: rm -rf "$HOME"/.cache/orzma/cef/*/cef_binary_*.tar.bz2
+
+      # Uploaded on every run: verify-deb installs the .deb from it, and publish
+      # releases exactly the files verify-deb checked.
+      - name: Upload the release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: orzma-linux-${{ steps.ver.outputs.version }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz
+            target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz.sha256
+            target/dist/orzma_${{ steps.ver.outputs.version }}_amd64.deb
+            target/dist/orzma_${{ steps.ver.outputs.version }}_amd64.deb.sha256
+
+  verify-deb:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:22.04", "ubuntu:24.04"]
+    container:
+      image: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      DEB: orzma_${{ needs.build.outputs.version }}_amd64.deb
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: orzma-linux-${{ needs.build.outputs.version }}
+
+      - name: Verify the checksum
+        run: sha256sum -c "$DEB.sha256"
+
+      # --no-install-recommends proves the Depends field alone is enough.
+      - name: Install the package
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends "./$DEB"
+
+      - name: Check that every shipped ELF file resolves its libraries
+        run: |
+          set -euo pipefail
+          checked=0
+          unresolved=""
+          while IFS= read -r -d '' file; do
+            [ "$(od -An -tx1 -N4 "$file" | tr -d ' \n')" = 7f454c46 ] || continue
+            checked=$((checked + 1))
+            missing="$(ldd "$file" | grep 'not found' || true)"
+            if [ -n "$missing" ]; then
+              unresolved+="${file}:"$'\n'"${missing}"$'\n'
+            fi
+          done < <(find /usr/lib/orzma -type f -print0)
+          echo "checked ${checked} ELF files"
+          if [ -n "$unresolved" ]; then
+            printf '%s' "$unresolved" >&2
+            exit 1
+          fi
+          if [ "$checked" -lt 5 ]; then
+            echo "expected at least 5 ELF files under /usr/lib/orzma" >&2
+            exit 1
+          fi
+
+      # winit, wgpu and Bevy dlopen these at runtime, so ldd above cannot see them.
+      - name: Check the dlopen-only libraries
+        run: |
+          set -euo pipefail
+          sonames="$(ldconfig -p | awk '{print $1}')"
+          for soname in libX11.so.6 libX11-xcb.so.1 libXcursor.so.1 libXi.so.6 \
+            libxkbcommon-x11.so.0 libvulkan.so.1 libEGL.so.1; do
+            if ! grep -qxF "$soname" <<<"$sonames"; then
+              echo "${soname} is not installed; add its package to DEPENDS in scripts/package_deb.py" >&2
+              exit 1
+            fi
+          done
+
+      - name: Check the launchers
+        run: |
+          set -euo pipefail
+          for name in orzma orzmd orzbrowser; do
+            target="$(readlink -f "/usr/bin/${name}")"
+            if [ "$target" != "/usr/lib/orzma/${name}" ] || [ ! -x "$target" ]; then
+              echo "/usr/bin/${name} resolves to '${target}'" >&2
+              exit 1
+            fi
+          done
+
+      - name: Validate the desktop entry
+        run: |
+          apt-get install -y --no-install-recommends desktop-file-utils
+          desktop-file-validate /usr/share/applications/orzma.desktop
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [build, verify-deb]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: orzma-linux-${{ needs.build.outputs.version }}
+          path: dist
+
+      # action-gh-release (>= 2.5.2) finds the release macOS/Windows may be creating in
+      # parallel and retries on a 422 already_exists, so no create/upload fallback is needed.
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/orzma-${{ env.VERSION }}-x86_64-linux.tar.gz
+            dist/orzma-${{ env.VERSION }}-x86_64-linux.tar.gz.sha256
+            dist/orzma_${{ env.VERSION }}_amd64.deb
+            dist/orzma_${{ env.VERSION }}_amd64.deb.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: true

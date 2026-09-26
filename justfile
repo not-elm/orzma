@@ -134,6 +134,11 @@ ico *args:
 ico *args:
     python scripts/build_ico.py {{ args }}
 
+# regenerate the Linux hicolor icons (build/linux/icons/) from the master SVG
+[unix]
+linux-icons *args:
+    python3 scripts/build_linux_icons.py {{ args }}
+
 # build and package the orzma .app (extra args pass through, e.g. --version 1.2.3)
 [macos]
 bundle *args: orzmd-web
@@ -158,6 +163,30 @@ release *args: setup-cef-release orzmd-web
 # refresh the vendored Chromium credits from the provisioned CEF dir (run on cef_version bump)
 licenses-refresh-cef:
     cp "{{ cef_dir }}/CREDITS.html" licenses/chromium/CREDITS.html
+
+# stage the Linux distribution tree into target/dist/stage (ORZMA_STAGE_CHECK_DEPS=1 adds the ldd gate)
+[linux]
+stage *args:
+    CEF_PATH="${CEF_PATH:-{{ cef_cache_dir }}}" python3 scripts/stage_linux.py {{ if env("ORZMA_STAGE_CHECK_DEPS", "") == "1" { "--check-deps" } else { "" } }} {{ args }}
+
+# archive the staged Linux tree into target/dist/orzma-<version>-x86_64-linux.tar.gz (+ .sha256)
+[linux]
+tarball version="":
+    python3 scripts/stage_linux.py --package-only {{ if version == "" { "" } else { "--version " + version } }}
+
+# package the staged Linux tree into target/dist/orzma_<version>_amd64.deb (+ .sha256)
+[linux]
+deb version="":
+    python3 scripts/package_deb.py {{ if version == "" { "" } else { "--version " + version } }}
+
+# build, stage, archive and package the Linux release (e.g. `just bundle 0.2.0`)
+[linux]
+bundle version="":
+    pnpm i
+    pnpm build
+    just stage {{ if version == "" { "" } else { "--version " + version } }}
+    just tarball {{ version }}
+    just deb {{ version }}
 
 # stage the Windows distribution tree into target/dist/stage
 [windows]
