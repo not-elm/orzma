@@ -69,7 +69,7 @@ pub enum OrzmuxCommand {
     ///
     /// Nothing moves and no layout is published when no divider lies on
     /// `direction`'s axis, `cells` is zero, or the divider already sits at
-    /// its limit.
+    /// or past its limit in `direction`.
     ResizePaneDirection {
         /// The direction the divider moves.
         direction: PaneDirection,

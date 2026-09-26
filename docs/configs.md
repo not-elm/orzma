@@ -269,6 +269,12 @@ shell within the window re-fires the action instead of reaching the terminal.
 If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 `:r` marker from that binding.
 
+In vi mode a repeatable binding fires only on the key pressed right after the
+leader: the window closes on the next key event, and holding the key does not
+keep firing. A second press or an auto-repeat is read as a `[vi-mode]` key
+instead — with the stock bindings, `Shift+H` and `Shift+L` jump to the top and
+bottom visible line, and `Shift+J` and `Shift+K` do nothing.
+
 ## Platform defaults
 
 Seven defaults differ by platform, because macOS has a `Cmd` key and the other
@@ -374,10 +380,14 @@ to (up and down at its column of stacked panes): the divider after the pane
 moves when there is one, and otherwise the divider before it. So left and
 right move the active pane's right border unless the pane is the last one in
 its row. Panes nested inside the area that grows or shrinks keep their
-proportions. A divider stops once the side it shrinks reaches 4 columns or
-2 rows per pane (less in a window too small for that), so a small pane nested
-on that side can still end up narrower. A divider never moves against the key,
-and a key with no divider to move on its axis does nothing.
+proportions; when the active pane is one of them, it changes by only its share
+of the 5 cells (possibly none) and its other border can move as well. A
+divider stops once the side it shrinks reaches 4 columns or 2 rows per pane
+(less when the area the divider splits is too small to give both sides that
+much), so a small pane nested on that side can still end up narrower. A
+divider never moves against the key, and a key with no divider to move on its
+axis does nothing. In vi mode each step needs the leader again (see
+"Repeatable bindings" above).
 
 Note on the leader: because the stock defaults above bind more than two dozen
 actions to `<Leader>...`, the tap leader is armed by default — tapping and
