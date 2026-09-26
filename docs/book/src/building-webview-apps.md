@@ -64,7 +64,8 @@ To run one as it is, clone the repository and run
   handle. Registering waits for orzma's reply, so do it before the draw loop.
 - `WebviewWidget::new(view.instance_id())` marks where the page goes. Render it
   with `&mut *orzma.frame()` as its state, like any stateful ratatui widget. The
-  `fallback` widget fills the area until the page is on screen.
+  `fallback` widget is drawn in the same cells, and orzma draws cell text over
+  the page, so the fallback stays visible after the page appears.
 
 The terminal setup that the examples share wraps the crossterm backend in
 `OrzmaBackend`. On every draw, the backend tells orzma where each page is, so
