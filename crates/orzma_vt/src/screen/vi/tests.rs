@@ -517,15 +517,17 @@ fn a_growing_resize_carries_the_vi_cursor_down_with_reclaimed_rows() {
     assert_eq!(vi_point(&screen), Some(point(2, 0)));
 }
 
-/// Asserts that a reflow keeps a selection end set from the right side of
-/// a cell on that cell when the rewrap starts a new row right after it.
+/// Asserts that a reflow in vi mode keeps a selection end set from the
+/// right side of a cell on that cell when the rewrap starts a new row
+/// right after it.
 ///
-/// Case: the user selects `abcd` out of `abcdefgh` and then narrows the
-/// window so the line wraps right after `d`.
+/// Case: in vi mode the user selects `abcd` out of `abcdefgh` and then
+/// narrows the window so the line wraps right after `d`.
 #[test]
 fn a_reflow_keeps_a_right_side_selection_end_on_its_cell() {
     let mut screen = screen(10, 3, 10);
     print_text(&mut screen, "abcdefgh");
+    assert!(screen.enter_vi_mode());
     screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
     screen.extend_selection(point(0, 3), CellSide::Right);
     let _ = screen.reflow(GridSize { cols: 4, rows: 3 }, ScrollbackOnGrow::Reclaim);
@@ -533,4 +535,23 @@ fn a_reflow_keeps_a_right_side_selection_end_on_its_cell() {
     assert_eq!(moving.line(), anchor.line());
     assert_eq!(moving.column(), 3);
     assert_eq!(screen.selection_text().as_deref(), Some("abcd"));
+}
+
+/// Asserts that a reflow in vi mode keeps a selection end set from the
+/// right side of a cell on a blank line on that blank line.
+///
+/// Case: in vi mode the user selects text down to an empty line and then
+/// narrows the window.
+#[test]
+fn a_reflow_keeps_a_right_side_selection_end_on_its_blank_line() {
+    let mut screen = screen(10, 4, 10);
+    print_text(&mut screen, "abcdefgh\n\nxy");
+    assert!(screen.enter_vi_mode());
+    screen.start_selection(point(0, 0), CellSide::Left, SelectionKind::Simple);
+    screen.extend_selection(point(1, 2), CellSide::Right);
+    let _ = screen.reflow(GridSize { cols: 4, rows: 4 }, ScrollbackOnGrow::Reclaim);
+    let (_, moving) = screen.selection.ends().expect("an active selection");
+    assert_eq!(Some(moving.line()), screen.grid.line_id_at(GridLine(2)));
+    assert!(screen.selection.include_both_cells(true, 3));
+    assert_eq!(screen.selection_text().as_deref(), Some("abcdefgh\n"));
 }
