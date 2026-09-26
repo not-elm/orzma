@@ -22,7 +22,6 @@ mod hyperlink;
 mod interpreter;
 mod placement;
 mod screen;
-mod vi;
 
 /// The crate's vocabulary, gathered for downstream consumers.
 pub mod prelude {
@@ -47,8 +46,8 @@ pub mod prelude {
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
+    pub use crate::screen::vi::{ViCursor, ViModeSwitch};
     pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
-    pub use crate::vi::{ViCursor, ViModeSwitch};
     pub use crate::{InterpretOutput, OrzmaVt, ResizeChanged, Vt, VtSignal};
 }
 

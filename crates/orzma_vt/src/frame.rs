@@ -13,8 +13,8 @@ use crate::screen::grid::GridSize;
 use crate::screen::grid::row::Row;
 use crate::screen::grid::run::Run;
 use crate::screen::selection::SelectionRange;
+use crate::screen::vi::ViCursor;
 use crate::screen::viewport::{DisplayOffset, ViewportLine};
-use crate::vi::ViCursor;
 use std::collections::HashSet;
 
 /// One emitted frame.

@@ -7,6 +7,7 @@ pub mod grid;
 pub mod margins;
 pub mod selection;
 pub mod tabs;
+pub mod vi;
 pub mod viewport;
 
 pub(crate) mod cursor;
