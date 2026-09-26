@@ -17,4 +17,5 @@
 
 # Developer Guide
 
+- [Building Webview Apps](building-webview-apps.md)
 - [Protocol Reference](protocol-reference.md)
