@@ -68,7 +68,7 @@ impl From<SelectionKind> for SelectionGeometry {
 
 /// Selection granularity.
 // TODO: Add the `Block` (rectangular column) and `Semantic` (snapped to
-// word boundaries) kinds once vi mode and semantic selection land.
+// word boundaries) kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionKind {
     /// Cell-by-cell, wrapping at the end of each line.
