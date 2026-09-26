@@ -27,6 +27,9 @@ pub mod path;
 pub mod shortcuts;
 pub mod vi_mode;
 
+#[cfg(test)]
+mod load_tests;
+
 /// Returns `v` clamped to `0.0..=1.0`, or `default` when `v` is NaN.
 pub(crate) fn norm_unit(v: f32, default: f32) -> f32 {
     if v.is_nan() {
@@ -158,48 +161,6 @@ impl OrzmaConfigs {
             );
         }
         Ok(())
-    }
-}
-
-#[cfg(feature = "test_support")]
-pub mod test_support {
-    //! Test-only helpers. Enabled via the `test_support` cargo feature.
-
-    use crate::OrzmaConfigs;
-    use crate::OrzmaConfigsResult;
-    use crate::path;
-    use std::path::PathBuf;
-
-    /// Loads [`OrzmaConfigs`] against a caller-controlled environment instead
-    /// of the process-wide one.
-    pub fn load_with_overrides(
-        orzma_config: Option<PathBuf>,
-        xdg_config_home: Option<PathBuf>,
-        home_dir: Option<PathBuf>,
-    ) -> OrzmaConfigsResult<OrzmaConfigs> {
-        struct FixedEnv {
-            orzma: Option<String>,
-            xdg: Option<String>,
-            home: Option<PathBuf>,
-        }
-        impl path::Env for FixedEnv {
-            fn var(&self, key: &str) -> Option<String> {
-                match key {
-                    path::ENV_ORZMA_CONFIG => self.orzma.clone(),
-                    path::ENV_XDG_CONFIG_HOME => self.xdg.clone(),
-                    _ => None,
-                }
-            }
-            fn home_dir(&self) -> Option<PathBuf> {
-                self.home.clone()
-            }
-        }
-        let env = FixedEnv {
-            orzma: orzma_config.map(|p| p.to_string_lossy().into_owned()),
-            xdg: xdg_config_home.map(|p| p.to_string_lossy().into_owned()),
-            home: home_dir,
-        };
-        OrzmaConfigs::load_with_env(&env)
     }
 }
 
