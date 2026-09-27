@@ -33,6 +33,11 @@ jobs:
               echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${VERSION}" >&2
               exit 1
             fi
+          elif ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            # crates.io cannot delete a published version, so a manual run must not
+            # publish the development version VERSION carries between releases.
+            echo "VERSION ${VERSION} is a prerelease; a manual run publishes only a 3-part numeric version." >&2
+            exit 1
           fi
 
           HTTP_NPM=$(curl -s -o /dev/null -w "%{http_code}" \
