@@ -1,13 +1,11 @@
-//! Pane spawn requests: pre-spawns the pane entity, binds its control
-//! token, and asks the backend for the PTY.
+//! Pane spawn requests: pre-spawns the pane entity and asks the backend for
+//! the PTY.
 
 use crate::surface::OrzmaTerminal;
 use crate::ui::ShellSurfaceUi;
 use bevy::prelude::*;
 use bevy_orzma_tty_renderer::prelude::PaneInactiveStyle;
-use bevy_orzma_webview::ControlPlaneHandle;
 use bevy_orzmux::prelude::{OrzmuxConnection, PaneRegistry, absolute_px_node};
-use orzma_tty::{EnvKey, EnvValue};
 use orzmux::prelude::{NewPaneAt, OrzmuxCommand, RequestId};
 
 /// Asks for a new pane at `at`.
@@ -26,16 +24,14 @@ impl Plugin for SpawnPlugin {
     }
 }
 
-/// Pre-spawns the entity (zero-sized until its first layout), binds the
-/// control-plane token so a fast shell can connect before `PaneOpened`
-/// is drained, then sends `NewPane`.
+/// Pre-spawns the entity (zero-sized until its first layout), then sends
+/// `NewPane`. The backend gives the shell its control-socket environment.
 fn on_pane_spawn_request(
     ev: On<PaneSpawnRequest>,
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
     connection: Res<OrzmuxConnection>,
     container: Query<Entity, With<ShellSurfaceUi>>,
-    control: Option<Res<ControlPlaneHandle>>,
 ) {
     let Ok(container) = container.single() else {
         return;
@@ -48,22 +44,13 @@ fn on_pane_spawn_request(
             PaneInactiveStyle::default(),
         ))
         .id();
-    let env = control
-        .as_deref()
-        .map(|c| {
-            c.bind_surface(entity);
-            c.surface_env(entity)
-                .map(|(key, value)| (EnvKey(key), EnvValue(value)))
-                .to_vec()
-        })
-        .unwrap_or_default();
     let request = RequestId::next();
     registry.pending_spawns.insert(request, entity);
     connection.0.send(OrzmuxCommand::NewPane {
         request,
         at: ev.at,
         cwd: None,
-        env,
+        env: Vec::new(),
     });
 }
 
@@ -76,28 +63,21 @@ fn pending_pane_node() -> Node {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_orzma_webview::TokenRegistry;
     use orzmux::prelude::OrzmuxClient;
-    use std::path::PathBuf;
 
-    /// Asserts that a spawn request pre-spawns the pane entity, binds its
-    /// token, and sends `NewPane` carrying that token in `env`.
+    /// Asserts that a spawn request pre-spawns the pane entity and sends
+    /// `NewPane` for it with no environment of its own.
     ///
-    /// Case: the user splits a pane; the new shell connects to the
-    /// control socket before the backend's `PaneOpened` is drained.
+    /// Case: the user splits a pane, and the backend supplies the new
+    /// shell's control-socket variables itself.
     #[test]
-    fn a_spawn_request_binds_the_token_then_sends_new_pane() {
+    fn a_spawn_request_pre_spawns_the_pane_then_sends_new_pane() {
         let (client, _events, commands) = OrzmuxClient::detached();
-        let tokens = TokenRegistry::default();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(SpawnPlugin)
             .init_resource::<PaneRegistry>()
-            .insert_resource(OrzmuxConnection(client))
-            .insert_resource(ControlPlaneHandle {
-                sock_path: PathBuf::from("/tmp/ctl.sock"),
-                tokens: tokens.clone(),
-            });
+            .insert_resource(OrzmuxConnection(client));
         app.world_mut().spawn((Node::default(), ShellSurfaceUi));
         app.world_mut().trigger(PaneSpawnRequest {
             at: NewPaneAt::Root,
@@ -113,8 +93,6 @@ mod tests {
             .map(|(r, e)| (*r, *e))
             .unwrap();
         assert!(app.world().get::<OrzmaTerminal>(entity).is_some());
-        let token = format!("orzma:{}", entity.to_bits());
-        assert_eq!(tokens.resolve(&token), Some(entity));
 
         let sent: Vec<OrzmuxCommand> = commands.try_iter().map(|(_, c)| c).collect();
         let [
@@ -129,7 +107,7 @@ mod tests {
             panic!("expected one NewPane, got {sent:?}");
         };
         assert_eq!(*sent_request, request);
-        assert!(env.contains(&(EnvKey("ORZMA_TOKEN".to_string()), EnvValue(token))));
+        assert!(env.is_empty());
     }
 
     /// Asserts that a freshly spawned pane carries `PaneInactiveStyle`,
@@ -141,16 +119,11 @@ mod tests {
     #[test]
     fn a_new_pane_starts_inactive() {
         let (client, _events, _commands) = OrzmuxClient::detached();
-        let tokens = TokenRegistry::default();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(SpawnPlugin)
             .init_resource::<PaneRegistry>()
-            .insert_resource(OrzmuxConnection(client))
-            .insert_resource(ControlPlaneHandle {
-                sock_path: PathBuf::from("/tmp/ctl.sock"),
-                tokens,
-            });
+            .insert_resource(OrzmuxConnection(client));
         app.world_mut().spawn((Node::default(), ShellSurfaceUi));
         app.world_mut().trigger(PaneSpawnRequest {
             at: NewPaneAt::Root,

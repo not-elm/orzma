@@ -360,11 +360,26 @@ Required:
   prefix already carries: `classify_paste_read` → `PasteRead::classify`,
   `build_grid` → `Grid::build`.
 
+Required — a constructor that takes no argument is `Default`:
+
+| Instead of (inherent no-arg constructor) | Use                                                           |
+| ---------------------------------------- | ------------------------------------------------------------- |
+| `impl Tokens { fn new() -> Self }`       | `impl Default for Tokens`, called as `Tokens::default()`      |
+
+- Write `#[derive(Default)]` when every field's default is the value the
+  empty `T` needs.
+- On a generic type, write the impl by hand (`impl<P> Default for
+  Tokens<P>`): the derive adds a `P: Default` bound the type parameter
+  does not need.
+- Code that predates this rule keeps its no-arg `new()` until it is
+  touched.
+
 Forbidden:
 
 | Pattern                                                | Why                                                        |
 | ------------------------------------------------------ | ---------------------------------------------------------- |
 | Free `fn` returning a locally-defined `T` it constructs | The constructor is discoverable only by grep, not from `T` |
+| Inherent `fn new() -> Self` taking no argument          | `Default` is the standard spelling of an argument-free constructor |
 
 Exceptions:
 
@@ -898,7 +913,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Change detection — no manual `set_changed()` / `bypass_change_detection()`-then-`set_changed()` notification; mutate conditionally so normal `DerefMut` drives change detection (see "Change detection — let mutation drive it, don't force it manually")
 - Imports — no inline fully-qualified paths in signatures, bodies, or type parameters; add a `use` at the top instead (see "Imports — import, don't inline")
 - Naming — `Query` parameters must not use a `_q` suffix; use a descriptive singular or plural noun (see "Naming — Query parameters")
-- Constructors — a function that builds a value of a local struct/enum must be an associated function on that type (`T::build`), not a free `fn build_t(…) -> T` (see "Constructors — type-building functions are associated functions")
+- Constructors — a function that builds a value of a local struct/enum must be an associated function on that type (`T::build`), not a free `fn build_t(…) -> T`, and a constructor taking no argument is a `Default` impl, not an inherent `fn new()` (see "Constructors — type-building functions are associated functions")
 - System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, hand off across the seam via an `EntityEvent`+observer or a `Message` (`MessageWriter`/`MessageReader`) — never inline sequencing — bulky inline blocks extracted to helpers, and each system body kept within ~150 lines (see "System composition — keep systems focused; split by responsibility")
 - Protocol purity — the types that cross the GUI channels (`orzmux::backend`'s `OrzmuxEvent` and its payloads, `orzmux::event_loop`'s `OrzmuxCommand`) carry no `Entity` / bevy types / GPU handles, so the multiplexer backend stays a Bevy-free thread and the channel types can later cross a socket boundary unchanged
 - Error handling — no `debug_assert!`, `unwrap`, `expect`, `panic!` or `assert!` in non-test code to enforce a precondition or reject an input; failures are returned as `Result` with `thiserror` enums and handled at the boundary that cannot recover (see "Error handling — return `Result`, don't assert or unwrap"). Enabling `clippy::unwrap_used` / `clippy::expect_used` workspace-wide would move the unwrap / expect half to the tool-enforced list

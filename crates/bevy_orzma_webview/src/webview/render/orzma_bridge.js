@@ -51,6 +51,10 @@
 
   var api = {
     call: function (method, params) {
+      // NOTE: the host drops a frame whose method is not a string without replying, so reject here or the Promise never settles.
+      if (typeof method !== 'string') {
+        return Promise.reject(new TypeError('orzma.call: method must be a string'));
+      }
       var reqId = 'o' + nextId++;
       var encoded = encodeParam(params);
       return new Promise(function (resolve, reject) {

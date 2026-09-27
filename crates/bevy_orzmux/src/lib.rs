@@ -17,6 +17,7 @@ mod registry;
 mod requests;
 mod signals;
 mod title;
+mod webview;
 
 pub mod prelude {
     pub use crate::{
@@ -30,6 +31,7 @@ pub mod prelude {
         requests::*,
         signals::*,
         title::TtyTitle,
+        webview::OrzmuxWebviewEvent,
     };
     pub use orzmux::prelude::{OrzmuxClient, OrzmuxConfig, SplitId, SplitOrientation};
 }

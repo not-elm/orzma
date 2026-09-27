@@ -1,27 +1,12 @@
-//! Host runtime: a per-handle runtime root used to mint the user-private
-//! socket directory tree for the webview control plane.
+//! The runtime directory tree the control socket lives in:
+//! `<base>/<pid>/<name>/{sock,bin}/`, private to the current user and
+//! removed on drop.
 
+use crate::error::{RuntimeRootError, WebviewHostResult};
 use crate::private_dir::restrict_to_current_user;
 use std::path::{Path, PathBuf};
 
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
-
-/// Error returned when resolving a [`RuntimeRoot`].
-#[derive(Debug, thiserror::Error)]
-pub enum RuntimeRootError {
-    /// The longest socket path under the chosen root would overflow `sun_path`.
-    #[error("'{name}' socket path exceeds {limit} bytes")]
-    SocketPathTooLong {
-        /// Webview handle name whose socket path overflowed.
-        name: String,
-        /// The `sun_path` byte limit that was exceeded.
-        limit: usize,
-    },
-
-    /// Creating or permissioning the runtime directories failed.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-}
 
 /// A per-handle runtime directory tree (`<base>/<pid>/<name>/{sock,bin}/`), removed on drop.
 pub struct RuntimeRoot {
@@ -34,7 +19,13 @@ impl RuntimeRoot {
     /// Resolves a runtime root under `parent/<pid>/<name>/`, falling back on
     /// Unix to `/tmp/orzma-webview` when the socket path would overflow the
     /// `sun_path` limit; on Windows an overflow is an error.
-    pub fn resolve_in(parent: &Path, pid: u32, name: &str) -> Result<Self, RuntimeRootError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeRootError::SocketPathTooLong`] when no candidate
+    /// parent fits the socket path, and an I/O error when a directory cannot
+    /// be created or restricted to the current user.
+    pub fn resolve_in(parent: &Path, pid: u32, name: &str) -> WebviewHostResult<Self> {
         if socket_path_fits(parent, pid, name) {
             return Self::new_in(parent, pid, name);
         }
@@ -52,7 +43,8 @@ impl RuntimeRoot {
         Err(RuntimeRootError::SocketPathTooLong {
             name: name.to_owned(),
             limit: SUN_PATH_MAX,
-        })
+        }
+        .into())
     }
 
     /// The socket path for the given `name` under this root.
@@ -75,7 +67,7 @@ impl RuntimeRoot {
         &self.bin_dir
     }
 
-    fn new_in(parent: &Path, pid: u32, name: &str) -> Result<Self, RuntimeRootError> {
+    fn new_in(parent: &Path, pid: u32, name: &str) -> WebviewHostResult<Self> {
         let root = parent.join(pid.to_string()).join(name);
         let sock_dir = root.join("sock");
         let bin_dir = root.join("bin");
@@ -122,6 +114,7 @@ fn socket_path_fits(parent: &Path, pid: u32, name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::WebviewHostError;
     use crate::private_dir::assert_private_dir;
 
     /// Asserts that the socket directory is private to the current user
@@ -217,7 +210,9 @@ mod tests {
         let parent = tempfile::tempdir().unwrap();
         assert!(matches!(
             RuntimeRoot::resolve_in(parent.path(), 1, &long_name),
-            Err(RuntimeRootError::SocketPathTooLong { .. })
+            Err(WebviewHostError::RuntimeRoot(
+                RuntimeRootError::SocketPathTooLong { .. }
+            ))
         ));
     }
 
