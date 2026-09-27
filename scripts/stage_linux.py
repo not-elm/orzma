@@ -56,6 +56,8 @@ CEF_REQUIRED_ENTRIES = (
     "locales",
 )
 
+# Chromium on Linux ignores `--lang`, picks the locale from LANGUAGE / LC_ALL /
+# LC_MESSAGES / LANG, and falls back to en-US, so ship the fallback and the Japanese pack.
 CEF_LOCALES = ("en-US", "ja")
 
 ARCHIVE_NAME_RE = re.compile(r"^cef_binary_([^+]+)\+.*_linux64_minimal\.tar\.bz2$")

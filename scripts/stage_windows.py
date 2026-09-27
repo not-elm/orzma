@@ -58,6 +58,8 @@ OPTIONAL_ENTRIES = {
     "vulkan-1.dll",
 }
 
+# CEF passes `--lang=en-US` when the embedder sets no locale, and Chromium on Windows
+# honors it, so no other locale pack is ever read there.
 CEF_LOCALES = ("en-US",)
 
 
