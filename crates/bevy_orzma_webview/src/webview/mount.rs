@@ -1,12 +1,10 @@
-//! Webview mounting: `ChildOf` children of a terminal surface that render a
-//! registered view into the terminal's text flow, keep their size in step with
-//! the cell metrics, and project their placements into `TerminalOverlays`.
+//! Webview mounting: `ChildOf` children of a terminal surface that the
+//! webview host mounts, resizes, and unmounts, kept in step with the cell
+//! metrics and projected into the terminal's `TerminalOverlays`.
 
-use super::apc::NonInteractive;
+use super::forward_keys::ForwardKeys;
 use super::render::preload::build_preload;
-use crate::control_plane::{
-    ConnectionWriters, HandleId, NormalizedChord, OrzmaRegistry, OrzmaSource, PushMsg, WebviewOwner,
-};
+use crate::error::{WebviewError, WebviewResult};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
@@ -20,16 +18,18 @@ use bevy_orzma_tty_renderer::prelude::{
     OVERLAY_SLOTS, TerminalCellMetricsResource, TerminalMaterialSystems, TerminalOverlays,
     TerminalUiMaterial, TerminalView,
 };
-use bevy_orzmux::prelude::{RequestTtyWebviewRemove, TtyWebviewEvictedSignal};
-use orzma_vt::prelude::InstanceId;
+use bevy_orzmux::prelude::{OrzmuxConnection, OrzmuxWebviewEvent};
+use orzma_vt::prelude::{InstanceId, PlacementSize};
+use orzma_webview_host::prelude::{HandleId, MountId, MountSpec, WebviewCommand, WebviewEvent};
+use orzmux::prelude::OrzmuxCommand;
 
-/// The normalized forward-key chords for a mounted webview, copied from
-/// its registration.
-#[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
-pub struct ForwardKeys(pub Vec<NormalizedChord>);
+/// Marks a webview as render-only: no pointer or keyboard input reaches the
+/// embedded page.
+#[derive(Component, Debug, Default)]
+pub struct NonInteractive;
 
-/// Marks a webview entity and records its identity: the instance it was
-/// mounted under, the registration handle it came from, the overlay
+/// Marks a webview entity and records its identity: the mount the host
+/// minted for it, the placement and registration it shows, the overlay
 /// texture slot it occupies on its parent terminal, and the rectangle it
 /// reserved. The owning terminal surface is the `ChildOf` parent.
 ///
@@ -39,39 +39,113 @@ pub struct ForwardKeys(pub Vec<NormalizedChord>);
 /// `cols` here.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct Webview {
-    /// The registration this webview's content came from.
-    pub handle: HandleId,
-    /// The host-minted instance this webview was mounted under; frames
-    /// address this placement by it.
-    pub instance: InstanceId,
-    /// The overlay texture slot (0..`OVERLAY_SLOTS`) on the parent terminal.
-    pub slot: u8,
-    /// Rect height in terminal cells.
-    pub rows: u16,
-    /// Rect width in terminal cells.
-    pub cols: u16,
+    handle: HandleId,
+    instance: InstanceId,
+    mount: MountId,
+    slot: u8,
+    rows: u16,
+    cols: u16,
 }
 
-/// Marks a bridged webview entity after it has produced its first
-/// successful projection into `TerminalOverlays` and the `Compositing { active:
-/// true }` push notification has been sent. Prevents duplicate start
-/// notifications on subsequent frames where the same rect re-projects.
+/// A pointer hit on an interactive webview rect: the child entity that
+/// owns the rect and the pointer position in webview-local DIP (logical px).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WebviewHit {
+    /// The interactive webview child under the pointer.
+    pub child: Entity,
+    /// `(local_phys − rect_origin_phys) / scale_factor` — the pointer in
+    /// webview-local DIP, the coordinate space CEF mouse events expect.
+    pub local_dip: Vec2,
+}
+
+/// Marks a webview whose first successful projection into `TerminalOverlays`
+/// has been reported to the host as `Composited`, so later projections of
+/// the same rect report nothing.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompositeNotified;
 
-/// Registers the webview runtime systems: the `WebviewSize` size sync, the
-/// per-frame projection that derives `TerminalOverlays` from the
+/// Marks a webview whose page has the `window.orzma` bridge.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Bridged;
+
+/// Registers the webview runtime: the observer that spawns, resizes, and
+/// despawns webviews on the host's mount events, the `WebviewSize` size sync,
+/// the per-frame projection that derives `TerminalOverlays` from the
 /// frame-carried placement list, and the render-world ordering edge that
 /// keeps webview GPU texture injection ahead of the terminal material's
 /// bind-group rebuild.
 pub(crate) struct WebviewPlugin;
 
+impl Webview {
+    /// The webview of `mount`, showing `handle`'s content for `instance` in
+    /// overlay texture `slot` (0..`OVERLAY_SLOTS`) of its terminal, over a
+    /// rect of `rows` × `cols` cells.
+    pub fn new(
+        handle: HandleId,
+        instance: InstanceId,
+        mount: MountId,
+        slot: u8,
+        rows: u16,
+        cols: u16,
+    ) -> Self {
+        Self {
+            handle,
+            instance,
+            mount,
+            slot,
+            rows,
+            cols,
+        }
+    }
+
+    /// The registration this webview's content comes from.
+    pub fn handle(&self) -> &HandleId {
+        &self.handle
+    }
+
+    /// The placement this webview shows; frames address the placement by it.
+    pub fn instance(&self) -> InstanceId {
+        self.instance
+    }
+
+    /// The mount the host minted for this webview.
+    pub fn mount(&self) -> MountId {
+        self.mount
+    }
+
+    /// The overlay texture slot on the parent terminal.
+    pub fn slot(&self) -> u8 {
+        self.slot
+    }
+
+    /// Rect height in terminal cells.
+    pub fn rows(&self) -> u16 {
+        self.rows
+    }
+
+    /// Rect width in terminal cells.
+    pub fn cols(&self) -> u16 {
+        self.cols
+    }
+
+    /// This webview with its rect resized to `size`.
+    pub fn resized(&self, size: PlacementSize) -> Self {
+        Self {
+            rows: size.rows,
+            cols: size.cols,
+            ..self.clone()
+        }
+    }
+}
+
 impl Plugin for WebviewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, sync_webview_size).add_systems(
-            PostUpdate,
-            project_webview_overlays.before(TerminalMaterialSystems::UpdateMaterial),
-        );
+        app.add_systems(Update, sync_webview_size)
+            .add_systems(
+                PostUpdate,
+                project_webview_overlays.before(TerminalMaterialSystems::UpdateMaterial),
+            )
+            .add_observer(apply_mount_event);
         // NOTE: without this edge, `TerminalUiMaterial`'s bind-group rebuild
         // can run between bevy_cef's rebind image-touch (which re-uploads the
         // CPU placeholder) and the GPU texture injection, capturing the
@@ -86,225 +160,6 @@ impl Plugin for WebviewPlugin {
                     .before(prepare_assets::<PreparedUiMaterial<TerminalUiMaterial>>),
             );
         }
-        app.add_observer(on_webview_evicted)
-            .add_observer(on_webview_removed);
-    }
-}
-
-/// Everything the `Mount` verb carries into `mount`: the target
-/// terminal surface and the placement the VT registered.
-pub(crate) struct WebviewMountContext {
-    /// The requesting terminal surface — the `ChildOf` parent of the mount.
-    pub terminal_surface: Entity,
-    /// The instance the mount registered. A mount the VT refused never
-    /// reaches here.
-    pub instance: InstanceId,
-    /// Rect height in terminal cells, validated to `1..=200`.
-    pub rows: u16,
-    /// Rect width in terminal cells, validated to `1..=400`.
-    pub cols: u16,
-}
-
-/// The system params `mount` and `unmount` need.
-#[derive(SystemParam)]
-pub(crate) struct WebviewParams<'w, 's> {
-    commands: Commands<'w, 's>,
-    images: ResMut<'w, Assets<Image>>,
-    // NOTE: this is the ONLY `Webview` query in this `SystemParam`. Adding a
-    // second, read-only one would conflict with this mutable access and panic
-    // at system init (Bevy B0001); read through `Query::get` instead.
-    views: Query<'w, 's, &'static mut Webview>,
-    children: Query<'w, 's, &'static Children>,
-    metrics: Option<Res<'w, TerminalCellMetricsResource>>,
-    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
-}
-
-/// The resolved content + trust facts for an `Omount;n=<instance>`: the URL
-/// to load (an `orzma://<handle>/…` origin for `Dir`/`Inline` sources, or the
-/// verbatim remote URL for a `Url` source), the input policy, and the
-/// registering program's `(connection_id, handle)` for back-channel routing.
-pub(crate) struct ResolvedWebviewMount {
-    /// The URL to load (`WebviewSource::Url`).
-    pub url: String,
-    /// Whether the page receives pointer/keyboard input.
-    pub interactive: bool,
-    /// `(connection_id, handle)` of the registering program, used to stamp
-    /// `WebviewOwner` for `window.orzma` back-channel routing. `Some` only when
-    /// the registration is bridged; a display-only `Url` view leaves it `None`.
-    pub owner: Option<(u64, HandleId)>,
-    /// The normalized forward-key chords copied from the registration, stamped
-    /// as a `ForwardKeys` component.
-    pub forward_keys: Vec<NormalizedChord>,
-    /// User-supplied preload scripts, injected after the host bridge (and as
-    /// the only scripts for a display-only view).
-    pub preload: Vec<String>,
-}
-
-/// Resolves a handle (already looked up from an `Omount;n=<instance>`'s
-/// instance) against the `OrzmaRegistry` (Tier 1). Returns `None` for an
-/// unregistered or unowned handle.
-///
-/// `Dir` and `Inline` handles resolve to an `orzma://<handle>/…` URL (one
-/// origin per handle); a `Url` handle resolves to its verbatim remote URL. A
-/// handle resolves ONLY when `requesting_surface` is its `owner_surface`, and
-/// `owner` is populated only for a bridged registration.
-pub(crate) fn resolve_mount(
-    id: &HandleId,
-    requesting_surface: Entity,
-    dynamic: &OrzmaRegistry,
-) -> Option<ResolvedWebviewMount> {
-    let view = dynamic.get(id)?;
-    if view.owner_surface != requesting_surface {
-        return None;
-    }
-    let url = match &view.source {
-        OrzmaSource::Dir(_) => format!("orzma://{id}/{}", view.entry),
-        OrzmaSource::Inline(_) => format!("orzma://{id}/index.html"),
-        OrzmaSource::Url { url, .. } => url.clone(),
-    };
-    let owner = view
-        .source
-        .is_bridged()
-        .then(|| (view.connection_id, id.clone()));
-    Some(ResolvedWebviewMount {
-        url,
-        interactive: view.interactive,
-        owner,
-        forward_keys: view.forward_keys.clone(),
-        preload: view.preload.clone(),
-    })
-}
-
-/// Mounts a registered view as a webview child of the requesting
-/// terminal surface, applying the policy gates in order: a second mount
-/// of an instance already live on this terminal updates its reserved
-/// rectangle instead of spawning again; an unknown instance, a handle the
-/// requesting surface does not own, and overlay-slot exhaustion are each a
-/// `tracing::debug!` plus a reclaim of the VT-side reservation.
-///
-/// `WebviewSize` is seeded to `(cols × cell_w, rows × cell_h) / scale_factor`
-/// in logical px from `TerminalCellMetricsResource` and the primary window.
-/// When neither exists yet (headless tests, pre-first-render) a placeholder
-/// cell of 8×16 physical px at scale 1.0 is used, and the size is corrected
-/// once real metrics arrive.
-pub(crate) fn mount(params: &mut WebviewParams, dynamic: &OrzmaRegistry, ctx: WebviewMountContext) {
-    let live = live_webview_children(&params.children, &params.views, ctx.terminal_surface);
-    if let Some(existing) = live.iter().find(|live| live.instance == ctx.instance) {
-        if let Ok(mut view) = params.views.get_mut(existing.entity) {
-            let next = Webview {
-                handle: view.handle.clone(),
-                instance: view.instance,
-                slot: view.slot,
-                rows: ctx.rows,
-                cols: ctx.cols,
-            };
-            // NOTE: set_if_neq elides a no-op re-emit so an unchanged frame
-            // triggers neither a projection move nor a CEF surface resize.
-            view.set_if_neq(next);
-        }
-        return;
-    }
-    let Some(handle) = dynamic
-        .resolve_instance(ctx.instance)
-        .map(|(h, _)| h.clone())
-    else {
-        tracing::debug!(instance = %ctx.instance, "apc-webview: mount for an unknown instance, dropping");
-        reclaim(params, ctx.terminal_surface, ctx.instance);
-        return;
-    };
-    let Some(resolved) = resolve_mount(&handle, ctx.terminal_surface, dynamic) else {
-        tracing::debug!(%handle, "apc-webview: mount for an unowned handle, dropping");
-        reclaim(params, ctx.terminal_surface, ctx.instance);
-        return;
-    };
-    let Some(slot) = smallest_free_slot(&live) else {
-        tracing::debug!(%handle, "apc-webview: all inline overlay slots occupied, dropping");
-        reclaim(params, ctx.terminal_surface, ctx.instance);
-        return;
-    };
-    let scale_factor = params
-        .windows
-        .iter()
-        .next()
-        .map(Window::scale_factor)
-        .unwrap_or(1.0);
-    let (cell_w_phys, cell_h_phys) = cell_size_phys(params.metrics.as_deref());
-    let size = seed_logical_size(ctx.rows, ctx.cols, cell_w_phys, cell_h_phys, scale_factor);
-    let texture = WebviewTextureTarget(params.images.add(Image::default()));
-    let source = WebviewSource::new(resolved.url);
-    let webview = params.commands.spawn_empty().id();
-    // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
-    // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
-    // input paths and display-size allocators key on `With<WebviewSource>`
-    // plus exactly those components; adding one double-attaches input
-    // forwarding and display allocation on top of orzma's inline routing.
-    params.commands.entity(webview).insert((
-        ChildOf(ctx.terminal_surface),
-        source,
-        texture,
-        WebviewSize(size),
-        Webview {
-            handle: handle.clone(),
-            instance: ctx.instance,
-            slot,
-            rows: ctx.rows,
-            cols: ctx.cols,
-        },
-    ));
-    if !resolved.interactive {
-        params.commands.entity(webview).insert(NonInteractive);
-    }
-    // NOTE: the orzma bridge script (window.orzma) and WebviewOwner (the
-    // inbound-call gate) are inserted only for a bridged registration; the
-    // user's preload scripts ride after the bridge. A display-only view
-    // (owner None) gets no bridge and no WebviewOwner, but still receives its
-    // own preload scripts when it declared any.
-    if let Some((connection_id, handle)) = resolved.owner {
-        params.commands.entity(webview).insert((
-            build_preload(&resolved.preload),
-            WebviewOwner {
-                connection_id,
-                handle,
-                instance: ctx.instance,
-            },
-        ));
-    } else if !resolved.preload.is_empty() {
-        params
-            .commands
-            .entity(webview)
-            .insert(PreloadScripts::from(resolved.preload.clone()));
-    }
-    params
-        .commands
-        .entity(webview)
-        .insert(ForwardKeys(resolved.forward_keys.clone()));
-    tracing::debug!(
-        %handle,
-        instance = %ctx.instance,
-        terminal = ?ctx.terminal_surface,
-        slot,
-        rows = ctx.rows,
-        cols = ctx.cols,
-        "apc-webview: webview mounted"
-    );
-}
-
-/// Despawns the webview child(ren) of `terminal_surface` matching the
-/// scope: `Some(id)` removes that one instance, and `None` removes every
-/// webview child.
-pub(crate) fn unmount(
-    params: &mut WebviewParams,
-    terminal_surface: Entity,
-    instance: Option<InstanceId>,
-) {
-    let targets: Vec<Entity> =
-        live_webview_children(&params.children, &params.views, terminal_surface)
-            .into_iter()
-            .filter(|live| instance.is_none_or(|id| live.instance == id))
-            .map(|live| live.entity)
-            .collect();
-    for entity in targets {
-        params.commands.entity(entity).try_despawn();
     }
 }
 
@@ -319,17 +174,6 @@ pub fn focused_webview_of(
     let candidate = focused?.0?;
     let parent = webview_parents.get(candidate).ok()?.parent();
     (Some(parent) == active_surface).then_some(candidate)
-}
-
-/// A pointer hit on an interactive webview rect: the child entity that
-/// owns the rect and the pointer position in webview-local DIP (logical px).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct WebviewHit {
-    /// The interactive webview child under the pointer.
-    pub child: Entity,
-    /// `(local_phys − rect_origin_phys) / scale_factor` — the pointer in
-    /// webview-local DIP, the coordinate space CEF mouse events expect.
-    pub local_dip: Vec2,
 }
 
 /// Hit-tests a terminal-local physical-pixel point against the terminal's
@@ -402,71 +246,178 @@ pub fn webview_local_dip(
     Some((local_phys - origin_phys) / scale_factor.max(f32::EPSILON))
 }
 
+/// The webview entity of `mount`, or `None` when no live webview has it.
+pub(crate) fn webview_of_mount(
+    webviews: &Query<(Entity, &Webview)>,
+    mount: MountId,
+) -> Option<Entity> {
+    webviews
+        .iter()
+        .find(|(_, view)| view.mount == mount)
+        .map(|(entity, _)| entity)
+}
+
 const FALLBACK_CELL_W_PHYS: f32 = 8.0;
 const FALLBACK_CELL_H_PHYS: f32 = 16.0;
 
-/// Drops the reservation a refused mount left in the VT.
-fn reclaim(params: &mut WebviewParams, terminal: Entity, instance: InstanceId) {
-    params.commands.trigger(RequestTtyWebviewRemove {
-        terminal,
-        instances: vec![instance],
-    });
+/// The system params the mount lifecycle needs.
+#[derive(SystemParam)]
+struct WebviewParams<'w, 's> {
+    commands: Commands<'w, 's>,
+    images: ResMut<'w, Assets<Image>>,
+    // NOTE: this is the ONLY `Webview` query in this `SystemParam`. Adding a
+    // second, read-only one would conflict with this mutable access and panic
+    // at system init (Bevy B0001); read through `Query::get` instead.
+    views: Query<'w, 's, (Entity, &'static mut Webview)>,
+    children: Query<'w, 's, &'static Children>,
+    metrics: Option<Res<'w, TerminalCellMetricsResource>>,
+    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
 
-/// Despawns the placements named by a `TtyWebviewEvictedSignal` on the
-/// signalling terminal. Unknown ids are ignored, so a re-delivered or
-/// stale eviction is a no-op.
-fn on_webview_evicted(
-    event: On<TtyWebviewEvictedSignal>,
-    mut commands: Commands,
-    children: Query<&Children>,
-    views: Query<&Webview>,
-) {
-    let Ok(kids) = children.get(event.terminal) else {
-        return;
-    };
-    for child in kids.iter() {
-        if let Ok(view) = views.get(child)
-            && event.placements.contains(&view.instance)
-        {
-            commands.entity(child).try_despawn();
+/// Spawns, resizes, and despawns webviews as the host mounts, resizes, and
+/// unmounts placements. A webview that cannot be spawned is logged and
+/// skipped.
+fn apply_mount_event(ev: On<OrzmuxWebviewEvent>, mut webview: WebviewParams) {
+    match ev.webview_event() {
+        WebviewEvent::Mounted {
+            pane,
+            mount,
+            instance,
+            spec,
+        } => {
+            if let Err(error) = spawn_webview(&mut webview, *pane, *mount, *instance, spec) {
+                tracing::error!(%error, ?mount, "webview not spawned");
+            }
         }
+        WebviewEvent::Resized { mount, size } => resize_webview(&mut webview, *mount, *size),
+        WebviewEvent::Unmounted { mounts } => despawn_webviews(&mut webview, mounts),
+        _ => {}
     }
 }
 
-/// One live webview child of a terminal surface: the entity plus the
-/// identity the mount and unmount gates match on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct LiveWebview {
-    entity: Entity,
+/// Spawns the webview of `mount` as a `ChildOf` child of `pane` in the
+/// smallest free overlay slot, with the components `spec` calls for.
+///
+/// `WebviewSize` is seeded to `(cols × cell_w, rows × cell_h) / scale_factor`
+/// in logical px from `TerminalCellMetricsResource` and the primary window.
+/// When neither exists yet (headless tests, pre-first-render) a placeholder
+/// cell of 8×16 physical px at scale 1.0 is used, and the size is corrected
+/// once real metrics arrive. A mount for a pane that no longer exists spawns
+/// nothing.
+///
+/// # Errors
+///
+/// Returns [`WebviewError::NoFreeSlot`] when every overlay slot of `pane` is
+/// occupied; nothing is spawned then.
+fn spawn_webview(
+    params: &mut WebviewParams,
+    pane: Entity,
+    mount: MountId,
     instance: InstanceId,
-    slot: u8,
+    spec: &MountSpec,
+) -> WebviewResult {
+    if params.commands.get_entity(pane).is_err() {
+        tracing::debug!(?mount, "webview mount for a despawned pane dropped");
+        return Ok(());
+    }
+    let occupied = occupied_slots(&params.children, &params.views, pane);
+    let slot = smallest_free_slot(&occupied).ok_or(WebviewError::NoFreeSlot)?;
+    let scale_factor = params
+        .windows
+        .iter()
+        .next()
+        .map(Window::scale_factor)
+        .unwrap_or(1.0);
+    let (cell_w_phys, cell_h_phys) = cell_size_phys(params.metrics.as_deref());
+    let size = spec.size();
+    let logical = seed_logical_size(size.rows, size.cols, cell_w_phys, cell_h_phys, scale_factor);
+    let texture = WebviewTextureTarget(params.images.add(Image::default()));
+    // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
+    // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
+    // input paths and display-size allocators key on `With<WebviewSource>`
+    // plus exactly those components; adding one double-attaches input
+    // forwarding and display allocation on top of orzma's inline routing.
+    // The same goes for picking components: bevy_cef writes `FocusedWebview`
+    // on `Pointer<Press>`, which would bypass orzma's focus handling.
+    let mut entity = params.commands.spawn((
+        ChildOf(pane),
+        WebviewSource::new(spec.url()),
+        texture,
+        WebviewSize(logical),
+        Webview::new(
+            spec.handle().clone(),
+            instance,
+            mount,
+            slot,
+            size.rows,
+            size.cols,
+        ),
+        ForwardKeys::from_wire(spec.forward_keys()),
+    ));
+    if !spec.interactive() {
+        entity.insert(NonInteractive);
+    }
+    if spec.bridged() {
+        entity.insert((Bridged, build_preload(spec.preload())));
+    } else if !spec.preload().is_empty() {
+        entity.insert(PreloadScripts::from(spec.preload().to_vec()));
+    }
+    tracing::debug!(
+        handle = %spec.handle(),
+        %instance,
+        ?mount,
+        ?pane,
+        slot,
+        rows = size.rows,
+        cols = size.cols,
+        "webview mounted"
+    );
+    Ok(())
 }
 
-/// The live webview children of a terminal surface.
-fn live_webview_children(
+/// Resizes the webview of `mount` to `size`; an unknown mount is ignored.
+fn resize_webview(params: &mut WebviewParams, mount: MountId, size: PlacementSize) {
+    if let Some((_, mut view)) = params
+        .views
+        .iter_mut()
+        .find(|(_, view)| view.mount == mount)
+    {
+        let next = view.resized(size);
+        view.set_if_neq(next);
+    }
+}
+
+/// Despawns the webviews of `mounts`; unknown mounts are ignored.
+fn despawn_webviews(params: &mut WebviewParams, mounts: &[MountId]) {
+    let targets: Vec<Entity> = params
+        .views
+        .iter()
+        .filter(|(_, view)| mounts.contains(&view.mount))
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in targets {
+        params.commands.entity(entity).try_despawn();
+    }
+}
+
+/// The overlay slots the live webview children of `terminal_surface` occupy.
+fn occupied_slots(
     children: &Query<&Children>,
-    views: &Query<&'static mut Webview>,
+    views: &Query<(Entity, &'static mut Webview)>,
     terminal_surface: Entity,
-) -> Vec<LiveWebview> {
+) -> Vec<u8> {
     let Ok(kids) = children.get(terminal_surface) else {
         return Vec::new();
     };
     kids.iter()
-        .filter_map(|child| {
-            views.get(child).ok().map(|view| LiveWebview {
-                entity: child,
-                instance: view.instance,
-                slot: view.slot,
-            })
-        })
+        .filter_map(|child| views.get(child).ok().map(|(_, view)| view.slot))
         .collect()
 }
 
-/// The smallest slot in `0..OVERLAY_SLOTS` not occupied by a live child, or
-/// `None` when every slot is taken.
-fn smallest_free_slot(live: &[LiveWebview]) -> Option<u8> {
-    (0..OVERLAY_SLOTS as u8).find(|slot| live.iter().all(|live| live.slot != *slot))
+/// The smallest slot in `0..OVERLAY_SLOTS` not in `occupied`, or `None` when
+/// every slot is taken.
+fn smallest_free_slot(occupied: &[u8]) -> Option<u8> {
+    (0..OVERLAY_SLOTS as u8).find(|slot| !occupied.contains(slot))
 }
 
 /// Physical cell pitch from the metrics resource, floored to whole physical
@@ -517,7 +468,9 @@ fn sync_webview_size(
 }
 
 /// Derives each terminal's `TerminalOverlays` from the frame-carried
-/// placement list, every frame, starting from the all-sentinel default.
+/// placement list, every frame, starting from the all-sentinel default, and
+/// reports each webview's first successful projection to the host as
+/// `Composited`.
 ///
 /// An id with no matching child is ignored, a mounted child whose id is
 /// absent paints nothing (hidden, not unmounted), and a rect whose top
@@ -537,20 +490,15 @@ fn project_webview_overlays(
         Option<&Children>,
         Has<TerminalOverlays>,
     )>,
-    webviews: Query<(
-        &Webview,
-        &WebviewTextureTarget,
-        Has<CompositeNotified>,
-        Option<&WebviewOwner>,
-    )>,
-    writers: Res<ConnectionWriters>,
+    webviews: Query<(&Webview, &WebviewTextureTarget, Has<CompositeNotified>)>,
+    connection: Option<Res<OrzmuxConnection>>,
 ) {
     for (terminal, terminal_view, children, has_overlays) in &terminals {
         let mut overlays = TerminalOverlays::default();
         let mut has_webview_child = false;
         if let Some(kids) = children {
             for child in kids.iter() {
-                let Ok((view, texture, already_notified, owner)) = webviews.get(child) else {
+                let Ok((view, texture, already_notified)) = webviews.get(child) else {
                     continue;
                 };
                 has_webview_child = true;
@@ -573,8 +521,9 @@ fn project_webview_overlays(
                 if slot >= OVERLAY_SLOTS {
                     continue;
                 }
-                let row =
-                    i32::try_from(row).expect("the cull above bounds the row to the viewport");
+                let Ok(row) = i32::try_from(row) else {
+                    continue;
+                };
                 overlays.rects[slot] = IVec4::new(
                     row,
                     i32::from(projected.point.column.0),
@@ -584,15 +533,12 @@ fn project_webview_overlays(
                 overlays.textures[slot] = Some(texture.0.clone());
                 if !already_notified {
                     commands.entity(child).insert(CompositeNotified);
-                    if let Some(owner) = owner {
-                        writers.push(
-                            owner.connection_id,
-                            &PushMsg::Compositing {
-                                handle: owner.handle.clone(),
-                                instance: owner.instance.to_string(),
-                                active: true,
-                            },
-                        );
+                    if let Some(connection) = connection.as_deref() {
+                        connection
+                            .0
+                            .send(OrzmuxCommand::Webview(WebviewCommand::Composited {
+                                mount: view.mount,
+                            }));
                     }
                 }
             }
@@ -603,120 +549,27 @@ fn project_webview_overlays(
     }
 }
 
-/// Sends a `Compositing { active: false }` push notification when a bridged
-/// webview entity is despawned after having been notified at least once
-/// (i.e., after its first successful projection). Entities that were never
-/// projected (never stamped `CompositeNotified`) are silently ignored.
-fn on_webview_removed(
-    event: On<Remove, Webview>,
-    owners: Query<(&WebviewOwner, Has<CompositeNotified>)>,
-    writers: Res<ConnectionWriters>,
-) {
-    let Ok((owner, notified)) = owners.get(event.entity) else {
-        return;
-    };
-    if !notified {
-        return;
-    }
-    writers.push(
-        owner.connection_id,
-        &PushMsg::Compositing {
-            handle: owner.handle.clone(),
-            instance: owner.instance.to_string(),
-            active: false,
-        },
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control_plane::OrzmaView;
-    use crate::webview::apc::{on_webview_mount, on_webview_unmount};
     use bevy::ecs::system::RunSystemOnce;
-    use bevy_cef::prelude::PreloadScripts;
     use bevy_orzma_tty_renderer::prelude::CellMetrics;
-    use bevy_orzmux::prelude::{
-        TtyWebviewEvictedSignal, TtyWebviewMountRejectedSignal, TtyWebviewMountSignal,
-        TtyWebviewUnmountSignal,
-    };
-    use orzma_vt::prelude::{AnchoredPlacement, GridColumn, GridLine, GridPoint, PlacementSize};
+    use bevy_orzmux::prelude::OrzmuxClient;
+    use crossbeam_channel::Receiver;
+    use orzma_vt::prelude::{AnchoredPlacement, GridColumn, GridLine, GridPoint, MAX_PLACEMENTS};
+    use orzmux::prelude::CommandSeq;
+
+    /// The mount id the next `mount_with` hands out.
+    #[derive(Resource, Default)]
+    struct NextMount(u64);
 
     fn make_test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .init_resource::<OrzmaRegistry>()
             .init_resource::<Assets<Image>>()
-            .init_resource::<ConnectionWriters>()
-            .add_observer(on_webview_mount)
-            .add_observer(on_webview_unmount)
-            .add_observer(on_webview_removed)
-            .add_observer(on_webview_evicted);
+            .init_resource::<NextMount>()
+            .add_observer(apply_mount_event);
         app
-    }
-
-    /// Registers `view` under `handle` and mints its first instance, the
-    /// two-step the control plane's `register` performs.
-    fn register_view(app: &mut App, handle: &str, view: OrzmaView) -> InstanceId {
-        let handle = HandleId::from(handle);
-        let mut registry = app.world_mut().resource_mut::<OrzmaRegistry>();
-        registry.insert(handle.clone(), view);
-        registry.mint_instance(&handle).expect("the handle mints")
-    }
-
-    fn mint_extra(app: &mut App, handle: &str) -> InstanceId {
-        app.world_mut()
-            .resource_mut::<OrzmaRegistry>()
-            .mint_instance(&HandleId::from(handle))
-            .expect("the handle mints")
-    }
-
-    fn inline_view(owner_surface: Entity, interactive: bool) -> OrzmaView {
-        OrzmaView {
-            source: OrzmaSource::Inline("<h1>x</h1>".into()),
-            entry: "index.html".into(),
-            interactive,
-            owner_surface,
-            connection_id: 1,
-            forward_keys: vec![],
-            preload: vec![],
-            instances: Vec::new(),
-        }
-    }
-
-    fn url_view(owner_surface: Entity, url: &str, bridge: bool) -> OrzmaView {
-        OrzmaView {
-            source: OrzmaSource::Url {
-                url: url.into(),
-                bridge,
-            },
-            entry: String::new(),
-            interactive: true,
-            owner_surface,
-            connection_id: 1,
-            forward_keys: vec![],
-            preload: vec![],
-            instances: Vec::new(),
-        }
-    }
-
-    fn register_orzma(
-        app: &mut App,
-        handle: &str,
-        owner_surface: Entity,
-        interactive: bool,
-    ) -> InstanceId {
-        register_view(app, handle, inline_view(owner_surface, interactive))
-    }
-
-    fn register_url(
-        app: &mut App,
-        handle: &str,
-        owner_surface: Entity,
-        url: &str,
-        bridge: bool,
-    ) -> InstanceId {
-        register_view(app, handle, url_view(owner_surface, url, bridge))
     }
 
     fn spawn_terminal(app: &mut App) -> Entity {
@@ -725,57 +578,103 @@ mod tests {
         surface
     }
 
-    /// A terminal surface with one inline registration ("h") whose first
-    /// instance is already minted.
-    fn app_with_registration() -> (App, Entity, InstanceId) {
+    /// A terminal surface and the instance the fixtures mount on it.
+    fn app_with_terminal() -> (App, Entity, InstanceId) {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        let instance = register_orzma(&mut app, "h", terminal, true);
-        (app, terminal, instance)
+        (app, terminal, InstanceId(1))
     }
 
-    fn mount(app: &mut App, terminal: Entity, instance: InstanceId) {
-        mount_sized(app, terminal, instance, 10, 40);
+    /// The spec of an interactive inline page of handle `h` with the
+    /// `window.orzma` bridge.
+    fn inline_spec(rows: u16, cols: u16) -> MountSpec {
+        MountSpec::new(
+            HandleId::from("h"),
+            "orzma://h/index.html",
+            PlacementSize { rows, cols },
+        )
+        .with_bridge(true)
     }
 
-    fn mount_sized(app: &mut App, terminal: Entity, instance: InstanceId, rows: u16, cols: u16) {
-        app.world_mut().trigger(TtyWebviewMountSignal {
-            terminal,
-            instance,
-            size: PlacementSize { rows, cols },
-        });
-        app.world_mut().flush();
-    }
-
-    fn unmount(app: &mut App, terminal: Entity, instance: Option<InstanceId>) {
+    fn webview_event(app: &mut App, event: WebviewEvent<Entity>) {
         app.world_mut()
-            .trigger(TtyWebviewUnmountSignal { terminal, instance });
+            .trigger(OrzmuxWebviewEvent::new(event, CommandSeq(0)));
         app.world_mut().flush();
-        // NOTE: despawn is deferred; a flush + update applies it.
+    }
+
+    /// Mounts `instance` on `terminal` with `spec` under a fresh mount id,
+    /// as the host does for a placement that is not mounted.
+    fn mount_with(
+        app: &mut App,
+        terminal: Entity,
+        instance: InstanceId,
+        spec: MountSpec,
+    ) -> MountId {
+        let mount = {
+            let mut next = app.world_mut().resource_mut::<NextMount>();
+            next.0 += 1;
+            MountId::new(next.0)
+        };
+        webview_event(
+            app,
+            WebviewEvent::Mounted {
+                pane: terminal,
+                mount,
+                instance,
+                spec,
+            },
+        );
+        mount
+    }
+
+    fn mount(app: &mut App, terminal: Entity, instance: InstanceId) -> MountId {
+        mount_with(app, terminal, instance, inline_spec(10, 40))
+    }
+
+    fn resize(app: &mut App, mount: MountId, rows: u16, cols: u16) {
+        webview_event(
+            app,
+            WebviewEvent::Resized {
+                mount,
+                size: PlacementSize { rows, cols },
+            },
+        );
+    }
+
+    fn unmount(app: &mut App, mounts: Vec<MountId>) {
+        webview_event(app, WebviewEvent::Unmounted { mounts });
         app.update();
     }
 
     enum Op {
-        Mount(InstanceId),
-        Evict(InstanceId),
+        Mount(InstanceId, MountId),
+        Unmount(MountId),
+        DespawnTerminal,
     }
 
     /// Queues every op from ONE system and applies the deferred commands
-    /// once, the batch shape a single VT pump produces.
+    /// once, the batch shape one drain of the backend's events produces.
     fn batch(app: &mut App, terminal: Entity, ops: Vec<Op>) {
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
                 for op in &ops {
                     match op {
-                        Op::Mount(id) => commands.trigger(TtyWebviewMountSignal {
-                            terminal,
-                            instance: *id,
-                            size: PlacementSize { rows: 10, cols: 40 },
-                        }),
-                        Op::Evict(id) => commands.trigger(TtyWebviewEvictedSignal {
-                            terminal,
-                            placements: vec![*id],
-                        }),
+                        Op::Mount(instance, mount) => commands.trigger(OrzmuxWebviewEvent::new(
+                            WebviewEvent::Mounted {
+                                pane: terminal,
+                                mount: *mount,
+                                instance: *instance,
+                                spec: inline_spec(10, 40),
+                            },
+                            CommandSeq(0),
+                        )),
+                        Op::Unmount(mount) => commands.trigger(OrzmuxWebviewEvent::new(
+                            WebviewEvent::Unmounted {
+                                mounts: vec![*mount],
+                            },
+                            CommandSeq(0),
+                        )),
+                        Op::DespawnTerminal => commands.entity(terminal).despawn(),
                     }
                 }
             })
@@ -849,34 +748,30 @@ mod tests {
     fn slot_of(app: &App, terminal: Entity, instance: InstanceId) -> Option<u8> {
         live_webviews(app, terminal)
             .into_iter()
-            .find(|view| view.instance == instance)
-            .map(|view| view.slot)
+            .find(|view| view.instance() == instance)
+            .map(|view| view.slot())
     }
 
+    /// Asserts that a mount spawns one child of its pane carrying the
+    /// webview components its spec calls for.
+    ///
+    /// Case: a program's inline page with the `window.orzma` bridge is
+    /// mounted before any terminal has rendered.
     #[test]
     fn mount_spawns_child_with_inline_components() {
-        let (mut app, terminal, instance) = app_with_registration();
-
-        mount(&mut app, terminal, instance);
+        let (mut app, terminal, instance) = app_with_terminal();
+        let mounted = mount(&mut app, terminal, instance);
 
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1, "mount must spawn one inline child");
         let child = children[0];
-
         assert_eq!(
             app.world().get::<ChildOf>(child).map(|c| c.parent()),
-            Some(terminal),
-            "the webview must be a ChildOf the terminal surface"
+            Some(terminal)
         );
         assert_eq!(
             app.world().get::<Webview>(child),
-            Some(&Webview {
-                handle: "h".into(),
-                instance,
-                slot: 0,
-                rows: 10,
-                cols: 40,
-            }),
+            Some(&Webview::new("h".into(), instance, mounted, 0, 10, 40))
         );
         match app
             .world()
@@ -886,309 +781,522 @@ mod tests {
             WebviewSource::Url(url) => assert_eq!(url, "orzma://h/index.html"),
             other => panic!("unexpected WebviewSource: {other:?}"),
         }
-        assert!(
-            app.world().get::<WebviewTextureTarget>(child).is_some(),
-            "webview must carry a headless WebviewTextureTarget"
-        );
+        assert!(app.world().get::<WebviewTextureTarget>(child).is_some());
         let preload = app
             .world()
             .get::<PreloadScripts>(child)
             .expect("webview must carry PreloadScripts");
         assert!(
             !preload.0.is_empty(),
-            "an inline (bridged) webview must carry the populated window.orzma preload"
+            "a bridged webview must carry the window.orzma preload"
         );
         assert_eq!(
             app.world().get::<WebviewSize>(child),
             Some(&WebviewSize(Vec2::new(40.0 * 8.0, 10.0 * 16.0))),
             "headless seed must use the 8x16 placeholder cell at scale 1.0"
         );
-        assert!(
-            app.world().get::<NonInteractive>(child).is_none(),
-            "an interactive view must not be stamped NonInteractive"
+        assert!(app.world().get::<NonInteractive>(child).is_none());
+        assert_eq!(
+            app.world().get::<ForwardKeys>(child),
+            Some(&ForwardKeys::default())
         );
     }
 
-    /// Asserts that a second mount of a live instance resizes it in place
-    /// rather than spawning a second child or reloading the page.
+    /// Asserts that a resize updates the reserved rect in place, keeping the
+    /// entity and its slot.
     ///
-    /// Case: a program re-issues its mount with a bigger rectangle after
-    /// the user widens the window.
+    /// Case: a program re-issues its mount with a bigger rectangle after the
+    /// user widens the window.
     #[test]
-    fn duplicate_mount_updates_the_reserved_rect_in_place() {
-        let (mut app, terminal, instance) = app_with_registration();
+    fn a_resize_updates_the_reserved_rect_in_place() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        let mounted = mount(&mut app, terminal, instance);
+        let entity = webview_children_of(&app, terminal)[0];
 
-        mount(&mut app, terminal, instance);
-        let before = webview_children_of(&app, terminal);
-        assert_eq!(before.len(), 1, "first mount spawns one child");
-        let entity = before[0];
-        let slot_before = app.world().get::<Webview>(entity).unwrap().slot;
+        resize(&mut app, mounted, 12, 50);
 
-        mount_sized(&mut app, terminal, instance, 12, 50);
-
-        let after = webview_children_of(&app, terminal);
-        assert_eq!(after.len(), 1, "re-mount must NOT spawn a second child");
-        assert_eq!(
-            after[0], entity,
-            "re-mount must reuse the same entity (no reload)"
-        );
+        assert_eq!(webview_children_of(&app, terminal), vec![entity]);
         assert_eq!(
             app.world().get::<Webview>(entity),
-            Some(&Webview {
-                handle: "h".into(),
-                instance,
-                slot: slot_before,
-                rows: 12,
-                cols: 50,
-            }),
-            "re-mount updates the reserved rect in place and preserves the slot"
+            Some(&Webview::new("h".into(), instance, mounted, 0, 12, 50))
         );
     }
 
+    /// Asserts that slots fill in order and that a mount past the last free
+    /// slot spawns nothing.
+    ///
+    /// Case: programs mount one page more than the terminal has overlay
+    /// slots for.
     #[test]
     fn slots_fill_in_order_and_an_over_cap_mount_is_rejected() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        let instances: Vec<InstanceId> = (0..=OVERLAY_SLOTS)
-            .map(|i| register_orzma(&mut app, &format!("v{i}"), terminal, true))
-            .collect();
-
-        for (i, instance) in instances.iter().take(OVERLAY_SLOTS).enumerate() {
-            mount(&mut app, terminal, *instance);
-            assert_eq!(slot_of(&app, terminal, *instance), Some(i as u8));
+        for i in 0..OVERLAY_SLOTS {
+            let instance = InstanceId(i as u128 + 1);
+            mount(&mut app, terminal, instance);
+            assert_eq!(slot_of(&app, terminal, instance), Some(i as u8));
         }
-
-        let overflow = instances[OVERLAY_SLOTS];
+        let overflow = InstanceId(OVERLAY_SLOTS as u128 + 1);
         mount(&mut app, terminal, overflow);
-        assert_eq!(
-            webview_children_of(&app, terminal).len(),
-            OVERLAY_SLOTS,
-            "an over-cap mount must be rejected once all slots are taken"
-        );
+        assert_eq!(webview_children_of(&app, terminal).len(), OVERLAY_SLOTS);
         assert_eq!(slot_of(&app, terminal, overflow), None);
     }
 
+    /// Asserts that the VT's placement cap never exceeds the overlay slots,
+    /// so every mount the host confirms finds a slot.
+    ///
+    /// Case: a program fills its terminal's placement table to the cap.
+    #[test]
+    fn every_placement_the_vt_accepts_gets_an_overlay_slot() {
+        const { assert!(OVERLAY_SLOTS >= MAX_PLACEMENTS) };
+    }
+
+    /// Asserts that an unmount frees its slot for the next mount.
+    ///
+    /// Case: a program unmounts its first page and mounts a third one.
     #[test]
     fn unmount_frees_the_slot_for_the_next_mount() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        let a = register_orzma(&mut app, "a", terminal, true);
-        let b = register_orzma(&mut app, "b", terminal, true);
-        let c = register_orzma(&mut app, "c", terminal, true);
+        let a = mount(&mut app, terminal, InstanceId(1));
+        mount(&mut app, terminal, InstanceId(2));
+        unmount(&mut app, vec![a]);
+        assert_eq!(webview_children_of(&app, terminal).len(), 1);
 
-        mount(&mut app, terminal, a);
-        mount(&mut app, terminal, b);
-        unmount(&mut app, terminal, Some(a));
-        assert_eq!(
-            webview_children_of(&app, terminal).len(),
-            1,
-            "unmounting one instance must despawn exactly its child"
-        );
-
-        mount(&mut app, terminal, c);
-        assert_eq!(
-            slot_of(&app, terminal, c),
-            Some(0),
-            "the freed slot 0 must be reused by the next mount"
-        );
-        assert_eq!(slot_of(&app, terminal, b), Some(1));
+        mount(&mut app, terminal, InstanceId(3));
+        assert_eq!(slot_of(&app, terminal, InstanceId(3)), Some(0));
+        assert_eq!(slot_of(&app, terminal, InstanceId(2)), Some(1));
     }
 
+    /// Asserts that one unmount naming several mounts despawns each of them.
+    ///
+    /// Case: a program's pane closes while two of its pages are mounted.
     #[test]
-    fn unmount_all_despawns_every_inline_child() {
+    fn an_unmount_of_several_mounts_despawns_each() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        let a = register_orzma(&mut app, "a", terminal, true);
-        let b = register_orzma(&mut app, "b", terminal, true);
-        mount(&mut app, terminal, a);
-        mount(&mut app, terminal, b);
+        let a = mount(&mut app, terminal, InstanceId(1));
+        let b = mount(&mut app, terminal, InstanceId(2));
         let children = webview_children_of(&app, terminal);
-        assert_eq!(children.len(), 2);
 
-        unmount(&mut app, terminal, None);
+        unmount(&mut app, vec![a, b]);
 
-        assert!(
-            webview_children_of(&app, terminal).is_empty(),
-            "unmount-all must despawn every inline child of the terminal"
-        );
+        assert!(webview_children_of(&app, terminal).is_empty());
         for child in children {
-            assert!(
-                app.world().get_entity(child).is_err(),
-                "despawned inline entity must not survive"
-            );
+            assert!(app.world().get_entity(child).is_err());
         }
     }
 
+    /// Asserts that a mount whose spec is not interactive is stamped
+    /// `NonInteractive`.
+    ///
+    /// Case: a program mounts a clock that must not take clicks.
     #[test]
     fn non_interactive_view_is_stamped_non_interactive() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-        let instance = register_orzma(&mut app, "hud", terminal, false);
-
-        mount(&mut app, terminal, instance);
-
+        let (mut app, terminal, instance) = app_with_terminal();
+        mount_with(
+            &mut app,
+            terminal,
+            instance,
+            inline_spec(10, 40).with_interactive(false),
+        );
         let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1);
-        assert!(
-            app.world().get::<NonInteractive>(children[0]).is_some(),
-            "a non-interactive view must carry NonInteractive"
-        );
+        assert!(app.world().get::<NonInteractive>(children[0]).is_some());
     }
 
-    /// Asserts that a mount the VT refused spawns no child, rather than
-    /// one no frame's placement list will ever address.
+    /// Asserts that two instances of one handle mount as two children in
+    /// separate slots.
     ///
-    /// Case: a program mounts past the terminal's placement cap, and the
-    /// refusal reaches the GUI on its own signal.
-    #[test]
-    fn a_rejected_mount_spawns_no_child() {
-        let (mut app, terminal, instance) = app_with_registration();
-
-        app.world_mut()
-            .trigger(TtyWebviewMountRejectedSignal { terminal, instance });
-        app.world_mut().flush();
-
-        assert!(
-            webview_children_of(&app, terminal).is_empty(),
-            "a mount the VT refused must spawn nothing"
-        );
-    }
-
-    /// Asserts that a mount naming an instance the registry never minted
-    /// spawns nothing.
-    ///
-    /// Case: a program writes a mount for an id it made up rather than one
-    /// the control plane handed it.
-    #[test]
-    fn mount_of_an_unknown_instance_is_dropped() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-
-        mount(&mut app, terminal, InstanceId(0xdead));
-
-        assert!(
-            webview_children_of(&app, terminal).is_empty(),
-            "a mount for an unminted instance must be dropped"
-        );
-    }
-
-    /// Asserts that a mount the host refuses asks the VT to drop the
-    /// reservation it already registered for that instance.
-    ///
-    /// Case: a program mounts a fabricated instance id repeatedly, trying
-    /// to fill the terminal's placement table with rects the host will
-    /// never paint.
-    #[test]
-    fn a_refused_mount_reclaims_its_vt_reservation() {
-        #[derive(Resource, Default)]
-        struct Reclaimed(Vec<InstanceId>);
-        let mut app = make_test_app();
-        app.init_resource::<Reclaimed>().add_observer(
-            |e: On<RequestTtyWebviewRemove>, mut r: ResMut<Reclaimed>| {
-                r.0.extend(e.instances.iter().copied());
-            },
-        );
-        let terminal = spawn_terminal(&mut app);
-
-        mount(&mut app, terminal, InstanceId(0xdead));
-
-        assert_eq!(
-            app.world().resource::<Reclaimed>().0,
-            vec![InstanceId(0xdead)],
-            "a refused mount must hand its reservation back to the VT"
-        );
-    }
-
-    /// Asserts that two instances minted for the same handle mount as two
-    /// separate children, each in its own overlay slot.
-    ///
-    /// Case: a program calls `new_instance` on a handle it already mounted
-    /// once, then mounts the second instance on the same terminal.
+    /// Case: a program mints a second instance of a page it already mounted
+    /// once and mounts it on the same terminal.
     #[test]
     fn two_instances_of_one_handle_mount_in_separate_slots() {
-        let (mut app, terminal, first) = app_with_registration();
-        let second = mint_extra(&mut app, "h");
-
+        let (mut app, terminal, first) = app_with_terminal();
+        let second = InstanceId(2);
         mount(&mut app, terminal, first);
         mount(&mut app, terminal, second);
-
-        assert_eq!(
-            webview_children_of(&app, terminal).len(),
-            2,
-            "two instances of one handle must both mount"
-        );
+        assert_eq!(webview_children_of(&app, terminal).len(), 2);
         assert_eq!(slot_of(&app, terminal, first), Some(0));
         assert_eq!(slot_of(&app, terminal, second), Some(1));
     }
 
+    /// Asserts that unmounting one of two instances leaves the other in its
+    /// slot.
+    ///
+    /// Case: a program unmounts the first of two copies of its page.
     #[test]
     fn unmount_one_instance_leaves_the_other() {
-        let (mut app, terminal, first) = app_with_registration();
-        let second = mint_extra(&mut app, "h");
-
-        mount(&mut app, terminal, first);
+        let (mut app, terminal, first) = app_with_terminal();
+        let second = InstanceId(2);
+        let first_mount = mount(&mut app, terminal, first);
         mount(&mut app, terminal, second);
 
-        unmount(&mut app, terminal, Some(first));
+        unmount(&mut app, vec![first_mount]);
 
-        assert_eq!(
-            webview_children_of(&app, terminal).len(),
-            1,
-            "unmounting one instance must despawn exactly that instance"
-        );
+        assert_eq!(webview_children_of(&app, terminal).len(), 1);
         assert_eq!(slot_of(&app, terminal, first), None);
         assert_eq!(slot_of(&app, terminal, second), Some(1));
     }
 
+    /// Asserts that an unmount followed by a mount of the same placement in
+    /// one drain leaves exactly one webview, for the new mount, in the freed
+    /// slot.
+    ///
+    /// Case: a program leaves the alternate screen, which tears down the
+    /// placement it held there, and re-mounts the same view on the primary
+    /// screen within one pump.
     #[test]
-    fn slot_cap_counts_all_instances_together() {
-        let (mut app, terminal, first) = app_with_registration();
-        let mut instances = vec![first];
-        for _ in 0..OVERLAY_SLOTS {
-            instances.push(mint_extra(&mut app, "h"));
-        }
+    fn an_unmount_then_mount_batch_leaves_the_new_mount_live() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        let old = mount(&mut app, terminal, instance);
+        let new = MountId::new(100);
 
-        for instance in instances.iter().take(OVERLAY_SLOTS) {
-            mount(&mut app, terminal, *instance);
-        }
-        assert_eq!(webview_children_of(&app, terminal).len(), OVERLAY_SLOTS);
-
-        let overflow = instances[OVERLAY_SLOTS];
-        mount(&mut app, terminal, overflow);
-        assert_eq!(
-            webview_children_of(&app, terminal).len(),
-            OVERLAY_SLOTS,
-            "the per-terminal slot cap counts all instances together; an over-cap mount is rejected"
+        batch(
+            &mut app,
+            terminal,
+            vec![Op::Unmount(old), Op::Mount(instance, new)],
         );
-        assert_eq!(slot_of(&app, terminal, overflow), None);
-    }
 
-    /// Asserts that an eviction followed by a re-mount of the same
-    /// instance in one signal batch leaves exactly one live webview.
-    ///
-    /// Case: a program leaves the alternate screen — tearing down the
-    /// placements it held there — and immediately re-mounts the same view
-    /// on the primary screen, both within one pump.
-    #[test]
-    fn an_evict_then_remount_batch_leaves_one_live_webview() {
-        let (mut app, terminal, id) = app_with_registration();
-        batch(&mut app, terminal, vec![Op::Mount(id)]);
-        batch(&mut app, terminal, vec![Op::Evict(id), Op::Mount(id)]);
-        assert_eq!(live_webviews(&app, terminal).len(), 1);
-    }
-
-    /// Asserts that two mounts of the same instance in one batch collapse
-    /// to a single webview holding a single overlay slot.
-    ///
-    /// Case: two frames' worth of output land in one pump because the app
-    /// resized a view twice in quick succession.
-    #[test]
-    fn a_double_mount_batch_leaves_one_webview_in_one_slot() {
-        let (mut app, terminal, id) = app_with_registration();
-        batch(&mut app, terminal, vec![Op::Mount(id), Op::Mount(id)]);
         let live = live_webviews(&app, terminal);
         assert_eq!(live.len(), 1);
-        assert_eq!(live[0].slot, 0);
+        assert_eq!(live[0].mount(), new);
+        assert_eq!(live[0].slot(), 0);
+    }
+
+    /// Asserts that two mounts in one drain take separate slots.
+    ///
+    /// Case: a program mounts two pages in one burst of output.
+    #[test]
+    fn two_mounts_in_one_batch_take_separate_slots() {
+        let (mut app, terminal, _) = app_with_terminal();
+        batch(
+            &mut app,
+            terminal,
+            vec![
+                Op::Mount(InstanceId(1), MountId::new(1)),
+                Op::Mount(InstanceId(2), MountId::new(2)),
+            ],
+        );
+        assert_eq!(slot_of(&app, terminal, InstanceId(1)), Some(0));
+        assert_eq!(slot_of(&app, terminal, InstanceId(2)), Some(1));
+    }
+
+    /// Asserts that a mount, its unmount, and its pane's despawn in one
+    /// drain leave no webview behind.
+    ///
+    /// Case: a program mounts its page and its shell exits in the same burst
+    /// of output, so the pane closes in the drain that mounted the page.
+    #[test]
+    fn a_mount_in_the_drain_that_closes_its_pane_leaves_nothing() {
+        let (mut app, terminal, instance) = app_with_terminal();
+
+        batch(
+            &mut app,
+            terminal,
+            vec![
+                Op::Mount(instance, MountId::new(1)),
+                Op::Unmount(MountId::new(1)),
+                Op::DespawnTerminal,
+            ],
+        );
+
+        let mut webviews = app.world_mut().query::<&Webview>();
+        assert_eq!(webviews.iter(app.world()).count(), 0);
+    }
+
+    /// Asserts that a mount for a pane that no longer exists spawns nothing.
+    ///
+    /// Case: a pane's entity is despawned before a mount the host confirmed
+    /// for it is applied.
+    #[test]
+    fn a_mount_for_a_despawned_pane_spawns_nothing() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        app.world_mut().entity_mut(terminal).despawn();
+        mount(&mut app, terminal, instance);
+        let mut webviews = app.world_mut().query::<&Webview>();
+        assert_eq!(webviews.iter(app.world()).count(), 0);
+    }
+
+    /// Asserts that a resized mount keeps painting in its slot once the frame
+    /// list carries the new geometry.
+    ///
+    /// Case: a program re-issues its mount at a new position and the VT
+    /// supersedes the reservation in place.
+    #[test]
+    fn a_resized_mount_keeps_painting_in_its_slot() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        let mounted = mount(&mut app, terminal, instance);
+        resize(&mut app, mounted, 12, 40);
+        assert_eq!(webview_children_of(&app, terminal).len(), 1);
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(view_with_placements(
+                24,
+                80,
+                vec![AnchoredPlacement {
+                    id: instance,
+                    point: GridPoint {
+                        line: GridLine(5),
+                        column: GridColumn(0),
+                    },
+                    size: PlacementSize { rows: 12, cols: 40 },
+                }],
+            ));
+        run_projection(&mut app);
+        assert_eq!(
+            overlays_of(&app, terminal).rects[0],
+            IVec4::new(5, 0, 12, 40)
+        );
+    }
+
+    /// Asserts that an unmount despawns exactly the named mounts and ignores
+    /// unknown ones.
+    ///
+    /// Case: the scrollback trims past one page's row while another page
+    /// further down stays alive.
+    #[test]
+    fn an_unmount_despawns_by_mount_and_ignores_unknowns() {
+        let (mut app, terminal, memo) = app_with_terminal();
+        let clock = InstanceId(2);
+        let memo_mount = mount(&mut app, terminal, memo);
+        mount(&mut app, terminal, clock);
+
+        unmount(&mut app, vec![memo_mount, MountId::new(99)]);
+
+        assert_eq!(webview_children_of(&app, terminal).len(), 1);
+        assert_eq!(slot_of(&app, terminal, clock), Some(1));
+    }
+
+    /// Asserts that a directory mount loads the `orzma://` URL of its entry
+    /// and carries the `window.orzma` bridge.
+    ///
+    /// Case: a program registers a directory of static pages whose entry
+    /// sits in a subdirectory, and mounts it.
+    #[test]
+    fn a_directory_mount_loads_its_entry_with_the_bridge() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        mount_with(
+            &mut app,
+            terminal,
+            instance,
+            MountSpec::new(
+                HandleId::from("DYN1"),
+                "orzma://DYN1/docs/index.html",
+                PlacementSize { rows: 10, cols: 40 },
+            )
+            .with_bridge(true),
+        );
+        let child = webview_children_of(&app, terminal)[0];
+        match app.world().get::<WebviewSource>(child) {
+            Some(WebviewSource::Url(url)) => assert_eq!(url, "orzma://DYN1/docs/index.html"),
+            other => panic!("expected an orzma URL, got {other:?}"),
+        }
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts always present via WebviewSource #[require]");
+        assert!(!preload.0.is_empty());
+    }
+
+    /// Asserts that a display-only URL mount carries no scripts and is not
+    /// marked as bridged.
+    ///
+    /// Case: a program shows a remote page without the bridge or preloads.
+    #[test]
+    fn a_display_only_url_mount_carries_no_scripts() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        mount_with(
+            &mut app,
+            terminal,
+            instance,
+            MountSpec::new(
+                HandleId::from("disp"),
+                "https://example.com",
+                PlacementSize { rows: 10, cols: 40 },
+            ),
+        );
+        let child = webview_children_of(&app, terminal)[0];
+        match app.world().get::<WebviewSource>(child) {
+            Some(WebviewSource::Url(url)) => assert_eq!(url, "https://example.com"),
+            other => panic!("unexpected WebviewSource: {other:?}"),
+        }
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts always present via WebviewSource #[require]");
+        assert!(preload.0.is_empty());
+        assert!(app.world().get::<Bridged>(child).is_none());
+    }
+
+    /// Asserts that a bridged URL mount carries the bridge scripts and is
+    /// marked as bridged.
+    ///
+    /// Case: a TUI browser shows a remote page and opts into the bridge to
+    /// hear about its navigations.
+    #[test]
+    fn a_bridged_url_mount_carries_the_bridge() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        mount_with(
+            &mut app,
+            terminal,
+            instance,
+            MountSpec::new(
+                HandleId::from("appv"),
+                "https://app.example.com",
+                PlacementSize { rows: 10, cols: 40 },
+            )
+            .with_bridge(true),
+        );
+        let child = webview_children_of(&app, terminal)[0];
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts present");
+        assert!(!preload.0.is_empty());
+        assert!(app.world().get::<Bridged>(child).is_some());
+    }
+
+    /// Asserts that a bridged inline mount runs the program's preload after
+    /// the bridge.
+    ///
+    /// Case: a program registers an inline page with a preload that uses
+    /// `window.orzma`.
+    #[test]
+    fn mount_bridged_inline_appends_user_preload_after_bridge() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        mount_with(
+            &mut app,
+            terminal,
+            instance,
+            inline_spec(10, 40).with_preload(vec!["window.USER = 1;".into()]),
+        );
+        let child = webview_children_of(&app, terminal)[0];
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts present");
+        assert!(preload.0.len() >= 2, "bridge + user script");
+        assert_eq!(
+            preload.0.last().map(String::as_str),
+            Some("window.USER = 1;")
+        );
+    }
+
+    /// Asserts that a bridged URL mount runs the program's preload after the
+    /// bridge.
+    ///
+    /// Case: a TUI browser injects a helper script into the remote page it
+    /// bridges.
+    #[test]
+    fn mount_bridged_url_appends_user_preload_after_bridge() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        mount_with(
+            &mut app,
+            terminal,
+            instance,
+            MountSpec::new(
+                HandleId::from("u"),
+                "https://app.example.com",
+                PlacementSize { rows: 10, cols: 40 },
+            )
+            .with_bridge(true)
+            .with_preload(vec!["window.USER = 1;".into()]),
+        );
+        let child = webview_children_of(&app, terminal)[0];
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts present");
+        assert_eq!(
+            preload.0.last().map(String::as_str),
+            Some("window.USER = 1;")
+        );
+    }
+
+    /// Asserts that a display-only URL mount with a preload carries only the
+    /// program's scripts.
+    ///
+    /// Case: a program shows a remote page with a style tweak but without the
+    /// bridge.
+    #[test]
+    fn mount_display_only_url_with_preload_injects_user_scripts_only() {
+        let (mut app, terminal, instance) = app_with_terminal();
+        mount_with(
+            &mut app,
+            terminal,
+            instance,
+            MountSpec::new(
+                HandleId::from("disp"),
+                "https://example.com",
+                PlacementSize { rows: 10, cols: 40 },
+            )
+            .with_preload(vec!["window.USER = 1;".into()]),
+        );
+        let child = webview_children_of(&app, terminal)[0];
+        assert_eq!(
+            app.world()
+                .get::<PreloadScripts>(child)
+                .expect("PreloadScripts present")
+                .0,
+            vec!["window.USER = 1;".to_string()]
+        );
+    }
+
+    fn app_with_commands() -> (App, Receiver<(CommandSeq, OrzmuxCommand)>) {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = make_test_app();
+        app.insert_resource(OrzmuxConnection(client));
+        (app, commands)
+    }
+
+    fn composited(commands: &Receiver<(CommandSeq, OrzmuxCommand)>) -> Vec<MountId> {
+        commands
+            .try_iter()
+            .filter_map(|(_, command)| match command {
+                OrzmuxCommand::Webview(WebviewCommand::Composited { mount }) => Some(mount),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Asserts that a webview's first successful projection stamps
+    /// `CompositeNotified` and reports `Composited` for its mount once.
+    ///
+    /// Case: a page paints for the first time after its mount while its
+    /// program listens for compositing pushes.
+    #[test]
+    fn the_first_projection_reports_composited() {
+        let (mut app, commands) = app_with_commands();
+        let terminal = app
+            .world_mut()
+            .spawn(view_with_placements(24, 80, vec![placed(InstanceId(1))]))
+            .id();
+        spawn_projection_child(&mut app, terminal, 0, InstanceId(1));
+
+        run_projection(&mut app);
+
+        let child = webview_children_of(&app, terminal)[0];
+        assert!(app.world().get::<CompositeNotified>(child).is_some());
+        assert_eq!(composited(&commands), vec![MountId::new(1)]);
+    }
+
+    /// Asserts that projecting an already reported webview reports nothing.
+    ///
+    /// Case: the same page keeps painting frame after frame.
+    #[test]
+    fn a_second_projection_reports_nothing() {
+        let (mut app, commands) = app_with_commands();
+        let terminal = app
+            .world_mut()
+            .spawn(view_with_placements(24, 80, vec![placed(InstanceId(1))]))
+            .id();
+        spawn_projection_child(&mut app, terminal, 0, InstanceId(1));
+
+        run_projection(&mut app);
+        assert_eq!(composited(&commands).len(), 1);
+        run_projection(&mut app);
+        assert!(composited(&commands).is_empty());
     }
 
     #[test]
@@ -1223,13 +1331,14 @@ mod tests {
             .add(Image::default());
         app.world_mut().spawn((
             ChildOf(terminal),
-            Webview {
-                handle: format!("view-{slot}").into(),
+            Webview::new(
+                format!("view-{slot}").into(),
                 instance,
+                MountId::new(u64::from(slot) + 1),
                 slot,
-                rows: 10,
-                cols: 40,
-            },
+                10,
+                40,
+            ),
             WebviewTextureTarget(handle.clone()),
         ));
         handle
@@ -1323,9 +1432,9 @@ mod tests {
     /// previous frame's overlay rects are still applied.
     #[test]
     fn stale_overlays_clear_after_unmount_all() {
-        let (mut app, terminal, instance) = app_with_registration();
+        let (mut app, terminal, instance) = app_with_terminal();
 
-        mount(&mut app, terminal, instance);
+        let mounted = mount(&mut app, terminal, instance);
         app.world_mut()
             .entity_mut(terminal)
             .insert(view_with_placements(24, 80, vec![placed(instance)]));
@@ -1334,7 +1443,7 @@ mod tests {
         assert_ne!(overlays.rects[0], IVec4::ZERO);
         assert!(overlays.textures[0].is_some());
 
-        unmount(&mut app, terminal, None);
+        unmount(&mut app, vec![mounted]);
         run_projection(&mut app);
         assert_all_sentinel(overlays_of(&app, terminal));
     }
@@ -1348,7 +1457,7 @@ mod tests {
     /// past the terminal's last column.
     #[test]
     fn projection_culls_fully_outside_rects() {
-        let (mut app, terminal, instance) = app_with_registration();
+        let (mut app, terminal, instance) = app_with_terminal();
         mount(&mut app, terminal, instance);
 
         for point in [
@@ -1395,7 +1504,7 @@ mod tests {
     /// anchored to.
     #[test]
     fn a_scrolled_viewport_moves_the_rect_down() {
-        let (mut app, terminal, instance) = app_with_registration();
+        let (mut app, terminal, instance) = app_with_terminal();
         mount(&mut app, terminal, instance);
 
         app.world_mut()
@@ -1424,7 +1533,7 @@ mod tests {
     /// rightmost cell when the frame is captured.
     #[test]
     fn projection_keeps_rect_anchored_at_last_valid_column() {
-        let (mut app, terminal, instance) = app_with_registration();
+        let (mut app, terminal, instance) = app_with_terminal();
         mount(&mut app, terminal, instance);
         app.world_mut()
             .entity_mut(terminal)
@@ -1457,7 +1566,7 @@ mod tests {
     /// after the user scrolls.
     #[test]
     fn projection_passes_the_placement_rect_through() {
-        let (mut app, terminal, instance) = app_with_registration();
+        let (mut app, terminal, instance) = app_with_terminal();
         mount(&mut app, terminal, instance);
         app.world_mut()
             .entity_mut(terminal)
@@ -1486,7 +1595,7 @@ mod tests {
     /// omits it from the frame list without unmounting it.
     #[test]
     fn projection_hides_a_placement_absent_from_the_list() {
-        let (mut app, terminal, instance) = app_with_registration();
+        let (mut app, terminal, instance) = app_with_terminal();
         mount(&mut app, terminal, instance);
         app.world_mut()
             .entity_mut(terminal)
@@ -1538,7 +1647,7 @@ mod tests {
             },
             size: PlacementSize { rows: 10, cols: 40 },
         };
-        let (mut first, mounted_first, instance_a) = app_with_registration();
+        let (mut first, mounted_first, instance_a) = app_with_terminal();
         mount(&mut first, mounted_first, instance_a);
         first
             .world_mut()
@@ -1551,7 +1660,7 @@ mod tests {
             .expect("overlays")
             .rects[0];
 
-        let (mut second, framed_first, instance_b) = app_with_registration();
+        let (mut second, framed_first, instance_b) = app_with_terminal();
         second
             .world_mut()
             .entity_mut(framed_first)
@@ -1574,83 +1683,14 @@ mod tests {
         assert_eq!(rect_a, rect_b);
     }
 
-    /// Asserts that a re-mount keeps its slot painting under the same
-    /// instance once the frame list carries the new geometry.
+    /// Asserts that a metrics change recomputes a mounted webview's size at
+    /// the new cell pitch.
     ///
-    /// Case: a program re-issues `mount` for a placement it already holds
-    /// and the VT supersedes the reservation in place.
-    #[test]
-    fn remount_keeps_painting_under_the_same_instance() {
-        let (mut app, terminal, instance) = app_with_registration();
-        mount(&mut app, terminal, instance);
-        mount(&mut app, terminal, instance);
-        assert_eq!(webview_children_of(&app, terminal).len(), 1);
-        app.world_mut()
-            .entity_mut(terminal)
-            .insert(view_with_placements(
-                24,
-                80,
-                vec![AnchoredPlacement {
-                    id: instance,
-                    point: GridPoint {
-                        line: GridLine(5),
-                        column: GridColumn(0),
-                    },
-                    size: PlacementSize { rows: 10, cols: 40 },
-                }],
-            ));
-        run_projection(&mut app);
-        let overlays = overlays_of(&app, terminal);
-        assert_eq!(overlays.rects[0], IVec4::new(5, 0, 10, 40));
-    }
-
-    /// Asserts that an eviction signal despawns exactly the named
-    /// placements and ignores unknown ids.
-    ///
-    /// Case: the scrollback trims past a webview's row while another
-    /// webview further down stays alive.
-    #[test]
-    fn eviction_despawns_by_id_and_ignores_unknowns() {
-        let (mut app, terminal, memo) = app_with_registration();
-        let clock = register_orzma(&mut app, "clock", terminal, true);
-        mount(&mut app, terminal, memo);
-        mount(&mut app, terminal, clock);
-        assert_eq!(webview_children_of(&app, terminal).len(), 2);
-        app.world_mut().trigger(TtyWebviewEvictedSignal {
-            terminal,
-            placements: vec![memo, InstanceId(99)],
-        });
-        app.world_mut().flush();
-        app.update();
-        assert_eq!(webview_children_of(&app, terminal).len(), 1);
-        assert_eq!(slot_of(&app, terminal, clock), Some(1));
-    }
-
-    /// Asserts that two evictions naming the same live placement in one batch
-    /// despawn it once and raise no error for the second.
-    ///
-    /// Case: orzmd exits — leaving the alternate screen evicts its placement in
-    /// the same frame the control socket's disconnect releases it.
-    #[test]
-    fn a_re_delivered_eviction_in_the_same_batch_is_a_no_op() {
-        use crate::test_support::warnings_containing;
-        let (mut app, terminal, memo) = app_with_registration();
-        mount(&mut app, terminal, memo);
-        let before = warnings_containing("Entity despawned").len();
-
-        batch(&mut app, terminal, vec![Op::Evict(memo), Op::Evict(memo)]);
-
-        assert!(webview_children_of(&app, terminal).is_empty());
-        assert_eq!(
-            warnings_containing("Entity despawned").len(),
-            before,
-            "the second eviction must not report a despawn error"
-        );
-    }
-
+    /// Case: the first frame renders after a page mounted, replacing the
+    /// placeholder cell size with the real font metrics.
     #[test]
     fn size_sync_updates_webview_size_when_metrics_change() {
-        let (mut app, terminal, instance) = app_with_registration();
+        let (mut app, terminal, instance) = app_with_terminal();
         mount(&mut app, terminal, instance);
         let child = webview_children_of(&app, terminal)[0];
         assert_eq!(
@@ -1690,9 +1730,14 @@ mod tests {
         probe.0 = sizes.iter().any(|size| size.is_changed());
     }
 
+    /// Asserts that the size sync leaves `WebviewSize` unflagged when nothing
+    /// it reads changed.
+    ///
+    /// Case: a page stays mounted across frames while the window and the
+    /// font stay the same.
     #[test]
     fn size_sync_is_quiescent_when_nothing_changed() {
-        let (mut app, terminal, instance) = app_with_registration();
+        let (mut app, terminal, instance) = app_with_terminal();
         app.init_resource::<SizeChangeProbe>();
         app.add_systems(
             Update,
@@ -1728,13 +1773,14 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(terminal),
-                Webview {
-                    handle: format!("view-{slot}").into(),
-                    instance: InstanceId(u128::from(slot) + 1),
+                Webview::new(
+                    format!("view-{slot}").into(),
+                    InstanceId(u128::from(slot) + 1),
+                    MountId::new(u64::from(slot) + 1),
                     slot,
-                    rows: 10,
-                    cols: 40,
-                },
+                    10,
+                    40,
+                ),
             ))
             .id();
         if non_interactive {
@@ -1906,453 +1952,6 @@ mod tests {
             webview_local_dip(&overlays, OVERLAY_SLOTS as u8, Vec2::ZERO, 8.0, 16.0, 1.0),
             None,
             "an out-of-range slot has no DIP mapping"
-        );
-    }
-
-    fn dir_view(owner_surface: Entity, interactive: bool) -> OrzmaView {
-        OrzmaView {
-            source: OrzmaSource::Dir("/abs/ui".into()),
-            entry: "index.html".into(),
-            interactive,
-            owner_surface,
-            connection_id: 1,
-            forward_keys: vec![],
-            preload: vec![],
-            instances: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn mount_of_dynamic_handle_uses_orzma_url_and_no_bridge() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-        let instance = register_view(&mut app, "DYN1", dir_view(terminal, true));
-
-        mount(&mut app, terminal, instance);
-
-        let children = webview_children_of(&app, terminal);
-        assert_eq!(
-            children.len(),
-            1,
-            "dynamic mount must spawn one inline child"
-        );
-        match app.world().get::<WebviewSource>(children[0]).unwrap() {
-            WebviewSource::Url(u) => assert_eq!(u, "orzma://DYN1/index.html"),
-            other => panic!("expected orzma URL, got {other:?}"),
-        }
-        let preload = app.world().get::<PreloadScripts>(children[0]).unwrap();
-        assert!(
-            !preload.0.iter().any(|s| s.contains("__orzmaGranted")),
-            "a dynamic view must carry no capability grant / host bridge"
-        );
-    }
-
-    #[test]
-    fn resolve_mount_enforces_owner_surface() {
-        let owner = Entity::from_bits(1);
-        let other = Entity::from_bits(2);
-        let handle = HandleId::from("DYNHANDLE");
-        let mut dynamic = OrzmaRegistry::default();
-        dynamic.insert(handle.clone(), dir_view(owner, false));
-
-        let d = resolve_mount(&handle, owner, &dynamic).expect("dynamic resolves");
-        assert_eq!(d.url, "orzma://DYNHANDLE/index.html");
-        assert!(!d.interactive);
-
-        assert!(
-            resolve_mount(&handle, other, &dynamic).is_none(),
-            "a handle resolves only from its owner surface"
-        );
-        assert!(resolve_mount(&HandleId::from("ghost"), owner, &dynamic).is_none());
-    }
-
-    #[test]
-    fn resolve_mount_dynamic_inline_yields_orzma_url_via_index_html() {
-        let owner = Entity::from_bits(1);
-        let handle = HandleId::from("INLINEH");
-        let mut dynamic = OrzmaRegistry::default();
-        dynamic.insert(handle.clone(), inline_view(owner, true));
-        let r = resolve_mount(&handle, owner, &dynamic).expect("inline resolves");
-        assert_eq!(r.url, "orzma://INLINEH/index.html");
-        assert!(r.owner.is_some());
-    }
-
-    #[test]
-    fn dynamic_mount_stamps_webview_owner() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-        let instance = register_view(
-            &mut app,
-            "HANDLE",
-            OrzmaView {
-                connection_id: 42,
-                ..inline_view(terminal, true)
-            },
-        );
-
-        mount(&mut app, terminal, instance);
-
-        let children = webview_children_of(&app, terminal);
-        assert_eq!(
-            children.len(),
-            1,
-            "dynamic mount must spawn one inline child"
-        );
-        assert_eq!(
-            app.world().get::<WebviewOwner>(children[0]),
-            Some(&WebviewOwner {
-                connection_id: 42,
-                handle: "HANDLE".into(),
-                instance,
-            }),
-            "dynamic mount must stamp WebviewOwner with the mounted instance"
-        );
-    }
-
-    #[test]
-    fn resolve_mount_url_returns_verbatim_url_and_gates_owner_on_bridge() {
-        let surface = Entity::from_bits(1);
-        let disp_handle = HandleId::from("disp");
-        let app_handle = HandleId::from("appv");
-        let mut reg = OrzmaRegistry::default();
-        reg.insert(
-            disp_handle.clone(),
-            OrzmaView {
-                connection_id: 7,
-                ..url_view(surface, "https://example.com", false)
-            },
-        );
-        reg.insert(
-            app_handle.clone(),
-            OrzmaView {
-                connection_id: 7,
-                ..url_view(surface, "https://app.example.com", true)
-            },
-        );
-
-        let disp = resolve_mount(&disp_handle, surface, &reg).expect("registered");
-        assert_eq!(disp.url, "https://example.com");
-        assert!(disp.owner.is_none(), "display-only url must have no owner");
-
-        let appv = resolve_mount(&app_handle, surface, &reg).expect("registered");
-        assert_eq!(appv.url, "https://app.example.com");
-        assert_eq!(appv.owner, Some((7, app_handle)));
-    }
-
-    #[test]
-    fn mount_url_display_only_has_no_preload_or_owner() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-        let instance = register_url(&mut app, "disp", terminal, "https://example.com", false);
-
-        mount(&mut app, terminal, instance);
-
-        let children = webview_children_of(&app, terminal);
-        assert_eq!(children.len(), 1);
-        let child = children[0];
-        match app
-            .world()
-            .get::<WebviewSource>(child)
-            .expect("WebviewSource present")
-        {
-            WebviewSource::Url(url) => assert_eq!(url, "https://example.com"),
-            other => panic!("unexpected WebviewSource: {other:?}"),
-        }
-        // NOTE: WebviewSource carries #[require(PreloadScripts)] in bevy_cef, so
-        // the component is always inserted (Default = empty vec) by Bevy's
-        // required-component machinery. The gate for a display-only view is that
-        // the orzma bridge scripts are absent (empty vec), not that the component
-        // itself is absent.
-        let preload = app
-            .world()
-            .get::<PreloadScripts>(child)
-            .expect("PreloadScripts always present via WebviewSource #[require]");
-        assert!(
-            preload.0.is_empty(),
-            "a display-only url must carry no orzma bridge scripts"
-        );
-        assert!(
-            app.world().get::<WebviewOwner>(child).is_none(),
-            "a display-only url must carry no WebviewOwner"
-        );
-    }
-
-    #[test]
-    fn mount_url_bridged_has_preload_and_owner() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-        let instance = register_url(&mut app, "appv", terminal, "https://app.example.com", true);
-
-        mount(&mut app, terminal, instance);
-
-        let child = webview_children_of(&app, terminal)[0];
-        let preload = app
-            .world()
-            .get::<PreloadScripts>(child)
-            .expect("PreloadScripts present");
-        assert!(
-            !preload.0.is_empty(),
-            "a bridged url must carry the orzma bridge scripts"
-        );
-        assert_eq!(
-            app.world().get::<WebviewOwner>(child),
-            Some(&WebviewOwner {
-                connection_id: 1,
-                handle: "appv".into(),
-                instance,
-            }),
-        );
-    }
-
-    #[test]
-    fn mount_bridged_inline_appends_user_preload_after_bridge() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-        let instance = register_view(
-            &mut app,
-            "h",
-            OrzmaView {
-                preload: vec!["window.USER = 1;".into()],
-                ..inline_view(terminal, true)
-            },
-        );
-
-        mount(&mut app, terminal, instance);
-
-        let child = webview_children_of(&app, terminal)[0];
-        let preload = app
-            .world()
-            .get::<PreloadScripts>(child)
-            .expect("PreloadScripts present");
-        assert!(preload.0.len() >= 2, "bridge + user script");
-        assert_eq!(
-            preload.0.last().map(String::as_str),
-            Some("window.USER = 1;"),
-            "the user script must come last, after the orzma bridge"
-        );
-    }
-
-    #[test]
-    fn mount_bridged_url_appends_user_preload_after_bridge() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-        let instance = register_view(
-            &mut app,
-            "u",
-            OrzmaView {
-                preload: vec!["window.USER = 1;".into()],
-                ..url_view(terminal, "https://app.example.com", true)
-            },
-        );
-
-        mount(&mut app, terminal, instance);
-
-        let child = webview_children_of(&app, terminal)[0];
-        let preload = app
-            .world()
-            .get::<PreloadScripts>(child)
-            .expect("PreloadScripts present");
-        assert_eq!(
-            preload.0.last().map(String::as_str),
-            Some("window.USER = 1;"),
-            "the user script must come last, after the bridge"
-        );
-    }
-
-    #[test]
-    fn mount_display_only_url_with_preload_injects_user_scripts_only() {
-        let mut app = make_test_app();
-        let terminal = spawn_terminal(&mut app);
-        let instance = register_view(
-            &mut app,
-            "disp",
-            OrzmaView {
-                preload: vec!["window.USER = 1;".into()],
-                ..url_view(terminal, "https://example.com", false)
-            },
-        );
-
-        mount(&mut app, terminal, instance);
-
-        let child = webview_children_of(&app, terminal)[0];
-        let preload = app
-            .world()
-            .get::<PreloadScripts>(child)
-            .expect("PreloadScripts present");
-        assert_eq!(
-            preload.0,
-            vec!["window.USER = 1;".to_string()],
-            "a display-only url with preload must carry only the user scripts"
-        );
-        assert!(
-            app.world().get::<WebviewOwner>(child).is_none(),
-            "a display-only url must carry no WebviewOwner even with preload"
-        );
-    }
-
-    fn compositing_writers(
-        connection_id: u64,
-    ) -> (ConnectionWriters, crossbeam_channel::Receiver<String>) {
-        use crossbeam_channel::bounded;
-        let (tx, rx) = bounded(16);
-        let writers = ConnectionWriters::default();
-        writers.insert(connection_id, tx);
-        (writers, rx)
-    }
-
-    fn spawn_owned_projection_child(
-        app: &mut App,
-        terminal: Entity,
-        slot: u8,
-        instance: InstanceId,
-        connection_id: u64,
-        handle: &str,
-    ) -> Entity {
-        let image_handle = app
-            .world_mut()
-            .resource_mut::<Assets<Image>>()
-            .add(Image::default());
-        app.world_mut()
-            .spawn((
-                ChildOf(terminal),
-                Webview {
-                    handle: handle.into(),
-                    instance,
-                    slot,
-                    rows: 10,
-                    cols: 40,
-                },
-                WebviewTextureTarget(image_handle.clone()),
-                WebviewOwner {
-                    connection_id,
-                    handle: handle.into(),
-                    instance,
-                },
-            ))
-            .id()
-    }
-
-    /// Asserts that a child's first successful projection stamps
-    /// `CompositeNotified` and sends exactly one
-    /// `Compositing { active: true }` push naming its instance.
-    ///
-    /// Case: a bridged webview paints for the first time after its
-    /// mount while the registering program listens for compositing
-    /// pushes.
-    #[test]
-    fn first_projection_sends_compositing_start() {
-        let mut app = make_test_app();
-        let (writers, rx) = compositing_writers(1);
-        app.insert_resource(writers);
-        let terminal = app
-            .world_mut()
-            .spawn(view_with_placements(24, 80, vec![placed(InstanceId(1))]))
-            .id();
-        let entity =
-            spawn_owned_projection_child(&mut app, terminal, 0, InstanceId(1), 1, "myhandle");
-
-        run_projection(&mut app);
-
-        assert!(
-            app.world().get::<CompositeNotified>(entity).is_some(),
-            "first successful projection must stamp CompositeNotified"
-        );
-        let msg = rx
-            .try_recv()
-            .expect("compositing start must be sent after first projection");
-        assert_eq!(
-            msg,
-            format!(
-                r#"{{"op":"compositing","handle":"myhandle","instance":"{}","active":true}}"#,
-                InstanceId(1)
-            )
-        );
-    }
-
-    /// Asserts that projecting an already-notified child sends no
-    /// duplicate compositing push.
-    ///
-    /// Case: the same webview keeps projecting frame after frame while
-    /// its owner stays connected.
-    #[test]
-    fn second_projection_does_not_resend() {
-        let mut app = make_test_app();
-        let (writers, rx) = compositing_writers(1);
-        app.insert_resource(writers);
-        let terminal = app
-            .world_mut()
-            .spawn(view_with_placements(24, 80, vec![placed(InstanceId(1))]))
-            .id();
-        spawn_owned_projection_child(&mut app, terminal, 0, InstanceId(1), 1, "myhandle");
-
-        run_projection(&mut app);
-        let _ = rx.try_recv().expect("first projection must send start");
-
-        run_projection(&mut app);
-        assert!(
-            rx.try_recv().is_err(),
-            "second projection must NOT send a duplicate start"
-        );
-    }
-
-    /// Asserts that despawning a child that was notified at least once
-    /// sends `Compositing { active: false }` naming its instance.
-    ///
-    /// Case: a webview that has been painting is unmounted, and the
-    /// registering program must learn that compositing ended.
-    #[test]
-    fn stop_observer_sends_compositing_stop_when_notified() {
-        let mut app = make_test_app();
-        let (writers, rx) = compositing_writers(1);
-        app.insert_resource(writers);
-        let terminal = app
-            .world_mut()
-            .spawn(view_with_placements(24, 80, vec![placed(InstanceId(1))]))
-            .id();
-        let child =
-            spawn_owned_projection_child(&mut app, terminal, 0, InstanceId(1), 1, "myhandle");
-
-        run_projection(&mut app);
-        let _ = rx.try_recv().expect("start notification must arrive");
-
-        app.world_mut().entity_mut(child).despawn();
-        app.world_mut().flush();
-
-        let msg = rx
-            .try_recv()
-            .expect("compositing stop must be sent on despawn");
-        assert_eq!(
-            msg,
-            format!(
-                r#"{{"op":"compositing","handle":"myhandle","instance":"{}","active":false}}"#,
-                InstanceId(1)
-            )
-        );
-    }
-
-    /// Asserts that despawning a child that never projected sends no
-    /// stop push.
-    ///
-    /// Case: a webview is mounted and torn down again before any frame
-    /// lists its placement, so compositing never started.
-    #[test]
-    fn stop_observer_does_not_send_when_not_notified() {
-        let mut app = make_test_app();
-        let (writers, rx) = compositing_writers(1);
-        app.insert_resource(writers);
-        let terminal = app
-            .world_mut()
-            .spawn(view_with_placements(24, 80, vec![]))
-            .id();
-        let child =
-            spawn_owned_projection_child(&mut app, terminal, 0, InstanceId(1), 1, "myhandle");
-
-        app.world_mut().entity_mut(child).despawn();
-        app.world_mut().flush();
-
-        assert!(
-            rx.try_recv().is_err(),
-            "despawning a never-projected entity must NOT send a stop notification"
         );
     }
 }

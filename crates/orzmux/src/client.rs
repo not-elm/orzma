@@ -1,12 +1,15 @@
 //! The GUI-side handle on the multiplexer backend thread: sends
 //! commands, drains events, and joins the thread on drop.
 
-use crate::backend::{Backend, CommandSeq, OrzmuxEvent, ShellFactory};
+use crate::backend::{Backend, CommandSeq, OrzmuxEvent, PaneId, ShellFactory};
 use crate::error::{OrzmuxError, OrzmuxResult};
 use crate::event_loop::{EventLoop, GuiLink, OrzmuxCommand};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use orzma_tty::prelude::WheelConfig;
 use orzma_vt::prelude::{CursorPolicy, SemanticEscapeChars};
+use orzma_webview_host::prelude::{ControlSocket, WebviewHost};
+use std::env;
+use std::process;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::Waker;
 use std::thread::{self, JoinHandle};
@@ -47,6 +50,11 @@ impl OrzmuxClient {
     /// Starts the backend thread (named `orzma-mux`) and returns the
     /// client connected to it.
     ///
+    /// The thread also serves the webview control socket, bound under this
+    /// process's runtime directory in the system temp directory; when it
+    /// cannot be bound, the failure is logged and panes start without
+    /// webview support.
+    ///
     /// `waker` is woken after the backend queues events for the GUI, and
     /// once more as the backend thread exits, by which time the event
     /// channel reports the disconnect. `waker` is invoked on the backend
@@ -75,10 +83,11 @@ impl OrzmuxClient {
             semantic_escape_chars,
             shell_integration,
         );
+        let webview = open_webview_host();
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
             .spawn(move || {
-                let backend = Backend::new(Box::new(factory), wheel);
+                let backend = Backend::new(Box::new(factory), wheel, webview);
                 EventLoop::new(backend, command_rx, gui).run()
             })
             .map_err(OrzmuxError::BackendThread)?;
@@ -158,6 +167,18 @@ impl Drop for OrzmuxClient {
             && let Err(payload) = thread.join()
         {
             tracing::error!(?payload, "orzma-mux thread panicked");
+        }
+    }
+}
+
+/// The webview host serving the control socket in this process's runtime
+/// directory, or a host without a socket when the socket cannot be bound.
+fn open_webview_host() -> WebviewHost<PaneId> {
+    match ControlSocket::bind(&env::temp_dir(), process::id()) {
+        Ok(socket) => WebviewHost::with_socket(socket),
+        Err(error) => {
+            tracing::error!(%error, "the control socket failed to bind; webviews are unavailable");
+            WebviewHost::without_socket()
         }
     }
 }

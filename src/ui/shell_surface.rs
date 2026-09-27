@@ -4,7 +4,6 @@
 use crate::session::spawn::PaneSpawnRequest;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use bevy_orzma_webview::ControlPlaneHandle;
 use bevy_orzmux::prelude::{OrzmuxPane, OrzmuxPaneContainer, OrzmuxPaneSpawnFailed, PaneGeometry};
 use orzmux::prelude::NewPaneAt;
 
@@ -60,18 +59,13 @@ fn request_root_pane(mut commands: Commands, mut requested: Local<bool>) {
     });
 }
 
-/// Unbinds the token and despawns the pending entity; a failed root
-/// spawn (no pane at all) exits.
+/// Despawns the pending entity; a failed root spawn (no pane at all) exits.
 fn on_spawn_failed(
     ev: On<OrzmuxPaneSpawnFailed>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
-    control: Option<Res<ControlPlaneHandle>>,
     panes: Query<(), With<OrzmuxPane>>,
 ) {
-    if let Some(control) = control.as_deref() {
-        control.tokens.remove_entity(ev.entity);
-    }
     commands.entity(ev.entity).despawn();
     if panes.is_empty() {
         tracing::error!(error = %ev.error, "root pane spawn failed, no pane left");

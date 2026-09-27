@@ -72,6 +72,32 @@ fn a_host_mount_queues_the_mount_signal_and_arms_the_coalescer() {
     );
 }
 
+/// Asserts that a host-driven removal drops the `WebviewMount` verdict a
+/// host-driven mount of the same placement still has queued, and keeps the
+/// verdicts of other placements.
+///
+/// Case: a program in a Windows pane sends a socket `mount` and then a
+/// socket `unmount` of the same placement before the pane is pumped, while
+/// its other placement's mount is still queued too.
+#[test]
+fn a_host_removal_drops_the_queued_mount_verdict_of_its_placement() {
+    let (mut tty, _sink) = detached_term();
+    let size = PlacementSize { rows: 4, cols: 8 };
+    tty.mount_placement_at(InstanceId(7), ScreenLine(1), GridColumn(2), size);
+    tty.mount_placement_at(InstanceId(8), ScreenLine(6), GridColumn(2), size);
+
+    tty.remove_placements(&[InstanceId(7)]);
+
+    let out = tty.flush_now();
+    assert_eq!(
+        signals_of(&out),
+        vec![TtySignal::Vt(VtSignal::WebviewMount {
+            instance: InstanceId(8),
+            size
+        })]
+    );
+}
+
 /// Asserts that a rejected host-driven mount queues
 /// `WebviewMountRejected` and leaves the coalescer alone.
 ///

@@ -373,8 +373,17 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Removes the placements the host names, arming the coalescer only
-    /// when one actually went.
+    /// when one actually went. A `WebviewMount` verdict still queued for
+    /// one of them is dropped, so the next pump never reports a mount the
+    /// VT no longer holds.
     pub fn remove_placements(&mut self, instances: &[InstanceId]) {
+        self.pending.retain(|item| {
+            !matches!(
+                item,
+                PumpItem::Signal(TtySignal::Vt(VtSignal::WebviewMount { instance, .. }))
+                    if instances.contains(instance)
+            )
+        });
         if self.vt.remove_placements(instances) {
             self.coalescer.arm_or_extend(Instant::now());
         }
