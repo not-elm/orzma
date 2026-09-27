@@ -1,7 +1,47 @@
 //! Tests for the key and paste writers: VT modes decide the encoding, and
-//! a paste snaps a scrolled-back viewport.
+//! input snaps a scrolled-back viewport and dismisses the selection.
 
 use super::*;
+use crate::input::KeyText;
+use crate::test_support::SelectionOp;
+
+/// Asserts that a key sent to the PTY dismisses the selection and
+/// schedules the repaint that removes its highlight.
+///
+/// Case: the user drags over some output to select it, then starts typing
+/// the next command at the prompt.
+#[test]
+fn send_key_dismisses_the_selection_and_arms() {
+    let (mut term, _sink) = detached_term();
+    term.vt.selection_changes = true;
+    term.send_key(
+        &TerminalKey::Character(KeyText::new("a").expect("a non-empty key text")),
+        &TerminalModifiers::default(),
+    )
+    .expect("send_key");
+    assert_eq!(term.vt.selections, vec![SelectionOp::Clear]);
+    assert!(
+        term.coalescer.is_armed(),
+        "the dismissal must schedule a repaint"
+    );
+}
+
+/// Asserts that a non-empty paste dismisses the selection and schedules
+/// the repaint that removes its highlight.
+///
+/// Case: the user selects a path in the output with the mouse, then pastes
+/// a command from the clipboard at the prompt.
+#[test]
+fn send_paste_dismisses_the_selection_and_arms() {
+    let (mut term, _sink) = detached_term();
+    term.vt.selection_changes = true;
+    term.send_paste("ls").expect("send_paste");
+    assert_eq!(term.vt.selections, vec![SelectionOp::Clear]);
+    assert!(
+        term.coalescer.is_armed(),
+        "the dismissal must schedule a repaint"
+    );
+}
 
 /// Asserts the scroll-on-input integration: user input while
 /// scrolled back snaps the viewport to the live tail AND schedules
@@ -82,4 +122,17 @@ fn empty_paste_writes_nothing_to_the_pty() {
     term.send_paste("").expect("send_paste");
     term.settle_writes();
     assert_eq!(sink.contents(), b"");
+}
+
+/// Asserts that an empty paste leaves the selection in place.
+///
+/// Case: the user selects some output with the mouse, then presses the
+/// paste shortcut while the clipboard is empty.
+#[test]
+fn empty_paste_keeps_the_selection() {
+    let (mut term, _sink) = detached_term();
+    term.vt.selection_changes = true;
+    term.send_paste("").expect("send_paste");
+    assert!(term.vt.selections.is_empty());
+    assert!(!term.coalescer.is_armed());
 }
