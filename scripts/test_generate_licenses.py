@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -80,6 +83,43 @@ class Assemble(unittest.TestCase):
             self.assertLess(a.index("Rust crates"), a.index("npm packages"))
             self.assertLess(a.index("npm packages"), a.index("FONT1 TEXT"))
             self.assertLess(a.index("FONT1 TEXT"), a.index("CEF BSD"))
+
+
+class Main(unittest.TestCase):
+    def test_writes_lf_line_endings_on_every_host(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            Assemble()._fixture_dir(d)
+            out = d / "THIRD-PARTY-LICENSES.md"
+            with mock.patch.object(gl, "run_cargo_about", return_value="RUST\n"), \
+                    mock.patch.object(gl, "run_pnpm_licenses", return_value=[]), \
+                    mock.patch.object(gl, "LICENSES_DIR", d), \
+                    mock.patch.object(gl, "REPO_ROOT", d), \
+                    mock.patch.object(gl, "OUTPUT_PATH", out), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                gl.main([])
+            self.assertNotIn(b"\r\n", out.read_bytes())
+
+
+class CargoAboutArgv(unittest.TestCase):
+    def test_writes_to_an_output_file_instead_of_stdout(self):
+        argv = gl.cargo_about_argv(Path("about.hbs"), Path("out.md"))
+        self.assertEqual(argv[:3], ["cargo", "about", "generate"])
+        self.assertIn("--output-file", argv)
+        self.assertEqual(argv[argv.index("--output-file") + 1], "out.md")
+        self.assertEqual(argv[-1], "about.hbs")
+
+
+class ResolveProgram(unittest.TestCase):
+    def test_returns_the_path_found_on_path(self):
+        with mock.patch.object(gl.shutil, "which", return_value=r"C:\npm\pnpm.CMD"):
+            self.assertEqual(gl.resolve_program("pnpm"), r"C:\npm\pnpm.CMD")
+
+    def test_missing_program_exits_with_its_name(self):
+        with mock.patch.object(gl.shutil, "which", return_value=None):
+            with self.assertRaises(SystemExit) as ctx:
+                gl.resolve_program("pnpm")
+        self.assertIn("pnpm", str(ctx.exception))
 
 
 if __name__ == "__main__":

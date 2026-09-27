@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -105,30 +106,49 @@ def assemble(rust_body: str, npm_entries: list[dict], licenses_dir: Path) -> str
     return "\n".join(part.rstrip("\n") for part in parts) + "\n"
 
 
+def cargo_about_argv(template: Path, output: Path) -> list[str]:
+    # cargo-about refuses to write to stdout when any ancestor process is
+    # PowerShell, and on Windows every `just` recipe runs under powershell.exe.
+    return [
+        "cargo", "about", "generate",
+        "--frozen", "--workspace", "--all-features", "--fail",
+        "--output-file", str(output),
+        str(template),
+    ]
+
+
 def run_cargo_about(version: str = "0.9.0") -> str:
-    template = REPO_ROOT / "about.hbs"
-    result = subprocess.run(
-        [
-            "cargo", "about", "generate",
-            "--frozen", "--workspace", "--all-features", "--fail",
-            str(template),
-        ],
-        cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8",
-    )
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr)
-        raise SystemExit(
-            "cargo-about failed. Install the pinned version with "
-            f"`cargo install cargo-about@{version} --locked --features cli` and resolve "
-            "any unsatisfied licenses in about.toml."
+    with tempfile.TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "rust.md"
+        result = subprocess.run(
+            cargo_about_argv(REPO_ROOT / "about.hbs", out_path),
+            cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8",
         )
-    return result.stdout
+        if result.returncode != 0:
+            sys.stderr.write(result.stderr)
+            raise SystemExit(
+                "cargo-about failed. Install the pinned version with "
+                f"`cargo install cargo-about@{version} --locked --features cli` and resolve "
+                "any unsatisfied licenses in about.toml."
+            )
+        # Text mode folds the CRLF endings some upstream license texts carry,
+        # which keeps the output host-independent.
+        return out_path.read_text(encoding="utf-8")
+
+
+def resolve_program(name: str) -> str:
+    # Windows installs pnpm as a `pnpm.cmd` shim, which CreateProcess does not
+    # find from a bare name; shutil.which applies PATHEXT and does.
+    path = shutil.which(name)
+    if path is None:
+        raise SystemExit(f"`{name}` was not found on PATH.")
+    return path
 
 
 def _run_checked(argv: list[str], cwd: Path, stdin: str | None = None) -> str:
     try:
         return subprocess.run(
-            argv, cwd=cwd, input=stdin,
+            [resolve_program(argv[0]), *argv[1:]], cwd=cwd, input=stdin,
             capture_output=True, text=True, encoding="utf-8", check=True,
         ).stdout
     except subprocess.CalledProcessError as exc:
@@ -162,7 +182,7 @@ def main(argv: list[str] | None = None) -> None:
     rust_body = run_cargo_about(args.cargo_about_version)
     npm_entries = run_pnpm_licenses(args.pnpm_licenses_version)
     content = assemble(rust_body, npm_entries, LICENSES_DIR)
-    OUTPUT_PATH.write_text(content, encoding="utf-8")
+    OUTPUT_PATH.write_text(content, encoding="utf-8", newline="\n")
     print(f"Wrote {OUTPUT_PATH.relative_to(REPO_ROOT)} ({len(npm_entries)} npm packages)")
 
 
