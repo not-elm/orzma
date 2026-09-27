@@ -252,17 +252,12 @@ impl ScreenSelection {
         }
     }
 
-    /// Switches the active selection's granularity, keeping its ends;
-    /// returns whether it changed. A no-op without an active selection.
-    pub fn set_kind(&mut self, kind: SelectionKind) -> bool {
-        let Some(state) = &mut self.state else {
-            return false;
-        };
-        if state.kind == kind {
-            return false;
+    /// Switches the active selection's granularity, keeping its ends. A
+    /// no-op without an active selection.
+    pub fn set_kind(&mut self, kind: SelectionKind) {
+        if let Some(state) = &mut self.state {
+            state.kind = kind;
         }
-        state.kind = kind;
-        true
     }
 
     /// Moves each end onto the far side of the cell it was set from, so the
@@ -522,18 +517,25 @@ mod tests {
     }
 
     /// Asserts that `set_kind` switches the granularity once, keeping the
-    /// ends, and does nothing without a selection.
+    /// ends, that setting the same kind again leaves the selection as it
+    /// is, and that it does nothing without a selection.
     ///
     /// Case: the user presses `v` and then `V` in vi mode.
     #[test]
     fn set_kind_switches_the_granularity_once() {
         let grid = grid();
         let mut selection = ScreenSelection::new();
-        assert!(!selection.set_kind(SelectionKind::Lines));
-        selection.start(end(&grid, 0, 1, CellSide::Left), SelectionKind::Simple);
-        assert!(selection.set_kind(SelectionKind::Lines));
-        assert!(!selection.set_kind(SelectionKind::Lines));
+        selection.set_kind(SelectionKind::Lines);
+        assert_eq!(selection.kind(), None);
+        assert_eq!(selection.ends(), None);
+        let start = end(&grid, 0, 1, CellSide::Left);
+        selection.start(start, SelectionKind::Simple);
+        selection.set_kind(SelectionKind::Lines);
         assert_eq!(selection.kind(), Some(SelectionKind::Lines));
+        assert_eq!(selection.ends(), Some((start, start)));
+        selection.set_kind(SelectionKind::Lines);
+        assert_eq!(selection.kind(), Some(SelectionKind::Lines));
+        assert_eq!(selection.ends(), Some((start, start)));
     }
 
     /// Asserts that a relocated end keeps the side of the cell it was set

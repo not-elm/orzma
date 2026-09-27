@@ -405,6 +405,12 @@ impl Grid {
             .map(|row| &row.cells)
     }
 
+    /// Borrows the cell at an active-grid point; `None` when its line is
+    /// outside the ring or its column is past the row.
+    pub fn cell_at(&self, point: GridPoint) -> Option<&Cell> {
+        self.row_at(point.line)?.get(usize::from(point.column.0))
+    }
+
     /// Number of history rows currently retained.
     pub fn history_len(&self) -> usize {
         self.rows.len() - usize::from(self.size.rows)

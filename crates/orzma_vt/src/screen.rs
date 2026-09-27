@@ -878,7 +878,8 @@ impl Screen {
         } else {
             GridLine::from(first)
         };
-        self.vi.follow_rows_up(top, GridLine::from(bottom), count);
+        self.vi
+            .follow_rows(top, GridLine::from(bottom), -i32::from(count));
         let _ = self.clamp_vi_cursor();
         Some(DamageSpan::Full)
     }
@@ -901,8 +902,11 @@ impl Screen {
         for _ in 0..count {
             self.grid.scroll_down_one(first, bottom, fill.clone());
         }
-        self.vi
-            .follow_rows_down(GridLine::from(first), GridLine::from(bottom), count);
+        self.vi.follow_rows(
+            GridLine::from(first),
+            GridLine::from(bottom),
+            i32::from(count),
+        );
         let _ = self.clamp_vi_cursor();
         Some(DamageSpan::Full)
     }
@@ -1565,8 +1569,6 @@ impl Screen {
         let reclaimed = self.reclaimable_rows(old.rows, size.rows);
         self.grid.resize(size);
         self.shift_cursors(reclaimed, required_scrolling);
-        self.vi
-            .shift(i32::from(reclaimed) - i32::from(required_scrolling));
         self.clamp_cursors(size);
         if old.cols != size.cols {
             self.state.pending_wrap = false;
@@ -1707,7 +1709,7 @@ impl Screen {
             self.land_viewport(riders.moved(index));
         }
         if let Some(index) = riders.vi {
-            self.land_vi_cursor(riders.moved(index), cols);
+            self.land_vi_cursor(riders.moved(index));
         }
     }
 
@@ -1811,10 +1813,10 @@ impl Screen {
         self.set_display_offset(DisplayOffset(offset));
     }
 
-    /// Moves the vi cursor onto the cell a reflow to `cols` columns carried
-    /// it to, pulled inside the viewport; onto the viewport's top-left cell
-    /// when its row is gone.
-    fn land_vi_cursor(&mut self, point: Option<TrackedPoint>, cols: u16) {
+    /// Moves the vi cursor onto the cell a reflow carried it to, pulled
+    /// inside the viewport and onto the last column or before; onto the
+    /// viewport's top-left cell when its row is gone.
+    fn land_vi_cursor(&mut self, point: Option<TrackedPoint>) {
         let (top, _) = self.viewport_lines();
         let landed = point.map_or(
             GridPoint {
@@ -1823,7 +1825,7 @@ impl Screen {
             },
             |point| GridPoint {
                 line: point.line(),
-                column: GridColumn(point.boundary().min(cols.saturating_sub(1))),
+                column: GridColumn(point.boundary()),
             },
         );
         let _ = self.vi.set(landed);
@@ -1850,9 +1852,9 @@ impl Screen {
         u16::try_from(reclaimed).expect("a growth never exceeds u16::MAX rows")
     }
 
-    /// Moves the live cursor and the saved one down by the rows a resize
-    /// reclaimed from history and up by the rows it scrolled away, so
-    /// both keep pointing at the row they were on.
+    /// Moves the live cursor, the saved one, and the vi cursor down by the
+    /// rows a resize reclaimed from history and up by the rows it scrolled
+    /// away, so all three keep pointing at the row they were on.
     fn shift_cursors(&mut self, reclaimed: u16, required_scrolling: u16) {
         let follow_moved_rows = |line: &mut ScreenLine| {
             line.0 = line
@@ -1862,6 +1864,8 @@ impl Screen {
         };
         follow_moved_rows(&mut self.state.line);
         follow_moved_rows(&mut self.checkpoint.line);
+        self.vi
+            .shift(i32::from(reclaimed) - i32::from(required_scrolling));
     }
 
     fn clamp_cursors(&mut self, size: GridSize) {
@@ -1985,15 +1989,13 @@ impl Screen {
         let Some(end) = self.selection_end(cell, side) else {
             return false;
         };
-        let before = self.selection.ends();
-        let extended = self.selection.extend(end);
-        if before.is_none() || !self.is_vi_mode() {
-            return extended;
+        if self.selection.ends().is_none() || !self.is_vi_mode() {
+            return self.selection.extend(end);
         }
         let moved = self.vi.set(cell);
         let _ = self.clamp_vi_cursor();
-        let _ = self.include_selection_cells();
-        moved || self.selection.ends() != before
+        let followed = self.extend_covering(end);
+        moved || followed
     }
 
     /// Drops the active selection; returns whether there was one, even
@@ -2037,6 +2039,16 @@ impl Screen {
     fn selection_end(&self, cell: GridPoint, side: CellSide) -> Option<SelectionEnd> {
         let line = self.grid.line_id_at_point(cell)?;
         Some(SelectionEnd::at(line, cell.column, side))
+    }
+
+    /// Moves the active selection's moving end to `end` and makes the
+    /// selection cover both of its end cells; returns whether either end
+    /// moved.
+    fn extend_covering(&mut self, end: SelectionEnd) -> bool {
+        let before = self.selection.ends();
+        let _ = self.selection.extend(end);
+        let _ = self.include_selection_cells();
+        self.selection.ends() != before
     }
 
     /// Appends to `out` the text of the cells in `columns` of the row at

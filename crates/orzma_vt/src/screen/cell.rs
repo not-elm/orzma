@@ -236,10 +236,16 @@ impl Cell {
     /// The glyph followed by the marks combined onto it, in arrival
     /// order; a continuation or filler column yields nothing.
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
-        let body = !matches!(self.width, CellWidth::Spacer | CellWidth::LeadingSpacer);
+        let body = !self.is_spacer();
         body.then_some(self.c)
             .into_iter()
             .chain(self.marks().iter().copied().filter(move |_| body))
+    }
+
+    /// Whether the cell is a continuation column or a wrap filler rather
+    /// than a glyph of its own.
+    pub(crate) fn is_spacer(&self) -> bool {
+        matches!(self.width, CellWidth::Spacer | CellWidth::LeadingSpacer)
     }
 
     /// The pen the cell was printed with: its colors and SGR attributes.

@@ -5,7 +5,7 @@ use crate::screen::cell::{Cell, CellWidth};
 use crate::screen::grid::Grid;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint};
 use crate::screen::grid::run::Style;
-use crate::screen::vi::{SemanticEscapeChars, ViMotion};
+use crate::screen::vi::{SemanticEscapeChars, ViMotion, is_blank_char};
 
 /// The grid a vi motion reads, with the viewport and the word separators
 /// the motion resolves against.
@@ -70,10 +70,10 @@ impl<'a> MotionGrid<'a> {
     /// row stays inside the grid.
     pub fn scroll_target(&self, point: GridPoint, lines: i32) -> GridPoint {
         let line = self.clamp_line(point.line.0.saturating_sub(lines));
-        let column = self
-            .first_occupied_in_line(line)
-            .map_or(GridColumn(0), |occupied| occupied.column);
-        GridPoint { line, column }
+        GridPoint {
+            line,
+            column: self.first_occupied_column(line),
+        }
     }
 
     /// The oldest row the grid holds: the first history row, or the top
@@ -205,10 +205,10 @@ impl<'a> MotionGrid<'a> {
     fn viewport_row(&self, rows_below_top: i32) -> GridPoint {
         let (top, bottom) = self.viewport;
         let line = GridLine((top.0 + rows_below_top).clamp(top.0, bottom.0));
-        let column = self
-            .first_occupied_in_line(line)
-            .map_or(GridColumn(0), |occupied| occupied.column);
-        GridPoint { line, column }
+        GridPoint {
+            line,
+            column: self.first_occupied_column(line),
+        }
     }
 
     fn semantic(&self, mut point: GridPoint, direction: Direction, side: Direction) -> GridPoint {
@@ -271,7 +271,7 @@ impl<'a> MotionGrid<'a> {
             Ok(found) => {
                 let mut candidate = self.next_point(found);
                 while let Some(at) = candidate {
-                    if !self.cell(at).is_some_and(is_spacer) {
+                    if !self.cell(at).is_some_and(Cell::is_spacer) {
                         return at;
                     }
                     candidate = self.next_point(at);
@@ -454,14 +454,14 @@ impl<'a> MotionGrid<'a> {
 
     fn is_space(&self, point: GridPoint) -> bool {
         self.cell(point)
-            .is_some_and(|cell| !is_spacer(cell) && (cell.c == ' ' || cell.c == '\t'))
+            .is_some_and(|cell| !cell.is_spacer() && is_blank_char(cell.c))
     }
 
     /// Whether the glyph at `point` ends a semantic word: a blank, a tab, or
     /// one of the configured separators.
     fn is_separator(&self, point: GridPoint) -> bool {
         self.cell(point)
-            .is_some_and(|cell| !is_spacer(cell) && self.escape_chars.contains(cell.c))
+            .is_some_and(|cell| !cell.is_spacer() && self.escape_chars.contains(cell.c))
     }
 
     fn is_wrap(&self, point: GridPoint) -> bool {
@@ -496,6 +496,13 @@ impl<'a> MotionGrid<'a> {
             .find(|&point| !self.is_space(point))
     }
 
+    /// The column of the first non-blank cell on `line`, or the first
+    /// column when the line is blank.
+    fn first_occupied_column(&self, line: GridLine) -> GridColumn {
+        self.first_occupied_in_line(line)
+            .map_or(GridColumn(0), |occupied| occupied.column)
+    }
+
     fn last_occupied_in_line(&self, line: GridLine) -> Option<GridPoint> {
         (0..self.grid.size().cols)
             .map(|column| GridPoint {
@@ -506,9 +513,7 @@ impl<'a> MotionGrid<'a> {
     }
 
     fn cell(&self, point: GridPoint) -> Option<&Cell> {
-        self.grid
-            .row_at(point.line)?
-            .get(usize::from(point.column.0))
+        self.grid.cell_at(point)
     }
 
     fn clamp_line(&self, line: i32) -> GridLine {
@@ -532,17 +537,11 @@ enum Direction {
     Right,
 }
 
-/// Whether `cell` is a continuation column or a wrap filler rather than a
-/// glyph of its own.
-fn is_spacer(cell: &Cell) -> bool {
-    matches!(cell.width, CellWidth::Spacer | CellWidth::LeadingSpacer)
-}
-
 /// Whether `cell` shows nothing a paragraph motion counts as text: a
 /// narrow blank or tab in the default colors, without reverse video,
 /// underline, strike-through, or combining marks.
 fn is_empty_cell(cell: &Cell) -> bool {
-    matches!(cell.c, ' ' | '\t')
+    is_blank_char(cell.c)
         && cell.width == CellWidth::Narrow
         && cell.fg == Color::DefaultForeground
         && cell.bg == Color::DefaultBackground

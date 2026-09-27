@@ -67,18 +67,12 @@ impl DeviceState {
 
     /// The screen the device currently reads and writes.
     pub fn active_screen(&self) -> &Screen {
-        match self.modes.active_screen {
-            ScreenKind::Primary => &self.screens.primary,
-            ScreenKind::Alternate => &self.screens.alternate,
-        }
+        self.screens.get(self.modes.active_screen)
     }
 
     /// The screen the device currently reads and writes.
     pub fn active_screen_mut(&mut self) -> &mut Screen {
-        match self.modes.active_screen {
-            ScreenKind::Primary => &mut self.screens.primary,
-            ScreenKind::Alternate => &mut self.screens.alternate,
-        }
+        self.screens.get_mut(self.modes.active_screen)
     }
 
     /// Resizes the screens to `size`; `None` when the dimensions of the
@@ -316,7 +310,7 @@ impl DeviceState {
         self.modes = VtModes::default();
         self.apply_initial_cursor_style();
         if vi_mode {
-            let _ = self.screens.primary.seat_vi_cursor();
+            self.screens.primary.seat_vi_cursor();
         }
         self.title = TitleState::default();
         self.active_hyperlink = None;
@@ -783,7 +777,7 @@ impl DeviceState {
         // selection by the rules outside vi mode, and a selection end set from
         // the right side of a cell can come to name the next cell.
         if vi_mode {
-            let _ = self.active_screen_mut().seat_vi_cursor();
+            self.active_screen_mut().seat_vi_cursor();
         }
         match to {
             ScreenKind::Alternate => Vec::new(),
@@ -815,6 +809,14 @@ struct Screens {
 }
 
 impl Screens {
+    /// The screen `kind` names.
+    fn get(&self, kind: ScreenKind) -> &Screen {
+        match kind {
+            ScreenKind::Primary => &self.primary,
+            ScreenKind::Alternate => &self.alternate,
+        }
+    }
+
     /// The screen `kind` names.
     fn get_mut(&mut self, kind: ScreenKind) -> &mut Screen {
         match kind {

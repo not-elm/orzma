@@ -92,7 +92,7 @@ impl SemanticEscapeChars {
     /// Whether `c` ends a semantic word: a blank, a tab, or one of the
     /// characters the set was built from.
     pub fn contains(&self, c: char) -> bool {
-        matches!(c, ' ' | '\t') || self.0.contains(c)
+        is_blank_char(c) || self.0.contains(c)
     }
 }
 
@@ -186,23 +186,13 @@ impl ScreenVi {
         self.set(clamped)
     }
 
-    /// Moves a vi cursor on a row in `top..=bottom` up by `count` rows,
-    /// stopping at `top`.
-    pub fn follow_rows_up(&mut self, top: GridLine, bottom: GridLine, count: u16) {
+    /// Moves a vi cursor on a row in `top..=bottom` by `delta` rows, down
+    /// when positive, stopping at `top` and at `bottom`.
+    pub fn follow_rows(&mut self, top: GridLine, bottom: GridLine, delta: i32) {
         if let Some(point) = &mut self.point
             && (top.0..=bottom.0).contains(&point.line.0)
         {
-            point.line = GridLine((point.line.0 - i32::from(count)).max(top.0));
-        }
-    }
-
-    /// Moves a vi cursor on a row in `first..=bottom` down by `count`
-    /// rows, stopping at `bottom`.
-    pub fn follow_rows_down(&mut self, first: GridLine, bottom: GridLine, count: u16) {
-        if let Some(point) = &mut self.point
-            && (first.0..=bottom.0).contains(&point.line.0)
-        {
-            point.line = GridLine((point.line.0 + i32::from(count)).min(bottom.0));
+            point.line = GridLine((point.line.0 + delta).clamp(top.0, bottom.0));
         }
     }
 
@@ -222,8 +212,7 @@ impl Screen {
         let mut point = self.vi.point()?;
         let on_continuation = self
             .grid
-            .row_at(point.line)
-            .and_then(|row| row.get(usize::from(point.column.0)))
+            .cell_at(point)
             .is_some_and(|cell| cell.width == CellWidth::Spacer);
         if on_continuation {
             point.column = GridColumn(point.column.0.saturating_sub(1));
@@ -238,8 +227,8 @@ impl Screen {
 
     /// Seats the vi cursor on the write cursor, or on the viewport's
     /// top-left cell when the viewport is scrolled back past the write
-    /// cursor; returns whether the vi cursor appeared or moved.
-    pub fn seat_vi_cursor(&mut self) -> bool {
+    /// cursor.
+    pub fn seat_vi_cursor(&mut self) {
         let (top, bottom) = self.viewport_lines();
         let cursor_line = GridLine::from(self.state.line);
         let point = if cursor_line.0 > bottom.0 {
@@ -253,7 +242,7 @@ impl Screen {
                 column: self.state.column,
             }
         };
-        self.vi.set(point)
+        let _ = self.vi.set(point);
     }
 
     /// Removes the vi cursor; returns whether there was one.
@@ -277,7 +266,8 @@ impl Screen {
             return false;
         }
         let _ = self.selection.clear();
-        self.seat_vi_cursor()
+        self.seat_vi_cursor();
+        true
     }
 
     /// Leaves vi mode: drops the vi cursor and the selection and returns
@@ -393,17 +383,17 @@ impl Screen {
         match current {
             Some(current) if current == kind => self.selection.clear(),
             Some(_) => {
-                let rekinded = self.selection.set_kind(kind);
-                let included = self.include_selection_cells();
-                rekinded || included
+                self.selection.set_kind(kind);
+                let _ = self.include_selection_cells();
+                true
             }
             None => {
                 let Some(end) = self.selection_end(point, CellSide::Left) else {
                     return false;
                 };
-                let started = self.selection.start(end, kind);
-                let included = self.include_selection_cells();
-                started || included
+                let _ = self.selection.start(end, kind);
+                let _ = self.include_selection_cells();
+                true
             }
         }
     }
@@ -456,16 +446,18 @@ impl Screen {
         let Some(end) = self.selection_end(point, CellSide::Left) else {
             return false;
         };
-        let before = self.selection.ends();
-        let _ = self.selection.extend(end);
-        let _ = self.include_selection_cells();
-        self.selection.ends() != before
+        self.extend_covering(end)
     }
 }
 
 /// The word separators of the built-in semantic motions, besides
 /// whitespace.
 const DEFAULT_SEMANTIC_ESCAPE_CHARS: &str = ",│`|:\"' ()[]{}<>\t";
+
+/// Whether `c` is a blank or a tab.
+fn is_blank_char(c: char) -> bool {
+    matches!(c, ' ' | '\t')
+}
 
 #[cfg(test)]
 mod tests;
