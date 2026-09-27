@@ -77,10 +77,20 @@ Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 
 Biome (`biome.json`) scans `sdk/**` — it is the JS/TS lint+format tool for this repo.
 
+### Documentation
+
+| Action                                    | Command           |
+| ----------------------------------------- | ----------------- |
+| Install the pinned mdBook tools (one-time) | `just setup-book` |
+| Build the user guide into `target/book`    | `just book`       |
+| Preview the user guide with live reload    | `just book-serve` |
+
 ## Other notable paths
 
 - `.claude/rules/` — repo-wide Rust and TypeScript conventions (linked from the rules sections below).
-- `docs/` — design notes and specs (tracked in git).
+- `docs/book/` — the user guide (mdBook), published to GitHub Pages when a stable `v*` tag is pushed. A change to user-visible behavior (configuration keys, shortcuts, the webview protocol) updates the matching page under `docs/book/src/` in the same change.
+- `docs/memo/`, `docs/references/`, `docs/todo/` — implementation notes, reference manuals, and per-task working notes.
+- `CONTRIBUTING.md` — contributor guide: development setup, architecture, conventions, pull requests, and documentation.
 
 ## Comment language
 

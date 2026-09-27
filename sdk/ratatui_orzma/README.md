@@ -1,20 +1,23 @@
 # ratatui_orzma
 
-Ratatui backend for the orzma in-process webview bridge.
+A [ratatui](https://ratatui.rs) widget and RPC handler for embedding orzma
+webviews in a terminal app.
 
-Implements a [`ratatui`](https://ratatui.rs) backend that renders terminal UI inside an orzma
-webview pane. Applications draw to the backend as they would with any ratatui terminal, and the
-output is forwarded to the orzma host via the APC-based control protocol.
+Running inside an orzma pane, an app registers web content with orzma, draws it
+with `WebviewWidget` in its ratatui layout, and exchanges calls and events with
+the page. `OrzmaBackend` wraps the app's terminal backend and places each page
+on every draw.
 
 ## Usage
 
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-ratatui_orzma = "0.1"
+```sh
+cargo add ratatui_orzma ratatui@0.29
 ```
+
+See [Building Webview Apps](https://not-elm.github.io/orzma/building-webview-apps.html)
+for a tutorial, the [examples](examples) for complete programs, and
+[docs.rs](https://docs.rs/ratatui_orzma) for the API.
 
 ## License
 
-MIT
+MIT. See [LICENSE](../../LICENSE).

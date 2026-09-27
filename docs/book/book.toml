@@ -1,0 +1,22 @@
+[book]
+title = "orzma"
+description = "A terminal emulator that renders webviews inside the terminal."
+authors = ["notelm"]
+
+[build]
+build-dir = "../../target/book"
+create-missing = false
+extra-watch-dirs = ["../../sdk/ratatui_orzma/examples"]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[output.html]
+site-url = "/orzma/"
+git-repository-url = "https://github.com/not-elm/orzma"
+edit-url-template = "https://github.com/not-elm/orzma/edit/main/docs/book/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+no-section-label = true
+
+[output.html.playground]
+runnable = false
