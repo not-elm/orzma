@@ -402,9 +402,9 @@ impl<V: Vt> OrzmaTty<V> {
 
     /// Encodes a key press and queues it for the PTY.
     ///
-    /// Snaps a scrolled-back viewport to the live tail first
-    /// (scroll-on-input policy). `Ok` means the key was queued, not that it
-    /// reached the PTY.
+    /// Dismisses the selection and snaps a scrolled-back viewport to the
+    /// live tail first, even when the key is then refused. `Ok` means the
+    /// key was queued, not that it reached the PTY.
     ///
     /// # Errors
     ///
@@ -413,7 +413,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_key(&mut self, key: &TerminalKey, mods: &TerminalModifiers) -> OrzmaTtyResult {
         let modes = self.vt.modes();
-        self.snap_to_live_tail();
+        self.begin_input();
         self.pty
             .enqueue_write(PtyInput::encode_key(key, mods, modes).into_bytes())
     }
@@ -518,10 +518,12 @@ impl<V: Vt> OrzmaTty<V> {
     /// Queues a paste of clipboard text for the PTY, honouring
     /// bracketed-paste mode (DECSET 2004).
     ///
-    /// Empty text is a no-op: nothing is queued. Otherwise a scrolled-back
-    /// viewport snaps to the live tail first (scroll-on-input policy), and
-    /// the whole frame is queued as one write or rejected whole. `Ok` means
-    /// the paste was queued, not that it reached the PTY.
+    /// Empty text is a no-op: nothing is queued, and the selection and
+    /// viewport stay as they are. Otherwise the selection is dismissed and
+    /// a scrolled-back viewport snaps to the live tail first, even when the
+    /// frame is then refused. The whole frame is queued as one write or
+    /// rejected whole. `Ok` means the paste was queued, not that it reached
+    /// the PTY.
     ///
     /// # Errors
     ///
@@ -533,7 +535,7 @@ impl<V: Vt> OrzmaTty<V> {
             return Ok(());
         }
         let bracketed = self.vt.modes().bracketed_paste;
-        self.snap_to_live_tail();
+        self.begin_input();
         self.pty
             .enqueue_write(PtyInput::encode_paste(text, bracketed).into_bytes())
     }
@@ -688,6 +690,13 @@ impl<V: Vt> OrzmaTty<V> {
         if let Some(evicted) = VtSignal::evicted(changed.evicted) {
             self.pending.push(PumpItem::Signal(TtySignal::Vt(evicted)));
         }
+    }
+
+    /// Prepares the screen for user input bound for the PTY: dismisses the
+    /// selection, then snaps a scrolled-back viewport to the live tail.
+    fn begin_input(&mut self) {
+        self.clear_selection();
+        self.snap_to_live_tail();
     }
 
     /// Snaps a scrolled-back viewport to the live tail (scroll-on-input

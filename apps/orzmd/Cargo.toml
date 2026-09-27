@@ -19,7 +19,7 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 pulldown-cmark = "0.12"
 notify-debouncer-full = "0.3"
-rust-embed = "8"
+rust-embed = { version = "8", features = ["deterministic-timestamps"] }
 tempfile = { workspace = true }
 blake3 = "1"
 

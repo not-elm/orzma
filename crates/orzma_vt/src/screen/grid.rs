@@ -416,6 +416,12 @@ impl Grid {
         self.rows.len() - usize::from(self.size.rows)
     }
 
+    /// Whether rows that leave the top of the screen can enter history;
+    /// `false` when the history cap is zero.
+    pub fn has_scrollback(&self) -> bool {
+        self.max_history > 0
+    }
+
     /// Resizes the grid, truncating rather than reflowing; returns
     /// whether the dimensions changed.
     ///

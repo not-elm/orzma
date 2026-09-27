@@ -176,10 +176,12 @@ pub trait Vt {
     /// The primary screen's rows, history included, are rewrapped at the
     /// new width, and the positions pointing into them follow their text;
     /// what the rows a growth frees hold follows the terminal's
-    /// [`ScrollbackOnGrow`]. The alternate screen is truncated. While the
-    /// alternate screen is shown, the primary screen is rewrapped only when
-    /// it is shown again, and the primary-screen placements that rewrap
-    /// strands are named by the [`VtSignal::WebviewEvicted`] of the
+    /// [`ScrollbackOnGrow`]. The alternate screen is truncated: a shrink
+    /// drops rows from the bottom and keeps its top rows, so a placement
+    /// anchored on a row the shrink keeps is not evicted. While the
+    /// alternate screen is shown, the primary screen is rewrapped only
+    /// when it is shown again, and the primary-screen placements that
+    /// rewrap strands are named by the [`VtSignal::WebviewEvicted`] of the
     /// [`Vt::interpret`] call that shows it, not by this call.
     ///
     /// # Invariants
@@ -327,8 +329,8 @@ pub struct InterpretOutput {
 /// grid change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResizeChanged {
-    /// The placements whose anchor row the resize dropped out of
-    /// history; empty when every anchor survived.
+    /// The placements whose anchor row the resize dropped from the grid;
+    /// empty when every anchor survived.
     pub evicted: Vec<InstanceId>,
 }
 
@@ -1131,6 +1133,40 @@ mod tests {
         assert_eq!(
             vt.resize(GridSize { cols: 4, rows: 2 }),
             Some(ResizeChanged { evicted: vec![id] })
+        );
+    }
+
+    /// Asserts that a shrink of the alternate screen keeps a placement
+    /// anchored near the top live and in place: nothing is evicted and the
+    /// next frame carries no new placement list.
+    ///
+    /// Case: ConPTY's repaint left orzmd's cursor on the bottom row, and
+    /// the user drags the pane holding its webview from 24 rows to 17.
+    #[test]
+    fn an_alternate_screen_shrink_keeps_a_placement_anchored_near_the_top() {
+        let id = InstanceId(1);
+        let mut vt = OrzmaVt::new(GridSize { cols: 80, rows: 24 }, 100);
+        vt.interpret(b"\x1b[?1049h");
+        assert!(vt.mount_placement_at(
+            ScreenLine(1),
+            GridColumn(0),
+            PlacementSize { rows: 23, cols: 80 },
+            id
+        ));
+        vt.interpret(b"\x1b[24;1H");
+        let _ = vt.frame();
+        assert_eq!(
+            vt.resize(GridSize { cols: 80, rows: 17 }),
+            Some(ResizeChanged { evicted: vec![] })
+        );
+        let placements = vt.device.active_screen().project_placements();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].id, id);
+        assert_eq!(placements[0].point.line, GridLine(1));
+        let frame = vt.frame().expect("a resize stages full damage");
+        assert!(
+            frame.placements.is_none(),
+            "the placement did not move, so the frame carries no new list"
         );
     }
 

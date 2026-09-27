@@ -305,7 +305,9 @@ dismisses the selection, so pressing `Ctrl+C` twice copies and then interrupts.
 The mouse's own copy-on-release keeps the selection highlighted, so a drag
 followed by `Ctrl+C` still copies. A copy chord that carries any other
 modifier — including the macOS `Cmd+C` default — always copies and never
-reaches the shell.
+reaches the shell. Typing or pasting into the shell — including a confirmed
+IME composition — also dismisses the selection, while modifier keys on their
+own, other shortcuts, and the mouse wheel leave it in place.
 
 While an application tracks the mouse (for example nvim with `mouse` set),
 clicks and drags go to the application instead of orzma's own selection;

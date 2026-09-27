@@ -348,3 +348,135 @@ fn a_shrink_that_scrolls_moves_the_saved_cursor_up_with_its_row() {
     screen.restore_checkpoint();
     assert_eq!(screen.state.line, ScreenLine(0));
 }
+
+/// Asserts that a shrink of a screen without scrollback keeps its top
+/// rows, ids included, and clamps a cursor below the new bottom onto the
+/// new last row.
+///
+/// Case: a full-screen program on the alternate screen leaves its cursor
+/// on the bottom row, and the user drags the pane shorter.
+#[test]
+fn a_shrink_without_scrollback_keeps_the_top_rows_and_clamps_the_cursor() {
+    let mut screen = Screen::new(GridSize { cols: 4, rows: 4 }, 0);
+    screen.grid[ScreenLine(0)][0].c = 'a';
+    let top_ids = [
+        screen.grid.line_id(ScreenLine(0)),
+        screen.grid.line_id(ScreenLine(1)),
+    ];
+    screen.state.line = ScreenLine(3);
+    assert_eq!(
+        screen.resize(GridSize { cols: 4, rows: 2 }),
+        Some(DamageSpan::Full)
+    );
+    assert_eq!(screen.viewport_row(ViewportLine(0))[0].c, 'a');
+    assert_eq!(
+        [
+            screen.grid.line_id(ScreenLine(0)),
+            screen.grid.line_id(ScreenLine(1)),
+        ],
+        top_ids
+    );
+    assert_eq!(screen.state.line, ScreenLine(1));
+}
+
+/// Asserts that a shrink of a screen without scrollback leaves a
+/// placement anchored on the new last row mounted.
+///
+/// Case: a full-screen program shows a webview from the second row down,
+/// its cursor sits on the bottom row, and the user drags the pane shorter.
+#[test]
+fn a_shrink_without_scrollback_keeps_a_placement_anchored_above_the_new_bottom() {
+    let mut screen = Screen::new(GridSize { cols: 4, rows: 4 }, 0);
+    screen.state.line = ScreenLine(1);
+    screen.mount_placement(InstanceId(1), PlacementSize { rows: 3, cols: 4 });
+    screen.state.line = ScreenLine(3);
+    assert_eq!(
+        screen.resize(GridSize { cols: 4, rows: 2 }),
+        Some(DamageSpan::Full)
+    );
+    assert!(screen.evict_lost_anchors().is_empty());
+    assert_eq!(screen.placement_count(), 1);
+}
+
+/// Asserts that a shrink of a screen without scrollback evicts a
+/// placement anchored on a row it drops from the bottom, rather than
+/// scrolling that row up to follow the cursor.
+///
+/// Case: a full-screen program shows a webview on its bottom row, where
+/// its cursor also sits, and the user drags the pane shorter than that
+/// row.
+#[test]
+fn a_shrink_without_scrollback_evicts_a_placement_below_the_new_bottom() {
+    let mut screen = Screen::new(GridSize { cols: 4, rows: 4 }, 0);
+    screen.state.line = ScreenLine(3);
+    screen.mount_placement(InstanceId(1), PlacementSize { rows: 1, cols: 1 });
+    assert_eq!(
+        screen.resize(GridSize { cols: 4, rows: 2 }),
+        Some(DamageSpan::Full)
+    );
+    assert_eq!(screen.evict_lost_anchors(), vec![InstanceId(1)]);
+}
+
+/// Asserts that a shrink of a screen without scrollback clamps a saved
+/// cursor on a dropped row onto the new last row.
+///
+/// Case: a full-screen program saves its cursor near the bottom with
+/// `DECSC`, the user drags the pane shorter, and the program restores the
+/// cursor with `DECRC`.
+#[test]
+fn a_shrink_without_scrollback_clamps_the_saved_cursor_to_the_new_last_row() {
+    let mut screen = Screen::new(GridSize { cols: 4, rows: 4 }, 0);
+    screen.state.line = ScreenLine(2);
+    screen.save_checkpoint();
+    screen.state.line = ScreenLine(3);
+    assert_eq!(
+        screen.resize(GridSize { cols: 4, rows: 2 }),
+        Some(DamageSpan::Full)
+    );
+    assert_eq!(screen.state.line, ScreenLine(1));
+    screen.restore_checkpoint();
+    assert_eq!(screen.state.line, ScreenLine(1));
+}
+
+/// Asserts that a shrink of a screen without scrollback leaves a saved
+/// cursor on a row the shrink keeps where it was.
+///
+/// Case: a full-screen program saves its cursor on the second row with
+/// `DECSC` while its live cursor sits on the bottom row, the user drags
+/// the pane shorter, and the program restores the cursor with `DECRC`.
+#[test]
+fn a_shrink_without_scrollback_leaves_a_saved_cursor_on_a_kept_row() {
+    let mut screen = Screen::new(GridSize { cols: 4, rows: 4 }, 0);
+    screen.state.line = ScreenLine(1);
+    screen.save_checkpoint();
+    screen.state.line = ScreenLine(3);
+    assert_eq!(
+        screen.resize(GridSize { cols: 4, rows: 2 }),
+        Some(DamageSpan::Full)
+    );
+    screen.restore_checkpoint();
+    assert_eq!(screen.state.line, ScreenLine(1));
+}
+
+/// Asserts that a screen without scrollback that shrinks and grows back
+/// keeps a placement anchored near the top on its row and adds blank rows
+/// at the bottom.
+///
+/// Case: a full-screen program shows a webview from the second row down,
+/// and the user drags the pane shorter and then back to its old height.
+#[test]
+fn a_shrink_and_growth_without_scrollback_keep_a_placement_near_the_top() {
+    let mut screen = Screen::new(GridSize { cols: 4, rows: 4 }, 0);
+    screen.grid[ScreenLine(3)][0].c = 'z';
+    screen.state.line = ScreenLine(1);
+    screen.mount_placement(InstanceId(1), PlacementSize { rows: 3, cols: 4 });
+    screen.state.line = ScreenLine(3);
+    let _ = screen.resize(GridSize { cols: 4, rows: 2 });
+    assert_eq!(
+        screen.resize(GridSize { cols: 4, rows: 4 }),
+        Some(DamageSpan::Full)
+    );
+    assert!(screen.evict_lost_anchors().is_empty());
+    assert_eq!(screen.project_placements()[0].point.line, GridLine(1));
+    assert_eq!(screen.viewport_row(ViewportLine(3))[0], Cell::default());
+}
