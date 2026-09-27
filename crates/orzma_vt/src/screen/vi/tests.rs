@@ -462,19 +462,20 @@ fn a_reflow_that_drops_the_vi_cursor_row_seats_it_top_left() {
     assert_eq!(vi_point(&screen), Some(point(0, 0)));
 }
 
-/// Asserts that a truncating resize carries the vi cursor with the rows it
-/// scrolls off the top.
+/// Asserts that a truncating shrink of a screen without scrollback leaves
+/// the vi cursor on its row, dropping rows from the bottom rather than
+/// scrolling them off the top.
 ///
 /// Case: the user shrinks the window while a full-screen program is shown
 /// and the vi cursor sits on its middle row.
 #[test]
-fn a_truncating_resize_carries_the_vi_cursor_with_its_row() {
+fn a_truncating_shrink_keeps_the_vi_cursor_on_its_row() {
     let mut screen = screen(4, 3, 0);
     print_text(&mut screen, "a\nb\nc");
     assert!(screen.enter_vi_mode());
     screen.vi.set(point(1, 0));
     let _ = screen.resize(GridSize { cols: 4, rows: 2 });
-    assert_eq!(vi_point(&screen), Some(point(0, 0)));
+    assert_eq!(vi_point(&screen), Some(point(1, 0)));
 }
 
 /// Asserts that a growing resize carries the vi cursor down with the rows
