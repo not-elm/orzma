@@ -5,7 +5,8 @@ use crate::boundary::{ForwardChord, HandleId, MountSpec, WebviewAsset};
 use crate::error::RegisterError;
 use crate::protocol::RegisterKind;
 use orzma_vt::prelude::PlacementSize;
-use std::path::{Component, Path, PathBuf};
+use std::mem;
+use std::path::{Path, PathBuf};
 use url::Url;
 
 /// A `register` payload that passed validation: a `dir` root is an absolute
@@ -37,7 +38,7 @@ impl TryFrom<RegisterKind> for ValidatedRegistration {
                 if !root.is_absolute() || !root.is_dir() {
                     return Err(RegisterError::InvalidRoot);
                 }
-                if !is_safe_entry(&entry) {
+                if !WebviewAsset::is_safe_relative_path(Path::new(&entry)) {
                     return Err(RegisterError::UnsafeEntry);
                 }
                 Ok(Self {
@@ -101,12 +102,13 @@ impl ValidatedRegistration {
             .with_forward_keys(self.forward_keys.clone())
     }
 
-    /// The asset the GUI serves for this content: a directory root or an
-    /// inline document, and `None` for a remote URL.
-    pub(crate) fn asset(&self) -> Option<WebviewAsset> {
-        match &self.source {
+    /// Takes the asset the GUI serves for this content: a directory root or
+    /// an inline document, and `None` for a remote URL. An inline document's
+    /// bytes move into the asset, so a later call returns an empty document.
+    pub(crate) fn take_asset(&mut self) -> Option<WebviewAsset> {
+        match &mut self.source {
             Source::Dir(root) => Some(WebviewAsset::Dir(root.clone())),
-            Source::Inline(html) => Some(WebviewAsset::Inline(html.clone().into_bytes())),
+            Source::Inline(html) => Some(WebviewAsset::Inline(mem::take(html).into_bytes())),
             Source::Url { .. } => None,
         }
     }
@@ -180,12 +182,6 @@ impl Source {
             Self::Url { bridge, .. } => *bridge,
         }
     }
-}
-
-/// True when `entry` is a non-empty relative path of normal components.
-fn is_safe_entry(entry: &str) -> bool {
-    let path = Path::new(entry);
-    !path.as_os_str().is_empty() && path.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
 #[cfg(test)]
@@ -346,14 +342,14 @@ mod tests {
     fn only_dir_and_inline_content_is_served_as_an_asset() {
         let root = tempfile::tempdir().unwrap();
         let root_path = root.path().to_path_buf();
-        let dir_content =
+        let mut dir_content =
             ValidatedRegistration::try_from(dir(root_path.to_str().unwrap(), "index.html"))
                 .unwrap();
-        assert_eq!(dir_content.asset(), Some(WebviewAsset::Dir(root_path)));
+        assert_eq!(dir_content.take_asset(), Some(WebviewAsset::Dir(root_path)));
         assert!(dir_content.serves_asset());
-        let url_content =
+        let mut url_content =
             ValidatedRegistration::try_from(url("https://example.com", true)).unwrap();
-        assert_eq!(url_content.asset(), None);
+        assert_eq!(url_content.take_asset(), None);
         assert!(!url_content.serves_asset());
     }
 }

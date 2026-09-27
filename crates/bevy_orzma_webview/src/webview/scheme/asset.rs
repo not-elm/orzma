@@ -3,7 +3,8 @@
 //! registered asset root, and infer a bare MIME type.
 
 use crate::error::{WebviewError, WebviewResult};
-use std::path::{Component, Path};
+use orzma_webview_host::prelude::WebviewAsset;
+use std::path::Path;
 
 /// One static asset read from disk.
 #[derive(Debug, PartialEq, Eq)]
@@ -28,7 +29,8 @@ impl StaticAsset {
     pub fn read(root: &Path, raw_path: &str) -> WebviewResult<Self> {
         let decoded = percent_decode(raw_path).ok_or(WebviewError::AssetForbidden)?;
         let rel = Path::new(&decoded);
-        if !is_safe_rel_path(rel) {
+        // TODO: lexical check only — a symlink inside the webview dir is still followed by std::fs::read; add a canonicalize + prefix check if webview-dir contents ever become untrusted (Phase 1 trusts them).
+        if !WebviewAsset::is_safe_relative_path(rel) {
             return Err(WebviewError::AssetForbidden);
         }
         let full = root.join(rel);
@@ -87,13 +89,6 @@ fn percent_decode(s: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// True when `p` is a non-empty relative path made only of normal components
-/// (no `..`, no `.`, no leading `/`, no Windows prefix).
-// TODO: lexical check only — a symlink inside the webview dir is still followed by std::fs::read; add a canonicalize + prefix check if webview-dir contents ever become untrusted (Phase 1 trusts them).
-fn is_safe_rel_path(p: &Path) -> bool {
-    !p.as_os_str().is_empty() && p.components().all(|c| matches!(c, Component::Normal(_)))
-}
-
 /// Maps a file extension to a bare MIME type. Unknown extensions fall back to
 /// `application/octet-stream`.
 fn mime_for_path(path: &Path) -> &'static str {
@@ -146,21 +141,6 @@ mod tests {
         assert_eq!(percent_decode("%2"), None);
         assert_eq!(percent_decode("%zz"), None);
         assert_eq!(percent_decode("%ff%fe"), None);
-    }
-
-    /// Asserts that only non-empty relative paths of normal components pass
-    /// the path check.
-    ///
-    /// Case: a page requests `../escape`, `a/../b`, `/etc/passwd`, and an
-    /// empty path next to two legitimate files.
-    #[test]
-    fn is_safe_rel_path_rejects_traversal_and_absolute_paths() {
-        assert!(is_safe_rel_path(Path::new("index.html")));
-        assert!(is_safe_rel_path(Path::new("sub/app.js")));
-        assert!(!is_safe_rel_path(Path::new("../escape")));
-        assert!(!is_safe_rel_path(Path::new("a/../b")));
-        assert!(!is_safe_rel_path(Path::new("/etc/passwd")));
-        assert!(!is_safe_rel_path(Path::new("")));
     }
 
     /// Asserts that common web extensions map to their MIME types, case

@@ -54,6 +54,15 @@ impl<P: PaneKey> Registration<P> {
     pub fn instances(&self) -> &[InstanceId] {
         &self.instances
     }
+
+    /// Refuses with `not_owner` unless `connection` registered it.
+    pub fn check_owner(&self, connection: ConnectionId) -> WebviewHostResult {
+        if self.connection == connection {
+            Ok(())
+        } else {
+            Err(Refusal::NotOwner.into())
+        }
+    }
 }
 
 /// Maps each handle to its registration, and each minted instance back to

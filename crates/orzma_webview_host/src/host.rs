@@ -472,10 +472,10 @@ impl<P: PaneKey> WebviewHost<P> {
         registration: Result<ValidatedRegistration, RegisterError>,
     ) -> WebviewHostResult<(HandleId, InstanceId, HostOutput<P>)> {
         let pane = self.live_pane_of(connection)?;
-        let content = registration?;
+        let mut content = registration?;
         let handle = HandleId::mint()?;
         let instance = mint_instance_id()?;
-        let asset = content.asset();
+        let asset = content.take_asset();
         self.registry.insert(
             handle.clone(),
             Registration::new(content, pane, connection, instance),
@@ -616,11 +616,7 @@ impl<P: PaneKey> WebviewHost<P> {
         let changed = match instance {
             Some(spelled) => {
                 let (instance, _) = self.owned_instance(connection, &spelled)?;
-                let mount = self
-                    .mounts
-                    .get(instance)
-                    .map(MountState::mount)
-                    .ok_or(Refusal::NotMounted)?;
+                let mount = self.mount_of(instance).ok_or(Refusal::NotMounted)?;
                 self.focus_mount(&mut output, mount)?
             }
             None => {
@@ -668,11 +664,7 @@ impl<P: PaneKey> WebviewHost<P> {
 
     /// The focus route of `mount`.
     fn focus_route(&self, mount: MountId) -> WebviewHostResult<FocusRoute<P>> {
-        let (instance, state) = self.mounts.resolve(mount).ok_or(Refusal::StaleMount)?;
-        let (handle, registration) = self
-            .registry
-            .resolve_instance(instance)
-            .ok_or(Refusal::UnknownInstance)?;
+        let (instance, pane, handle, registration) = self.mount_owner(mount)?;
         if !registration.content().interactive() {
             return Err(Refusal::NotInteractive.into());
         }
@@ -681,7 +673,7 @@ impl<P: PaneKey> WebviewHost<P> {
             instance,
             handle.clone(),
             registration.connection(),
-            state.pane(),
+            pane,
         ))
     }
 
@@ -712,7 +704,7 @@ impl<P: PaneKey> WebviewHost<P> {
 
     fn composited(&mut self, mount: MountId) -> WebviewHostResult<HostOutput<P>> {
         let route = {
-            let (instance, handle, registration) = self.mount_owner(mount)?;
+            let (instance, _, handle, registration) = self.mount_owner(mount)?;
             if !registration.content().is_bridged() || self.composited.contains_key(&mount) {
                 return Ok(HostOutput::default());
             }
@@ -735,9 +727,8 @@ impl<P: PaneKey> WebviewHost<P> {
         params: Value,
     ) -> HostOutput<P> {
         let mut output = HostOutput::default();
-        let target = self.bridged_owner(mount);
-        let refusal = match target {
-            Err(_) => Some("no_owner"),
+        let refusal = match self.bridged_owner(mount) {
+            Err(_) => "no_owner",
             Ok((instance, handle, connection)) => {
                 let global = self.calls.mint();
                 let call = PushMsg::Call {
@@ -749,20 +740,18 @@ impl<P: PaneKey> WebviewHost<P> {
                 };
                 match self.connections.push(connection, &call) {
                     Ok(()) => {
-                        self.calls.note(global, mount, page_req.clone(), connection);
-                        None
+                        self.calls.note(global, mount, page_req, connection);
+                        return output;
                     }
-                    Err(_) => Some("owner_unavailable"),
+                    Err(_) => "owner_unavailable",
                 }
             }
         };
-        if let Some(error) = refusal {
-            output.push_event(WebviewEvent::PageReply {
-                mount,
-                page_req,
-                outcome: Err(error.into()),
-            });
-        }
+        output.push_event(WebviewEvent::PageReply {
+            mount,
+            page_req,
+            outcome: Err(refusal.into()),
+        });
         output
     }
 
@@ -789,13 +778,7 @@ impl<P: PaneKey> WebviewHost<P> {
 
     fn url_changed(&mut self, mount: MountId, url: String) -> WebviewHostResult<HostOutput<P>> {
         let (instance, handle, connection) = self.bridged_owner(mount)?;
-        let is_url = self
-            .registry
-            .get(&handle)
-            .is_some_and(|registration| registration.content().is_url());
-        if !is_url {
-            return Err(Refusal::NotUrlView.into());
-        }
+        self.require_url_view(instance)?;
         let call = PushMsg::Call {
             handle,
             instance: instance.to_string(),
@@ -849,17 +832,24 @@ impl<P: PaneKey> WebviewHost<P> {
         let mounts: Vec<MountId> = registration
             .instances()
             .iter()
-            .filter_map(|instance| self.mounts.get(*instance))
-            .map(MountState::mount)
+            .filter_map(|instance| self.mount_of(*instance))
             .collect();
         let mut output = HostOutput::default();
-        for mount in mounts {
+        let Some((last, rest)) = mounts.split_last() else {
+            return Ok(output);
+        };
+        for mount in rest {
             output.push_event(WebviewEvent::PageEvent {
-                mount,
+                mount: *mount,
                 event: event.clone(),
                 payload: payload.clone(),
             });
         }
+        output.push_event(WebviewEvent::PageEvent {
+            mount: *last,
+            event,
+            payload,
+        });
         Ok(output)
     }
 
@@ -870,20 +860,10 @@ impl<P: PaneKey> WebviewHost<P> {
         action: NavAction,
     ) -> WebviewHostResult<HostOutput<P>> {
         let (instance, _) = self.owned_instance(connection, instance)?;
-        let mount = self
-            .mounts
-            .get(instance)
-            .map(MountState::mount)
-            .ok_or(Refusal::NotMounted)?;
+        let mount = self.mount_of(instance).ok_or(Refusal::NotMounted)?;
         let navigation = match action {
             NavAction::To(url) => {
-                let is_url = self
-                    .registry
-                    .resolve_instance(instance)
-                    .is_some_and(|(_, registration)| registration.content().is_url());
-                if !is_url {
-                    return Err(Refusal::NotUrlView.into());
-                }
+                self.require_url_view(instance)?;
                 Navigation::To(validate_url(&url).map_err(|_| Refusal::InvalidNavigation)?)
             }
             NavAction::Back => Navigation::Back,
@@ -911,18 +891,37 @@ impl<P: PaneKey> WebviewHost<P> {
         Ok(output)
     }
 
-    /// The placement, handle, and registration of `mount`, when `mount` is
-    /// its placement's current mount.
+    /// The placement, pane, handle, and registration of `mount`, when
+    /// `mount` is its placement's current mount.
     fn mount_owner(
         &self,
         mount: MountId,
-    ) -> WebviewHostResult<(InstanceId, &HandleId, &Registration<P>)> {
-        let (instance, _) = self.mounts.resolve(mount).ok_or(Refusal::StaleMount)?;
+    ) -> WebviewHostResult<(InstanceId, P, &HandleId, &Registration<P>)> {
+        let (instance, state) = self.mounts.resolve(mount).ok_or(Refusal::StaleMount)?;
         let (handle, registration) = self
             .registry
             .resolve_instance(instance)
             .ok_or(Refusal::UnknownInstance)?;
-        Ok((instance, handle, registration))
+        Ok((instance, state.pane(), handle, registration))
+    }
+
+    /// The current mount of `instance`, when it is mounted.
+    fn mount_of(&self, instance: InstanceId) -> Option<MountId> {
+        self.mounts.get(instance).map(MountState::mount)
+    }
+
+    /// Refuses with `not_url_view` unless `instance` belongs to a
+    /// remote-URL registration.
+    fn require_url_view(&self, instance: InstanceId) -> WebviewHostResult {
+        let is_url = self
+            .registry
+            .resolve_instance(instance)
+            .is_some_and(|(_, registration)| registration.content().is_url());
+        if is_url {
+            Ok(())
+        } else {
+            Err(Refusal::NotUrlView.into())
+        }
     }
 
     /// The placement, handle, and owning connection of `mount`, when it is
@@ -931,7 +930,7 @@ impl<P: PaneKey> WebviewHost<P> {
         &self,
         mount: MountId,
     ) -> WebviewHostResult<(InstanceId, HandleId, ConnectionId)> {
-        let (instance, handle, registration) = self.mount_owner(mount)?;
+        let (instance, _, handle, registration) = self.mount_owner(mount)?;
         if !registration.content().is_bridged() {
             return Err(Refusal::NotBridged.into());
         }
@@ -1067,11 +1066,8 @@ impl<P: PaneKey> WebviewHost<P> {
         handle: &HandleId,
     ) -> WebviewHostResult<&Registration<P>> {
         let registration = self.registry.get(handle).ok_or(Refusal::UnknownHandle)?;
-        if registration.connection() == connection {
-            Ok(registration)
-        } else {
-            Err(Refusal::NotOwner.into())
-        }
+        registration.check_owner(connection)?;
+        Ok(registration)
     }
 
     /// Parses `spelled` and resolves it to an instance `connection` owns,
@@ -1086,9 +1082,7 @@ impl<P: PaneKey> WebviewHost<P> {
             .registry
             .resolve_instance(instance)
             .ok_or(Refusal::UnknownInstance)?;
-        if registration.connection() != connection {
-            return Err(Refusal::NotOwner.into());
-        }
+        registration.check_owner(connection)?;
         Ok((instance, registration.owner_pane()))
     }
 }

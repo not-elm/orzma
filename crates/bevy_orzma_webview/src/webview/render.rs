@@ -276,20 +276,21 @@ fn track_page_address(
 fn apply_navigation(
     ev: On<OrzmuxWebviewEvent>,
     mut commands: Commands,
-    mut webviews: Query<(Entity, &Webview, &mut WebviewSource, Option<&PageAddress>)>,
+    mut sources: Query<(&mut WebviewSource, Option<&PageAddress>)>,
+    webviews: Query<(Entity, &Webview)>,
 ) {
     let WebviewEvent::Navigate { mount, navigation } = ev.webview_event() else {
         return;
     };
-    let Some((webview, _, mut source, address)) = webviews
-        .iter_mut()
-        .find(|(_, view, _, _)| view.mount() == *mount)
-    else {
+    let Some(webview) = webview_of_mount(&webviews, *mount) else {
         tracing::debug!(?mount, "navigation for a mount with no webview dropped");
         return;
     };
     match navigation {
         Navigation::To(url) => {
+            let Ok((mut source, address)) = sources.get_mut(webview) else {
+                return;
+            };
             let loaded = matches!(&*source, WebviewSource::Url(current) if current == url);
             let showing = address.map_or(loaded, |address| address.0 == *url);
             if showing {

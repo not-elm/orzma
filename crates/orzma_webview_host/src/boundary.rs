@@ -7,7 +7,7 @@ use orzma_vt::prelude::{InstanceId, PlacementSize};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 /// The content backing one dynamic handle.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,6 +16,18 @@ pub enum WebviewAsset {
     Dir(PathBuf),
     /// A single inline HTML document served from memory.
     Inline(Vec<u8>),
+}
+
+impl WebviewAsset {
+    /// Whether `path` is a non-empty relative path made only of normal
+    /// components (no `..`, no `.`, no root, and no Windows prefix), so
+    /// joining it to an asset root never leaves that root lexically.
+    pub fn is_safe_relative_path(path: &Path) -> bool {
+        !path.as_os_str().is_empty()
+            && path
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+    }
 }
 
 /// The opaque identity of one dynamic registration.
@@ -407,6 +419,23 @@ mod tests {
 
     fn size() -> PlacementSize {
         PlacementSize { rows: 10, cols: 40 }
+    }
+
+    /// Asserts that only non-empty relative paths of normal components are
+    /// safe to join to an asset root.
+    ///
+    /// Case: a page requests `../escape`, `a/../b`, `/etc/passwd`, and an
+    /// empty path next to two legitimate files.
+    #[test]
+    fn only_normal_relative_paths_are_safe() {
+        assert!(WebviewAsset::is_safe_relative_path(Path::new("index.html")));
+        assert!(WebviewAsset::is_safe_relative_path(Path::new("sub/app.js")));
+        assert!(!WebviewAsset::is_safe_relative_path(Path::new("../escape")));
+        assert!(!WebviewAsset::is_safe_relative_path(Path::new("a/../b")));
+        assert!(!WebviewAsset::is_safe_relative_path(Path::new(
+            "/etc/passwd"
+        )));
+        assert!(!WebviewAsset::is_safe_relative_path(Path::new("")));
     }
 
     /// Asserts that a handle spells as the string it was built from, both

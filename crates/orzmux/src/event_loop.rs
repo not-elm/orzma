@@ -269,7 +269,9 @@ impl EventLoop {
         // NOTE: a control event can move the active pane (a program's socket
         // `focus`); GUI commands already queued that target the active pane
         // must resolve against the pane that was active when the GUI sent
-        // them, so they run first.
+        // them, so they run first. A command the GUI sends after the move but
+        // before it drains the resulting `Layout` still resolves against the
+        // new pane.
         let connected = self.commands.is_empty() || self.drain_commands();
         self.drain_control();
         connected
@@ -321,10 +323,8 @@ impl EventLoop {
     }
 
     /// Applies one command. An unresolvable target and a refused PTY
-    /// write are logged and dropped; `CopySelection` always answers,
-    /// `SelectPane` always publishes a layout, and `SelectPaneDirection`
-    /// publishes one when the active pane moved, by this command or by the
-    /// webview host after the last pane selection.
+    /// write are logged and dropped; `CopySelection` always answers, and
+    /// `SelectPane` and `SelectPaneDirection` always publish a layout.
     fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.backend.set_processed(seq);
         let (name, target) = command.log_context();
@@ -1448,19 +1448,25 @@ mod tests {
     }
 
     /// Asserts that a directional selection with no neighbour in that
-    /// direction publishes nothing.
+    /// direction still answers with a `Layout` under its own sequence,
+    /// naming the unchanged active pane, rather than publishing nothing.
     ///
     /// Case: the user holds select-left with the leftmost pane already
     /// active.
     #[test]
-    fn select_direction_into_a_wall_publishes_nothing() {
+    fn select_direction_into_a_wall_answers_with_the_unchanged_layout() {
         let mut h = Harness::new();
-        let (_root, _root_pane) = h.open_root();
+        let (root, _root_pane) = h.open_root();
         h.drain();
-        h.send(OrzmuxCommand::SelectPaneDirection {
+        let seq = h.send(OrzmuxCommand::SelectPaneDirection {
             direction: PaneDirection::Left,
         });
-        assert!(h.drain().is_empty());
+        let events = h.drain();
+        let Some(OrzmuxEvent::Layout { layout, .. }) = events.front() else {
+            panic!("expected Layout");
+        };
+        assert_eq!(layout.seq, seq);
+        assert_eq!(layout.active, Some(root));
     }
 
     /// Asserts that every `CopySelection` is answered exactly once, with

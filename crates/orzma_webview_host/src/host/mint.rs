@@ -7,7 +7,9 @@ use orzma_vt::prelude::InstanceId;
 /// A fresh random identifier in lowercase unpadded base32 (`a-z2-7`),
 /// usable verbatim as a URL host.
 pub(crate) fn random_base32() -> WebviewHostResult<String> {
-    Ok(BASE32_NOPAD.encode(&random_bytes()?).to_ascii_lowercase())
+    let mut spelled = BASE32_NOPAD.encode(&random_bytes()?);
+    spelled.make_ascii_lowercase();
+    Ok(spelled)
 }
 
 /// A fresh placement instance.
