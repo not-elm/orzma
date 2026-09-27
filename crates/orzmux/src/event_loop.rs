@@ -1,6 +1,6 @@
 //! The multiplexer's thread-facing half: the command vocabulary the GUI
-//! sends, and the loop that waits on the command channel and every
-//! pane's PTY streams.
+//! sends, and the loop that waits on the command channel, the control
+//! socket's events, and every pane's PTY streams.
 
 use crate::backend::queue_sample::QueueSampler;
 use crate::backend::{
@@ -11,7 +11,8 @@ use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::{Receiver, Select, TryRecvError};
 use orzma_tty::prelude::{PointerInput, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
-use orzma_vt::prelude::{GridColumn, GridSize, InstanceId, PlacementSize, ScreenLine, Scroll};
+use orzma_vt::prelude::{GridSize, Scroll};
+use orzma_webview_host::prelude::WebviewCommand;
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing::Level;
@@ -132,13 +133,6 @@ pub enum OrzmuxCommand {
         /// The pane to read the selection from.
         pane: PaneTarget,
     },
-    /// Release webview placement instances a pane no longer displays.
-    RemovePlacements {
-        /// The pane the placements belong to.
-        pane: PaneId,
-        /// The placement instances to release.
-        instances: Vec<InstanceId>,
-    },
     /// Move a split's divider.
     ResizeSplit {
         /// The split whose divider moves.
@@ -147,21 +141,9 @@ pub enum OrzmuxCommand {
         /// a vertical split, `y` for a horizontal one.
         position: u16,
     },
-    /// Register a host-driven webview placement at a visible cell of a
-    /// pane — the socket-op counterpart of the APC `mount` for PTYs that
-    /// drop APC (ConPTY).
-    MountPlacement {
-        /// The pane the placement belongs to.
-        pane: PaneId,
-        /// The host-minted instance the mount registers.
-        instance: InstanceId,
-        /// The visible row the rect's top edge sits on.
-        row: ScreenLine,
-        /// The column the rect's left edge sits on.
-        column: GridColumn,
-        /// The rect's extent in cells.
-        size: PlacementSize,
-    },
+    /// A report the GUI sends the webview host: a focus change, a first
+    /// frame, or a page's call, event, or URL change.
+    Webview(WebviewCommand),
 }
 
 impl OrzmuxCommand {
@@ -184,11 +166,8 @@ impl OrzmuxCommand {
             Self::Scroll { pane, .. } => ("Scroll", Some(PaneTarget::Id(*pane))),
             Self::SelectionClear { pane } => ("SelectionClear", Some(PaneTarget::Id(*pane))),
             Self::CopySelection { pane } => ("CopySelection", Some(*pane)),
-            Self::RemovePlacements { pane, .. } => {
-                ("RemovePlacements", Some(PaneTarget::Id(*pane)))
-            }
             Self::ResizeSplit { .. } => ("ResizeSplit", None),
-            Self::MountPlacement { pane, .. } => ("MountPlacement", Some(PaneTarget::Id(*pane))),
+            Self::Webview(_) => ("Webview", None),
         }
     }
 
@@ -250,6 +229,7 @@ impl EventLoop {
             self.record_queue_depths();
             let connected = match ready {
                 Some(Ready::Commands) => self.drain_commands(),
+                Some(Ready::Control) => self.drain_control_after_commands(),
                 Some(Ready::Pane(pane)) => {
                     self.backend.pump_pane(pane);
                     true
@@ -293,6 +273,35 @@ impl EventLoop {
         connected
     }
 
+    /// Applies the GUI commands already queued, as [`drain_commands`](Self::drain_commands)
+    /// does, then the queued control-socket events, as
+    /// [`drain_control`](Self::drain_control) does. Returns `false` when the
+    /// command channel is disconnected.
+    pub fn drain_control_after_commands(&mut self) -> bool {
+        // NOTE: a control event can move the active pane (a program's socket
+        // `focus`); GUI commands already queued that target the active pane
+        // must resolve against the pane that was active when the GUI sent
+        // them, so they run first. A command the GUI sends after the move but
+        // before it drains the resulting `Layout` still resolves against the
+        // new pane.
+        let connected = self.commands.is_empty() || self.drain_commands();
+        self.drain_control();
+        connected
+    }
+
+    /// Applies up to `CONTROL_BATCH` queued control-socket events, logging
+    /// each one the webview host refuses.
+    pub fn drain_control(&mut self) {
+        for _ in 0..CONTROL_BATCH {
+            let Some(event) = self.backend.try_recv_control() else {
+                return;
+            };
+            if let Err(error) = self.backend.handle_control(event) {
+                log_refused_control(&error);
+            }
+        }
+    }
+
     /// Hands the backend's queued events to the GUI, waking it only when it
     /// sent any, and records a gone receiver instead of failing.
     pub fn flush_events(&mut self) {
@@ -327,9 +336,8 @@ impl EventLoop {
 
     /// Applies one command. An unresolvable target and a refused PTY
     /// write are logged and dropped; `CopySelection` always answers,
-    /// `SelectPane` always publishes a layout, `SelectPaneDirection`
-    /// publishes one only when the active pane moved, and
-    /// `ResizePaneDirection` only when a divider moved.
+    /// `SelectPane` and `SelectPaneDirection` always publish a layout, and
+    /// `ResizePaneDirection` publishes one only when a divider moved.
     fn handle_command(&mut self, seq: CommandSeq, command: OrzmuxCommand) {
         self.backend.set_processed(seq);
         let (name, target) = command.log_context();
@@ -386,29 +394,23 @@ impl EventLoop {
                 self.backend.copy_selection(pane);
                 Ok(())
             }
-            OrzmuxCommand::RemovePlacements { pane, instances } => {
-                self.backend.remove_placements(pane, instances)
-            }
-            OrzmuxCommand::MountPlacement {
-                pane,
-                instance,
-                row,
-                column,
-                size,
-            } => self
-                .backend
-                .mount_placement(pane, instance, row, column, size),
+            OrzmuxCommand::Webview(command) => self.backend.webview_command(command),
         }
     }
 
-    /// Blocks until a command or a pane stream is ready, or the earliest
-    /// of the panes' next deadlines and the sampler's report deadline
-    /// passes. Returns the ready source, `None` on timeout.
+    /// Blocks until a command, a control-socket event, or a pane stream is
+    /// ready, or the earliest of the panes' next deadlines and the
+    /// sampler's report deadline passes. Returns the ready source, `None`
+    /// on timeout.
     fn wait_ready(&mut self) -> Option<Ready> {
         let mut select = Select::new();
         self.sources.clear();
         select.recv(&self.commands);
         self.sources.push(Ready::Commands);
+        if let Some(control) = self.backend.control_events() {
+            select.recv(control);
+            self.sources.push(Ready::Control);
+        }
         for (id, readiness) in self.backend.readiness() {
             select.recv(readiness.chunks);
             self.sources.push(Ready::Pane(id));
@@ -474,9 +476,9 @@ impl EventLoop {
 
 /// Logs a command the backend refused, at the level its failure earns.
 ///
-/// An unresolvable target logs at `DEBUG`, a refused PTY write goes
-/// through [`log_refused_write`] at `ERROR`, and every other refusal
-/// logs at `WARN`.
+/// An unresolvable target and a request the webview host turned down log
+/// at `DEBUG`, a refused PTY write goes through [`log_refused_write`] at
+/// `ERROR`, and every other failure logs at `WARN`.
 fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
     match error {
         OrzmuxError::UnresolvedTarget => match target {
@@ -494,7 +496,21 @@ fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &O
         OrzmuxError::PtyWrite { pane, source } => {
             log_refused_write(*pane, name, source, Level::ERROR);
         }
+        OrzmuxError::WebviewHost(host) if host.is_refusal() => {
+            tracing::debug!(command = name, %error, "webview command refused");
+        }
         _ => tracing::warn!(command = name, %error, "command refused"),
+    }
+}
+
+/// Logs a control-socket event the webview host turned down at debug, and
+/// one it failed on at warn.
+fn log_refused_control(error: &OrzmuxError) {
+    match error {
+        OrzmuxError::WebviewHost(host) if host.is_refusal() => {
+            tracing::debug!(%error, "control request refused");
+        }
+        _ => tracing::warn!(%error, "control request failed"),
     }
 }
 
@@ -502,11 +518,16 @@ fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &O
 #[derive(Debug, Clone, Copy)]
 enum Ready {
     Commands,
+    Control,
     Pane(PaneId),
 }
 
 /// How many queued commands one iteration applies before pumping panes.
 const COMMAND_BATCH: usize = 64;
+
+/// How many queued control-socket events one iteration applies before
+/// panes and GUI commands get a turn.
+const CONTROL_BATCH: usize = 64;
 
 #[cfg(test)]
 mod tests {
@@ -522,6 +543,7 @@ mod tests {
     use orzma_tty::test_support::BlockingSink;
     use orzma_vt::Vt;
     use orzma_vt::prelude::{CellSide, OrzmaVt};
+    use orzma_webview_host::prelude::WebviewHost;
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::Arc;
@@ -598,7 +620,11 @@ mod tests {
         let (gui, event_rx) = GuiLink::channel(Waker::noop().clone());
         let (spawned_tx, _spawned_rx) = unbounded();
         let factory = FakeFactory::new(spawned_tx, Arc::new(FactoryLog::default()));
-        let backend = Backend::new(Box::new(factory), WheelConfig::default());
+        let backend = Backend::new(
+            Box::new(factory),
+            WheelConfig::default(),
+            WebviewHost::without_socket(),
+        );
         command_tx
             .send((
                 CommandSeq(1),
@@ -1439,19 +1465,25 @@ mod tests {
     }
 
     /// Asserts that a directional selection with no neighbour in that
-    /// direction publishes nothing.
+    /// direction still answers with a `Layout` under its own sequence,
+    /// naming the unchanged active pane, rather than publishing nothing.
     ///
     /// Case: the user holds select-left with the leftmost pane already
     /// active.
     #[test]
-    fn select_direction_into_a_wall_publishes_nothing() {
+    fn select_direction_into_a_wall_answers_with_the_unchanged_layout() {
         let mut h = Harness::new();
-        let (_root, _root_pane) = h.open_root();
+        let (root, _root_pane) = h.open_root();
         h.drain();
-        h.send(OrzmuxCommand::SelectPaneDirection {
+        let seq = h.send(OrzmuxCommand::SelectPaneDirection {
             direction: PaneDirection::Left,
         });
-        assert!(h.drain().is_empty());
+        let events = h.drain();
+        let Some(OrzmuxEvent::Layout { layout, .. }) = events.front() else {
+            panic!("expected Layout");
+        };
+        assert_eq!(layout.seq, seq);
+        assert_eq!(layout.active, Some(root));
     }
 
     /// Asserts that a directional resize moves the active pane's divider
@@ -1912,3 +1944,6 @@ mod tests {
         assert_eq!(h.wake_count(), before + 1);
     }
 }
+
+#[cfg(test)]
+mod webview_tests;

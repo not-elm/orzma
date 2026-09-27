@@ -286,7 +286,13 @@ mod tests {
     use bevy::math::{DVec2, IVec4};
     use bevy::window::WindowResolution;
     use bevy_orzma_tty_renderer::prelude::CellMetrics;
+    use bevy_orzma_webview::RequestWebviewFocus;
     use orzma_vt::prelude::InstanceId;
+    use orzma_webview_host::prelude::MountId;
+
+    /// The focus requests the router made, in order.
+    #[derive(Resource, Default)]
+    struct FocusRequests(Vec<Option<Entity>>);
 
     fn test_metrics() -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
@@ -312,6 +318,11 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.init_resource::<WebviewPress>();
         app.init_resource::<FocusedWebview>();
+        app.init_resource::<FocusRequests>().add_observer(
+            |ev: On<RequestWebviewFocus>, mut requests: ResMut<FocusRequests>| {
+                requests.0.push(ev.target());
+            },
+        );
         app.insert_resource(test_metrics());
         app.add_systems(Update, route_webview_pointer);
 
@@ -333,13 +344,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(shell),
-                Webview {
-                    handle: "webview".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
         app.world_mut().spawn((
@@ -375,41 +380,34 @@ mod tests {
             });
     }
 
+    /// Asserts that a press inside an inline rect asks for focus on its
+    /// child and records the in-flight press.
+    ///
+    /// Case: the user clicks a link on a page mounted in the shell.
     #[test]
-    fn default_press_over_inline_rect_focuses_child() {
+    fn a_press_over_an_inline_rect_requests_focus_on_its_child() {
         let (mut app, _shell, child) = make_webview_app();
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_left(&mut app, ButtonState::Pressed);
         app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            Some(child),
-            "a press inside the inline rect focuses the CEF child (so the link receives the click)"
-        );
-        assert_eq!(
-            app.world().resource::<WebviewPress>().0,
-            Some(child),
-            "the press is recorded so the matching release routes to the same child"
-        );
+        assert_eq!(app.world().resource::<FocusRequests>().0, vec![Some(child)]);
+        assert_eq!(app.world().resource::<WebviewPress>().0, Some(child));
     }
 
+    /// Asserts that a press outside every rect asks for the focused page's
+    /// release and records no press.
+    ///
+    /// Case: the user clicks the shell text next to a focused page to type
+    /// into the shell again.
     #[test]
-    fn default_off_rect_press_clears_focus_and_records_no_press() {
+    fn an_off_rect_press_requests_a_release_and_records_no_press() {
         let (mut app, _shell, child) = make_webview_app();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_left(&mut app, ButtonState::Pressed);
         app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "an off-rect press clears inline webview focus so the click falls through to the terminal"
-        );
-        assert_eq!(
-            app.world().resource::<WebviewPress>().0,
-            None,
-            "an off-rect press records no in-flight webview press"
-        );
+        assert_eq!(app.world().resource::<FocusRequests>().0, vec![None]);
+        assert_eq!(app.world().resource::<WebviewPress>().0, None);
     }
 
     #[test]
@@ -445,9 +443,8 @@ mod tests {
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_left(&mut app, ButtonState::Pressed);
         app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
+        assert!(
+            app.world().resource::<FocusRequests>().0.is_empty(),
             "a suppressed terminal must not hand its press to the inline webview"
         );
         assert_eq!(

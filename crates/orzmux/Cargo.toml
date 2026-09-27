@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 orzma_vt = { path = "../orzma_vt" }
 orzma_tty = { path = "../orzma_tty" }
+orzma_webview_host = { path = "../orzma_webview_host" }
 crossbeam-channel = "0.5"
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -20,7 +21,9 @@ test-support = ["orzma_tty/test-support"]
 
 [dev-dependencies]
 orzma_tty = { path = "../orzma_tty", features = ["test-support"] }
+orzma_webview_host = { path = "../orzma_webview_host", features = ["test-support"] }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

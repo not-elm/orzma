@@ -19,23 +19,16 @@ bevy_cef_core = { workspace = true }
 orzma_vt = { path = "../orzma_vt/" }
 bevy_orzmux = { path = "../bevy_orzmux" }
 bevy_orzma_tty_renderer = { path = "../bevy_orzma_tty_renderer" }
-bevy_orzma_webview_host = { path = "../bevy_orzma_webview_host", features = ["cef"] }
-crossbeam-channel = "0.5"
-data-encoding = "2"
-getrandom = "0.2"
+orzma_webview_host = { path = "../orzma_webview_host" }
+orzmux = { path = "../orzmux" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-url = "2"
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-
 [dev-dependencies]
-log = "0.4"
 bevy_orzmux = { path = "../bevy_orzmux", features = ["test-support"] }
-orzmux = { path = "../orzmux" }
+crossbeam-channel = "0.5"
 tempfile = { workspace = true }
 
 [lints]

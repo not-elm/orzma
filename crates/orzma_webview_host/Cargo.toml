@@ -1,5 +1,5 @@
 [package]
-name = "bevy_orzma_webview_host"
+name = "orzma_webview_host"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,15 +7,19 @@ readme.workspace = true
 authors.workspace = true
 publish.workspace = true
 
-[features]
-# Pulls the bevy_cef_core path-dep + the orzma:// scheme handler.
-# Off by default so the core builds/tests with std only.
-cef = ["dep:bevy_cef_core"]
-
 [dependencies]
-bevy = { workspace = true }
-bevy_cef_core = { workspace = true, optional = true }
+crossbeam-channel = "0.5"
+data-encoding = "2"
+getrandom = "0.2"
+orzma_vt = { path = "../orzma_vt" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.2"
@@ -28,3 +32,10 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[features]
+# Exposes `ControlSocket::injected`, a socket without a listener, to other crates' tests.
+test-support = []
+
+[lints]
+workspace = true
