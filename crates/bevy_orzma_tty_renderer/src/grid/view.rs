@@ -27,6 +27,8 @@ pub struct TerminalView {
     pub selection: Option<SelectionRange>,
     /// Lines scrolled back from the live tail; 0 = at live tail.
     pub display_offset: u32,
+    /// Rows of scrollback history from the last applied frame.
+    pub history_len: u32,
     /// App-level cursor visibility override. When `true`, the caret
     /// is not painted. It is independent of `Cursor.visible`, so it
     /// hides the cursor without clobbering terminal-controlled state.
@@ -91,6 +93,7 @@ impl TerminalView {
             rows: _,
             cursor,
             display_offset,
+            history_len,
             vi_cursor,
             selection,
             placements,
@@ -101,6 +104,7 @@ impl TerminalView {
             || self.rows != size.rows
             || self.cursor != Some(*cursor)
             || self.display_offset != display_offset.0
+            || self.history_len != *history_len
             || self.vi_cursor != *vi_cursor
             || self.selection != *selection
             || placements
@@ -123,6 +127,7 @@ impl TerminalView {
             rows: _,
             cursor,
             display_offset,
+            history_len,
             vi_cursor,
             selection,
             placements,
@@ -133,6 +138,7 @@ impl TerminalView {
         self.rows = size.rows;
         self.cursor = Some(*cursor);
         self.display_offset = display_offset.0;
+        self.history_len = *history_len;
         self.vi_cursor = *vi_cursor;
         self.selection = *selection;
         if let Some(placements) = placements {
@@ -515,5 +521,24 @@ mod tests {
             size: GridSize { cols: 3, rows: 1 },
             ..quiet_frame()
         }));
+    }
+
+    /// Asserts that a history-length change alone counts as a difference
+    /// and that applying it copies the length into the view.
+    ///
+    /// Case: output pushes a row into scrollback while nothing else the
+    /// view shows changes.
+    #[test]
+    fn a_history_change_alone_updates_the_view() {
+        let mut view = TerminalView::default();
+        view.apply(&quiet_frame());
+        let grown = Frame {
+            history_len: 7,
+            ..quiet_frame()
+        };
+        assert!(view.differs_from(&grown));
+        view.apply(&grown);
+        assert_eq!(view.history_len, 7);
+        assert!(!view.differs_from(&grown));
     }
 }

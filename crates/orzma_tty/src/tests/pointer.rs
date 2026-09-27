@@ -2,31 +2,7 @@
 //! and selection effects reach the VT at the display offset.
 
 use super::*;
-use crate::input::{PointerButton, PointerInput, PointerKind};
 use crate::test_support::SelectionOp;
-
-fn event(kind: PointerKind, button: Option<PointerButton>, col: u32, row: u32) -> PointerInput {
-    PointerInput {
-        kind,
-        button,
-        cell: CellCoord { col, row },
-        side: CellSide::Left,
-        click_count: 1,
-        mods: ProtocolModifiers::default(),
-    }
-}
-
-fn press(button: PointerButton, col: u32, row: u32) -> PointerInput {
-    event(PointerKind::Press, Some(button), col, row)
-}
-
-fn motion(col: u32, row: u32) -> PointerInput {
-    event(PointerKind::Motion, None, col, row)
-}
-
-fn release(button: PointerButton, col: u32, row: u32) -> PointerInput {
-    event(PointerKind::Release, Some(button), col, row)
-}
 
 /// Asserts that a forwarded press clears the selection and writes its
 /// report in the VT's SGR encoding, in one write.
@@ -125,7 +101,6 @@ fn a_viewport_scroll_moves_a_held_drag_end() {
         .expect("press");
     term.send_pointer(motion(5, 2)).expect("motion");
     term.vt.scroll_moves = true;
-    term.vt.display_offset = DisplayOffset(3);
     term.scroll(Scroll::Delta(3));
     assert_eq!(
         term.vt.selections.last(),

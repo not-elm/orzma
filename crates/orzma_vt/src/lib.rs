@@ -11,6 +11,7 @@ use crate::{
     screen::grid::coords::{GridColumn, GridPoint, ScreenLine},
     screen::grid::reflow::ScrollbackOnGrow,
     screen::selection::{CellSide, SelectionKind},
+    screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion, ViewChange},
     screen::viewport::{DisplayOffset, Scroll},
 };
 use std::path::PathBuf;
@@ -22,7 +23,6 @@ mod hyperlink;
 mod interpreter;
 mod placement;
 mod screen;
-mod vi;
 
 /// The crate's vocabulary, gathered for downstream consumers.
 pub mod prelude {
@@ -36,7 +36,9 @@ pub mod prelude {
     pub use crate::error::{GridSizeError, RunError, StampError, VtError, VtResult};
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
-    pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
+    pub use crate::placement::{
+        AnchoredPlacement, InstanceId, MAX_COLS, MAX_PLACEMENTS, MAX_ROWS, PlacementSize,
+    };
     pub use crate::screen::cell::{Cell, CellExtra, CellWidth, GlyphClass, MAX_COMBINING};
     pub use crate::screen::cursor::Cursor;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
@@ -47,8 +49,8 @@ pub mod prelude {
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
+    pub use crate::screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion};
     pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
-    pub use crate::vi::{ViCursor, ViModeSwitch};
     pub use crate::{InterpretOutput, OrzmaVt, ResizeChanged, Vt, VtSignal};
 }
 
@@ -64,9 +66,6 @@ pub mod prelude {
 ///
 /// The owner must forward [`InterpretOutput::signals`] and
 /// [`ResizeChanged::evicted`] before it requests the next frame.
-///
-/// TODO: implement vi mode: accept a [`crate::prelude::ViModeSwitch`]
-/// and vi motions, and report the vi cursor in [`Frame::vi_cursor`].
 ///
 /// # Invariants
 ///
@@ -196,26 +195,49 @@ pub trait Vt {
     #[must_use = "the evicted placements must reach the owner's signal queue"]
     fn resize(&mut self, size: GridSize) -> Option<ResizeChanged>;
 
-    /// Applies the viewport motion; returns whether the viewport
-    /// moved. Only a real move stages (full) damage.
+    /// Applies the viewport motion; returns whether the viewport moved, or
+    /// in vi mode whether the viewport or the vi cursor moved or the
+    /// selection followed the vi cursor. Only a real move of the viewport
+    /// stages (full) damage.
+    ///
+    /// In vi mode a line motion leaves the vi cursor on its line and
+    /// column, pulling it onto the nearest viewport edge row when that line
+    /// scrolls out of view. A page or half-page motion moves the vi cursor
+    /// by the same number of rows onto that row's first non-blank cell, or
+    /// onto its first column when the row is blank. `Top` and `Bottom` put
+    /// the vi cursor on the oldest row and on the bottom row: it lands on
+    /// the row's first non-blank cell, or on the last column when the row
+    /// is blank, and for `Bottom` on the first non-blank cell of the
+    /// logical line when the bottom row continues a wrapped line.
+    ///
+    /// In vi mode a selection that covers a cell then moves its moving end
+    /// onto the vi cursor's cell, covering both of its end cells.
     fn scroll(&mut self, scroll: Scroll) -> bool;
 
     /// Anchors a new selection at `cell`, replacing any active one;
-    /// returns whether the selection state changed. A cell outside the
-    /// grid (a line already evicted from history, or a column past the
-    /// width) is rejected, leaving the current selection untouched.
+    /// returns whether the selection state changed or, in vi mode, whether
+    /// the vi cursor moved. A cell outside the grid (a line already evicted
+    /// from history, or a column past the width) is rejected, leaving the
+    /// current selection untouched.
     ///
     /// The return value reports the stored state, not the projection:
     /// a start whose projection is empty still returns `true`, and it
     /// says nothing about whether a frame is owed.
+    ///
+    /// In vi mode the vi cursor also moves to `cell`.
     fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool;
 
     /// Moves the active selection's moving end to `cell`; returns
-    /// whether the moving end changed. It is a no-op returning `false`
-    /// when there is no active selection or `cell` is outside the grid.
+    /// whether the selection changed or, in vi mode, whether the vi cursor
+    /// moved. It is a no-op returning `false` when there is no active
+    /// selection or `cell` is outside the grid.
     ///
-    /// Two cells naming the same boundary — the right half of one and
-    /// the left half of the next — are the same moving end.
+    /// Outside vi mode, two cells naming the same boundary — the right
+    /// half of one and the left half of the next — are the same moving
+    /// end.
+    ///
+    /// In vi mode the vi cursor also moves to `cell`, and the selection
+    /// covers both of its end cells.
     fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool;
 
     /// Drops the active selection; returns whether there was one.
@@ -243,6 +265,43 @@ pub trait Vt {
 
     /// Snapshot of the modes the device owns.
     fn modes(&self) -> VtModes;
+
+    /// Enters or leaves vi mode; returns whether the mode changed.
+    ///
+    /// Entering drops the selection of both screens and seats the vi cursor
+    /// on the write cursor, or on the viewport's top-left cell when the
+    /// viewport is scrolled back past it. Leaving drops the vi cursor and
+    /// the selection of both screens and returns the viewport to the live
+    /// tail. A switch to the mode already in force returns `false`.
+    fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> bool;
+
+    /// Moves the vi cursor by `motion` and scrolls the viewport just far
+    /// enough to show it; returns whether anything changed. Returns
+    /// `false` outside vi mode.
+    ///
+    /// A selection that covers a cell then moves its moving end onto the
+    /// vi cursor's cell, covering both of its end cells. Only a move of the
+    /// viewport stages (full) damage.
+    fn vi_motion(&mut self, motion: ViMotion) -> bool;
+
+    /// Starts, re-kinds, or clears a selection of `kind` at the vi cursor;
+    /// returns whether the selection changed. Returns `false` outside vi
+    /// mode.
+    ///
+    /// A selection of the same kind that covers a cell is cleared. One of
+    /// another kind switches to `kind`, keeping its anchor and its moving
+    /// end, and covers both of its end cells. Otherwise a new selection
+    /// starts on the vi cursor's cell, which it covers at once.
+    fn toggle_vi_selection(&mut self, kind: SelectionKind) -> bool;
+
+    /// The vi cursor; `None` outside vi mode.
+    fn vi_cursor(&self) -> Option<ViCursor>;
+
+    /// Returns `true` while vi mode is on.
+    #[inline]
+    fn is_vi_mode(&self) -> bool {
+        self.vi_cursor().is_some()
+    }
 }
 
 /// Everything one [`Vt::interpret`] call produced besides the staged
@@ -250,8 +309,8 @@ pub trait Vt {
 #[derive(Debug, Default)]
 pub struct InterpretOutput {
     /// Whether this chunk produced anything frame-relevant — staged row
-    /// damage, a change to the reported cursor (motion or visibility),
-    /// or a mutated frame-visible section.
+    /// damage, a change to the reported cursor (motion or visibility), a
+    /// mutated frame-visible section, or a move of the vi cursor.
     pub damaged: bool,
     /// Out-of-band signals: the parser-raised ones in byte-stream order,
     /// then the [`VtSignal::WebviewEvicted`] naming the placements the
@@ -389,6 +448,20 @@ impl OrzmaVt {
         self.device.set_scrollback_on_grow(policy);
         self
     }
+
+    /// Returns this terminal with `chars` ending a word for the semantic vi
+    /// motions, besides whitespace.
+    pub fn with_semantic_escape_chars(mut self, chars: SemanticEscapeChars) -> Self {
+        self.device.set_semantic_escape_chars(chars);
+        self
+    }
+
+    /// Stages the damage `change` owes; returns whether the change touched
+    /// anything a frame carries.
+    fn settle_view_change(&mut self, change: ViewChange) -> bool {
+        self.tracker.stage_if_changed(change.damage());
+        change.is_changed()
+    }
 }
 
 impl Vt for OrzmaVt {
@@ -429,7 +502,8 @@ impl Vt for OrzmaVt {
     }
 
     fn scroll(&mut self, scroll: Scroll) -> bool {
-        self.tracker.stage_if_changed(self.device.scroll(scroll))
+        let change = self.device.scroll(scroll);
+        self.settle_view_change(change)
     }
 
     fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) -> bool {
@@ -460,6 +534,28 @@ impl Vt for OrzmaVt {
 
     fn modes(&self) -> VtModes {
         self.device.modes()
+    }
+
+    fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> bool {
+        let change = self.device.switch_vi_mode(switch);
+        self.settle_view_change(change)
+    }
+
+    fn vi_motion(&mut self, motion: ViMotion) -> bool {
+        let change = self.device.vi_motion(motion);
+        self.settle_view_change(change)
+    }
+
+    fn toggle_vi_selection(&mut self, kind: SelectionKind) -> bool {
+        self.device.toggle_vi_selection(kind)
+    }
+
+    fn vi_cursor(&self) -> Option<ViCursor> {
+        self.device.vi_cursor()
+    }
+
+    fn is_vi_mode(&self) -> bool {
+        self.device.is_vi_mode()
     }
 }
 
@@ -1713,5 +1809,234 @@ mod tests {
         let vt = vt().with_cursor_policy(policy);
         assert_eq!(vt.device.modes().text_cursor.shape, CursorShape::Bar);
         assert_eq!(vt.device.modes().text_cursor.blink, CursorBlink::Blinking);
+    }
+
+    /// Asserts that entering vi mode on an idle terminal emits a frame that
+    /// repaints no rows and carries the vi cursor on the write cursor.
+    ///
+    /// Case: the user enters vi mode while the shell sits idle at its
+    /// prompt.
+    #[test]
+    fn an_idle_enter_emits_a_rowless_frame_carrying_the_vi_cursor() {
+        let mut vt = filled();
+        assert!(vt.switch_vi_mode(ViModeSwitch::Enter));
+        let frame = vt.frame().expect("entering vi mode emits");
+        assert!(frame.rows.is_empty());
+        assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(2, 3)));
+    }
+
+    /// Asserts that a repeated enter returns `false` and owes no frame.
+    ///
+    /// Case: the vi-mode shortcut is pressed twice in a row.
+    #[test]
+    fn a_repeated_enter_returns_false_and_emits_nothing() {
+        let mut vt = filled();
+        assert!(vt.switch_vi_mode(ViModeSwitch::Enter));
+        vt.frame();
+        assert!(!vt.switch_vi_mode(ViModeSwitch::Enter));
+        assert_eq!(vt.frame(), None);
+    }
+
+    /// Asserts that leaving vi mode emits a frame without the vi cursor.
+    ///
+    /// Case: the user presses `q` to leave vi mode at the live tail.
+    #[test]
+    fn an_exit_emits_a_frame_without_the_vi_cursor() {
+        let mut vt = filled();
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.frame();
+        assert!(vt.switch_vi_mode(ViModeSwitch::Exit));
+        let frame = vt.frame().expect("leaving vi mode emits");
+        assert_eq!(frame.vi_cursor, None);
+        assert!(!vt.is_vi_mode());
+    }
+
+    /// Asserts that every frame carries the number of history rows the
+    /// active screen retains.
+    ///
+    /// Case: a command prints more lines than the terminal is tall, and
+    /// the vi-mode indicator shows how much scrollback exists.
+    #[test]
+    fn a_frame_carries_the_history_length() {
+        let mut vt = vt();
+        vt.frame();
+        vt.interpret(b"1\r\n2\r\n3\r\n4\r\n5");
+        let frame = vt.frame().expect("output emits");
+        assert_eq!(frame.history_len, 2);
+    }
+
+    /// Asserts that a motion on an idle terminal emits a frame that repaints
+    /// no rows and carries the moved vi cursor.
+    ///
+    /// Case: the user presses `h` in vi mode on an idle terminal.
+    #[test]
+    fn a_motion_emits_a_rowless_frame_with_the_moved_vi_cursor() {
+        let mut vt = filled();
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.frame();
+        assert!(vt.vi_motion(ViMotion::Left));
+        let frame = vt.frame().expect("a motion emits");
+        assert!(frame.rows.is_empty());
+        assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(2, 2)));
+    }
+
+    /// Asserts that a motion outside vi mode returns `false` and owes no
+    /// frame.
+    ///
+    /// Case: a motion request races a vi-mode exit.
+    #[test]
+    fn a_motion_outside_vi_mode_returns_false() {
+        let mut vt = filled();
+        assert!(!vt.vi_motion(ViMotion::Left));
+        assert_eq!(vt.frame(), None);
+    }
+
+    /// Asserts that the configured word separators reach the semantic
+    /// motions.
+    ///
+    /// Case: the user adds `-` to the separators and presses `w` at the
+    /// start of `ab-cd`.
+    #[test]
+    fn configured_separators_end_semantic_words() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10)
+            .with_semantic_escape_chars(SemanticEscapeChars::new("-"));
+        vt.interpret(b"ab-cd");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::First);
+        vt.vi_motion(ViMotion::SemanticRight);
+        assert_eq!(vt.vi_cursor().map(|cursor| cursor.point), Some(cell(0, 2)));
+    }
+
+    /// Asserts that a scroll in vi mode that moves only the vi cursor still
+    /// returns `true` and emits a frame.
+    ///
+    /// Case: the user presses `g` in vi mode on a terminal without
+    /// scrollback.
+    #[test]
+    fn a_vi_scroll_that_moves_only_the_vi_cursor_returns_true() {
+        let mut vt = filled();
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.frame();
+        assert!(vt.scroll(Scroll::Top));
+        let frame = vt.frame().expect("the vi cursor moved");
+        assert!(frame.rows.is_empty());
+        assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(0, 0)));
+    }
+
+    /// Asserts that leaving the alternate screen in vi mode keeps vi mode on
+    /// with the vi cursor on the primary screen's restored write cursor.
+    ///
+    /// Case: `less` exits on its own while the user is in vi mode over it.
+    #[test]
+    fn leaving_the_alternate_screen_in_vi_mode_keeps_vi_mode_on_the_primary() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10);
+        vt.interpret(b"abc\x1b[?1049h");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.interpret(b"\x1b[?1049l");
+        assert!(vt.is_vi_mode());
+        assert_eq!(vt.vi_cursor().map(|cursor| cursor.point), Some(cell(0, 3)));
+    }
+
+    /// Asserts that a reset that moves only the vi cursor still reports
+    /// damage and emits a frame carrying the moved vi cursor.
+    ///
+    /// Case: on a blank screen whose write cursor sits at home, the user
+    /// moves the vi cursor away and a program then sends `RIS`.
+    #[test]
+    fn a_reset_that_moves_only_the_vi_cursor_emits_a_frame() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10);
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::Right);
+        vt.frame();
+        assert!(vt.interpret(b"\x1bc").damaged);
+        let frame = vt.frame().expect("the reset moved the vi cursor");
+        assert_eq!(frame.vi_cursor.map(|cursor| cursor.point), Some(cell(0, 0)));
+    }
+
+    /// Asserts that a vi-mode selection built from motions reads back as
+    /// the selected word.
+    ///
+    /// Case: the user enters vi mode, jumps to the line start, presses `v`,
+    /// moves to the end of the first word, and yanks.
+    #[test]
+    fn a_vi_selection_reads_back_the_selected_word() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 20, rows: 3 }, 10);
+        vt.interpret(b"hello world");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::First);
+        assert!(vt.toggle_vi_selection(SelectionKind::Simple));
+        vt.vi_motion(ViMotion::SemanticRightEnd);
+        assert_eq!(vt.selection_text().as_deref(), Some("hello"));
+    }
+
+    /// Asserts that entering vi mode also drops the selection the primary
+    /// screen keeps hidden under the alternate screen, so it does not come
+    /// back as a vi selection.
+    ///
+    /// Case: the user drag-selects a word at the shell, runs `less`, enters
+    /// vi mode over it, and `less` then exits on its own.
+    #[test]
+    fn entering_vi_mode_drops_the_hidden_primary_selection() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10);
+        vt.interpret(b"foo bar");
+        vt.start_selection(cell(0, 0), CellSide::Left, SelectionKind::Simple);
+        vt.extend_selection(cell(0, 2), CellSide::Right);
+        vt.interpret(b"\x1b[?1049h");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.interpret(b"\x1b[?1049l");
+        assert!(vt.is_vi_mode());
+        assert_eq!(vt.selection_text(), None);
+        assert!(vt.toggle_vi_selection(SelectionKind::Simple));
+        assert_eq!(
+            projected(&vt).map(|range| range.start),
+            vt.vi_cursor().map(|cursor| cursor.point)
+        );
+    }
+
+    /// Asserts that leaving vi mode on the alternate screen also drops a vi
+    /// selection the primary screen keeps hidden.
+    ///
+    /// Case: the user selects shell output in vi mode, a program opens the
+    /// alternate screen, the user leaves vi mode there, and the program
+    /// exits.
+    #[test]
+    fn leaving_vi_mode_drops_the_hidden_primary_selection() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 3 }, 10);
+        vt.interpret(b"foo bar");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::First);
+        vt.toggle_vi_selection(SelectionKind::Simple);
+        vt.vi_motion(ViMotion::Right);
+        vt.interpret(b"\x1b[?1049h");
+        assert!(vt.switch_vi_mode(ViModeSwitch::Exit));
+        vt.interpret(b"\x1b[?1049l");
+        assert!(!vt.is_vi_mode());
+        assert_eq!(vt.selection_text(), None);
+    }
+
+    /// Asserts that a flip back to the primary screen that rewraps it keeps
+    /// a vi selection's anchor on the cell it was set from.
+    ///
+    /// Case: in vi mode the user selects `bcd` backward from `d`, a program
+    /// opens the alternate screen, the window narrows so that `d` ends a
+    /// row, the program exits, and the user presses `H`.
+    #[test]
+    fn a_rewrapping_flip_back_keeps_a_vi_anchor_on_its_cell() {
+        let mut vt = OrzmaVt::new(GridSize { cols: 10, rows: 4 }, 10);
+        vt.interpret(b"abcdefgh");
+        vt.switch_vi_mode(ViModeSwitch::Enter);
+        vt.vi_motion(ViMotion::First);
+        for _ in 0..3 {
+            vt.vi_motion(ViMotion::Right);
+        }
+        vt.toggle_vi_selection(SelectionKind::Simple);
+        vt.vi_motion(ViMotion::Left);
+        vt.vi_motion(ViMotion::Left);
+        assert_eq!(vt.selection_text().as_deref(), Some("bcd"));
+        vt.interpret(b"\x1b[?1049h");
+        let _ = vt.resize(GridSize { cols: 4, rows: 4 });
+        vt.interpret(b"\x1b[?1049l");
+        vt.vi_motion(ViMotion::High);
+        assert_eq!(vt.selection_text().as_deref(), Some("abcd"));
     }
 }

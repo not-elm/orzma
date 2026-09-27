@@ -397,6 +397,20 @@ impl Grid {
         &self.rows[index].cells
     }
 
+    /// Borrows the row at an active-grid line; `None` when the line is
+    /// outside the ring.
+    pub fn row_at(&self, line: GridLine) -> Option<&Row<Cell>> {
+        self.ring_index(line)
+            .and_then(|index| self.rows.get(index))
+            .map(|row| &row.cells)
+    }
+
+    /// Borrows the cell at an active-grid point; `None` when its line is
+    /// outside the ring or its column is past the row.
+    pub fn cell_at(&self, point: GridPoint) -> Option<&Cell> {
+        self.row_at(point.line)?.get(usize::from(point.column.0))
+    }
+
     /// Number of history rows currently retained.
     pub fn history_len(&self) -> usize {
         self.rows.len() - usize::from(self.size.rows)
@@ -671,7 +685,7 @@ impl IndexMut<ScreenLine> for Grid {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::screen) mod tests {
     use super::*;
     use crate::device::color::Color;
 
@@ -699,6 +713,23 @@ mod tests {
     pub(crate) fn scroll_up_whole_screen(grid: &mut Grid, fill: Cell) {
         let bottom = ScreenLine(grid.size().rows - 1);
         grid.scroll_up_one(ScreenLine(0), bottom, fill);
+    }
+
+    /// Writes `text` from column zero of `line`, spilling onto the rows
+    /// below and recording each wrap as autowrap would.
+    pub(crate) fn write(grid: &mut Grid, line: u16, text: &str) {
+        let cols = usize::from(grid.size().cols);
+        let chars: Vec<char> = text.chars().collect();
+        let chunks: Vec<&[char]> = chars.chunks(cols.max(1)).collect();
+        for (k, chunk) in chunks.iter().enumerate() {
+            let row = line + u16::try_from(k).expect("a small test");
+            for (column, c) in (0u16..).zip(chunk.iter()) {
+                grid[ScreenLine(row)][column].c = *c;
+            }
+            if k + 1 < chunks.len() {
+                grid.set_wrap_at(GridLine::from(ScreenLine(row)), grid.size().cols);
+            }
+        }
     }
 
     /// Asserts that a screen line and a history line both resolve to an

@@ -2,7 +2,10 @@
 
 use super::*;
 use crate::error::OrzmaTtyError;
-use crate::input::{CellCoord, ProtocolModifiers, WheelConfig, WheelInput, WheelModifiers};
+use crate::input::{
+    CellCoord, PointerButton, PointerInput, PointerKind, ProtocolModifiers, WheelConfig,
+    WheelInput, WheelModifiers,
+};
 use crate::test_support::{CaptureSink, FailingMaster, FailingSink, FakeVt};
 use crossbeam_channel::{Sender, unbounded};
 use std::thread;
@@ -17,6 +20,7 @@ mod pump;
 mod resize;
 mod scroll;
 mod sync;
+mod vi_mode;
 mod wheel;
 
 fn grid(cols: u16, rows: u16) -> GridSize {
@@ -61,6 +65,31 @@ fn channelled_term() -> (OrzmaTty<FakeVt>, Sender<Vec<u8>>, Sender<Option<i32>>)
     (term, chunk_tx, exit_tx)
 }
 
+/// A single-click pointer event on the left half of the cell at `col`,
+/// `row`, with no modifiers.
+fn event(kind: PointerKind, button: Option<PointerButton>, col: u32, row: u32) -> PointerInput {
+    PointerInput {
+        kind,
+        button,
+        cell: CellCoord { col, row },
+        side: CellSide::Left,
+        click_count: 1,
+        mods: ProtocolModifiers::default(),
+    }
+}
+
+fn press(button: PointerButton, col: u32, row: u32) -> PointerInput {
+    event(PointerKind::Press, Some(button), col, row)
+}
+
+fn motion(col: u32, row: u32) -> PointerInput {
+    event(PointerKind::Motion, None, col, row)
+}
+
+fn release(button: PointerButton, col: u32, row: u32) -> PointerInput {
+    event(PointerKind::Release, Some(button), col, row)
+}
+
 /// Collects the signals out of a pumped output, in order.
 fn signals_of(output: &PumpOutput) -> Vec<TtySignal> {
     output.signals().cloned().collect()
@@ -96,6 +125,7 @@ fn a_frame() -> Frame {
         rows: Vec::new(),
         cursor: Cursor::default(),
         display_offset: DisplayOffset(0),
+        history_len: 0,
         vi_cursor: None,
         selection: None,
         placements: None,

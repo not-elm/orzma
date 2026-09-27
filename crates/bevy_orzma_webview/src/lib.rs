@@ -1,52 +1,46 @@
-//! Terminal webview layer: CEF render wiring, the `window.orzma` Tier 1
-//! back-channel, APC mount and unmount of webviews anchored to terminal cells,
-//! and the control socket that mints Tier 1 handles.
+//! Terminal webview layer: CEF render wiring, the `window.orzma` page
+//! bridge, and the webviews the webview host mounts in terminal panes.
 
-mod control_plane;
-#[cfg(test)]
-mod test_support;
+pub mod error;
 mod webview;
 
 use bevy::prelude::*;
-use bevy_orzma_webview_host::WebviewAssetRegistry;
-use control_plane::ControlPlanePlugin;
-pub use control_plane::{ChordKey, ControlPlaneHandle, HandleId, NormalizedChord, TokenRegistry};
-use std::task::Waker;
-use webview::apc::ApcPlugin;
-pub use webview::apc::NonInteractive;
+pub use error::{WebviewError, WebviewResult};
+use webview::assets::AssetsPlugin;
+pub use webview::focus::RequestWebviewFocus;
+use webview::focus::WebviewFocusPlugin;
+use webview::forward_keys::ForwardKeysPlugin;
+pub use webview::forward_keys::{ChordKey, ForwardKeys, NormalizedChord};
 use webview::mount::WebviewPlugin;
 pub use webview::mount::{
-    ForwardKeys, Webview, WebviewHit, focused_webview_of, webview_hit_at, webview_local_dip,
+    NonInteractive, Webview, WebviewHit, focused_webview_of, webview_hit_at, webview_local_dip,
 };
 use webview::paint::PaintPlugin;
 use webview::render::RenderPlugin;
 pub use webview::render::cef_plugin;
+pub use webview::scheme::WebviewAssetRegistry;
 
 /// The in-process webview subsystem: CEF render wiring, the `window.orzma`
-/// back-channel, APC mount and unmount, and the control socket.
+/// page bridge, and the webviews the host mounts.
 pub struct OrzmaWebviewPlugin {
     orzma_assets: WebviewAssetRegistry,
-    waker: Waker,
 }
 
 impl OrzmaWebviewPlugin {
     /// Builds the plugin sharing `orzma_assets` with the `orzma://` scheme
-    /// handler built by [`cef_plugin`]. The control-socket listener wakes the
-    /// app through `waker` after it queues work for the app.
-    pub fn new(orzma_assets: WebviewAssetRegistry, waker: Waker) -> Self {
-        Self {
-            orzma_assets,
-            waker,
-        }
+    /// handler built by [`cef_plugin`].
+    pub fn new(orzma_assets: WebviewAssetRegistry) -> Self {
+        Self { orzma_assets }
     }
 }
 
 impl Plugin for OrzmaWebviewPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            ControlPlanePlugin::new(self.orzma_assets.clone(), self.waker.clone()),
+            AssetsPlugin::new(self.orzma_assets.clone()),
+            ForwardKeysPlugin,
+            WebviewFocusPlugin,
             RenderPlugin,
-            ApcPlugin,
             WebviewPlugin,
             PaintPlugin,
         ));

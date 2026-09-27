@@ -4,7 +4,7 @@
 use crate::error::OrzmuxResult;
 use orzma_tty::prelude::OrzmaTty;
 use orzma_tty::{CellPixels, EnvKey, EnvValue, NATIVE_SCROLLBACK_ON_GROW, SpawnOptions};
-use orzma_vt::prelude::{CursorPolicy, GridSize, OrzmaVt};
+use orzma_vt::prelude::{CursorPolicy, GridSize, OrzmaVt, SemanticEscapeChars};
 #[cfg(windows)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -92,6 +92,7 @@ pub(crate) struct ShellFactory {
     shell: String,
     scrollback_rows: usize,
     cursor_policy: CursorPolicy,
+    semantic_escape_chars: SemanticEscapeChars,
     shell_integration: bool,
 }
 
@@ -102,6 +103,7 @@ impl ShellFactory {
         shell: Option<String>,
         scrollback_rows: usize,
         cursor_policy: CursorPolicy,
+        semantic_escape_chars: SemanticEscapeChars,
         shell_integration: bool,
     ) -> Self {
         Self {
@@ -113,6 +115,7 @@ impl ShellFactory {
             ),
             scrollback_rows,
             cursor_policy,
+            semantic_escape_chars,
             shell_integration,
         }
     }
@@ -128,6 +131,7 @@ impl PaneFactory for ShellFactory {
     ) -> OrzmuxResult<OrzmaTty<OrzmaVt>> {
         let vt = OrzmaVt::new(size, self.scrollback_rows)
             .with_cursor_policy(self.cursor_policy)
+            .with_semantic_escape_chars(self.semantic_escape_chars.clone())
             .with_scrollback_on_grow(NATIVE_SCROLLBACK_ON_GROW);
         Ok(OrzmaTty::spawn(
             vt,
@@ -427,14 +431,20 @@ mod tests {
         let dir = TempDir::new().expect("a temp dir");
         let expected = dir.path().canonicalize().expect("the dir canonicalizes");
         let size = GridSize::new(80, 24).expect("a valid size");
-        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, CursorPolicy::default(), false)
-            .spawn(
-                size,
-                CellPixels::default(),
-                Some(dir.path().to_path_buf()),
-                Vec::new(),
-            )
-            .expect("cat spawns under a PTY");
+        let tty = ShellFactory::new(
+            Some("/bin/cat".into()),
+            100,
+            CursorPolicy::default(),
+            SemanticEscapeChars::default(),
+            false,
+        )
+        .spawn(
+            size,
+            CellPixels::default(),
+            Some(dir.path().to_path_buf()),
+            Vec::new(),
+        )
+        .expect("cat spawns under a PTY");
         let mut pane = Pane::new(tty, (80, 24, CellPixels::default()), None);
         let reported_dir = TempDir::new().expect("a temp dir");
         pane.set_reported_cwd(reported_dir.path().to_path_buf());
@@ -460,14 +470,20 @@ mod tests {
     fn the_reported_directory_wins_over_the_process_directory() {
         let spawn_dir = TempDir::new().expect("a temp dir");
         let size = GridSize::new(80, 24).expect("a valid size");
-        let tty = ShellFactory::new(Some("cmd.exe".into()), 100, CursorPolicy::default(), false)
-            .spawn(
-                size,
-                CellPixels::default(),
-                Some(spawn_dir.path().to_path_buf()),
-                Vec::new(),
-            )
-            .expect("cmd spawns under a PTY");
+        let tty = ShellFactory::new(
+            Some("cmd.exe".into()),
+            100,
+            CursorPolicy::default(),
+            SemanticEscapeChars::default(),
+            false,
+        )
+        .spawn(
+            size,
+            CellPixels::default(),
+            Some(spawn_dir.path().to_path_buf()),
+            Vec::new(),
+        )
+        .expect("cmd spawns under a PTY");
         let mut pane = Pane::new(tty, (80, 24, CellPixels::default()), None);
         let deadline = Instant::now() + Duration::from_secs(10);
         let from_os = loop {
@@ -507,14 +523,20 @@ mod tests {
                 blink: CursorBlink::Blinking,
             },
         };
-        let tty = ShellFactory::new(Some("/bin/cat".into()), 100, policy, false)
-            .spawn(
-                GridSize::new(80, 24).expect("a valid size"),
-                CellPixels::default(),
-                None,
-                Vec::new(),
-            )
-            .expect("cat spawns under a PTY");
+        let tty = ShellFactory::new(
+            Some("/bin/cat".into()),
+            100,
+            policy,
+            SemanticEscapeChars::default(),
+            false,
+        )
+        .spawn(
+            GridSize::new(80, 24).expect("a valid size"),
+            CellPixels::default(),
+            None,
+            Vec::new(),
+        )
+        .expect("cat spawns under a PTY");
         let cursor = tty.vt().modes().text_cursor;
         assert_eq!(cursor.shape, CursorShape::Bar);
         assert_eq!(cursor.blink, CursorBlink::Blinking);

@@ -20,7 +20,7 @@ use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
 use bevy_orzma_tty_renderer::prelude::TerminalView;
-use bevy_orzma_webview::ForwardKeys;
+use bevy_orzma_webview::{ForwardKeys, RequestWebviewFocus};
 use orzma_configs::shortcuts::Shortcut;
 
 /// Adds per-frame keyboard-effect resolution.
@@ -54,18 +54,19 @@ struct ClassifyInputs<'w> {
 /// press order. The sole `LeaderPhase`-stepping system: on a coarse guard
 /// (IME composition or an unfocused window) it clears the leader, drains
 /// the frame's keys, and writes no messages; otherwise it classifies the
-/// keys, applies `Quit` (`AppExit`) and `ReleaseWebviewFocus` (clear
-/// `FocusedWebview`) inline, and writes every other effect to
+/// keys, applies `Quit` (`AppExit`) and `ReleaseWebviewFocus` (a
+/// `RequestWebviewFocus` release) inline, and writes every other effect to
 /// `KeyEffectMessage`.
 fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
-    mut focused_webview: ResMut<FocusedWebview>,
+    mut commands: Commands,
     mut cef_filter: ResMut<CefKeyboardFilter>,
     mut leader_phase: ResMut<LeaderPhase>,
     mut held_repeat: ResMut<HeldRepeatKey>,
     mut messages: MessageWriter<KeyEffectMessage>,
     ime: Res<ImeState>,
+    focused_webview: Res<FocusedWebview>,
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
     focused_surface: Query<Entity, With<KeyboardFocused>>,
@@ -102,12 +103,6 @@ fn resolve_key_effects(
         webview_focused: focused_webview.0.is_some(),
         forward_chords,
     };
-    // NOTE: snapshot the focused webview BEFORE the effects loop, which may set
-    // `focused_webview.0 = None` on a `ReleaseWebviewFocus` chord. Keying the
-    // filter to the value read here (not after the loop) keeps this frame's
-    // suppression tied to the webview the keys were classified against, rather
-    // than leaning on bevy_cef's None-target delivery guard to cover the gap.
-    let suppress_target = focused_webview.0;
     let mut held = held_repeat.0;
     let ClassifiedKeys {
         effects: all,
@@ -135,7 +130,7 @@ fn resolve_key_effects(
             KeyEffect::Shortcut {
                 action: Shortcut::ReleaseWebviewFocus,
                 ..
-            } => focused_webview.0 = None,
+            } => commands.trigger(RequestWebviewFocus::new(None)),
             effect => {
                 messages.write(KeyEffectMessage {
                     effect,
@@ -152,7 +147,7 @@ fn resolve_key_effects(
         shift: mods.shift,
         logo: mods.meta,
     };
-    match suppress_target {
+    match focused_webview.0 {
         Some(webview) => cef_filter.set(
             webview_suppressed
                 .into_iter()
@@ -378,8 +373,15 @@ mod tests {
         );
     }
 
+    /// Asserts that the release chord asks for the webview focus to be
+    /// released and never reaches a `KeyEffectMessage`.
+    ///
+    /// Case: the user presses Ctrl+Shift+Esc while a page holds keyboard
+    /// focus.
     #[test]
-    fn release_clears_webview_and_no_message() {
+    fn release_requests_a_webview_release_and_no_message() {
+        #[derive(Resource, Default)]
+        struct Requested(Vec<Option<Entity>>);
         let mut app = resolve_app(test_shortcuts_with_direct_chord(
             KeyCode::Escape,
             Modifiers {
@@ -390,6 +392,11 @@ mod tests {
             },
             Shortcut::ReleaseWebviewFocus,
         ));
+        app.init_resource::<Requested>().add_observer(
+            |ev: On<RequestWebviewFocus>, mut requested: ResMut<Requested>| {
+                requested.0.push(ev.target());
+            },
+        );
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
         {
@@ -399,14 +406,9 @@ mod tests {
         }
         press_key(&mut app, KeyCode::Escape, Key::Escape);
         app.update();
-        let cap = app.world().resource::<Captured>();
+        assert_eq!(app.world().resource::<Requested>().0, vec![None]);
         assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "the release chord clears the focused webview inline"
-        );
-        assert_eq!(
-            cap.message_count(),
+            app.world().resource::<Captured>().message_count(),
             0,
             "ReleaseWebviewFocus is handled inline and never reaches a KeyEffectMessage"
         );

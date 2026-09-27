@@ -13,8 +13,8 @@ use crate::screen::grid::GridSize;
 use crate::screen::grid::row::Row;
 use crate::screen::grid::run::Run;
 use crate::screen::selection::SelectionRange;
+use crate::screen::vi::ViCursor;
 use crate::screen::viewport::{DisplayOffset, ViewportLine};
-use crate::vi::ViCursor;
 use std::collections::HashSet;
 
 /// One emitted frame.
@@ -36,8 +36,11 @@ pub struct Frame {
     pub cursor: Cursor,
     /// Lines scrolled back from the live tail; always carried.
     pub display_offset: DisplayOffset,
-    /// Vi-mode cursor. It is always `None`, because this terminal does
-    /// not implement vi mode.
+    /// Rows of scrollback history the active screen retains; always
+    /// carried.
+    pub history_len: u32,
+    /// Vi-mode cursor; `None` outside vi mode. It lies inside the
+    /// viewport and never names a continuation column.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range.
     pub selection: Option<SelectionRange>,
@@ -123,7 +126,9 @@ impl FrameTracker {
         let carried = Carried {
             cursor: device.cursor(),
             display_offset: screen.display_offset(),
+            history_len: screen.history_len(),
             selection: screen.selection_range(),
+            vi_cursor: screen.vi_cursor(),
         };
         let placements = self.diff_placements(device);
         let palette = self.diff_palette(device.palette());
@@ -147,7 +152,8 @@ impl FrameTracker {
             rows,
             cursor: carried.cursor,
             display_offset: carried.display_offset,
-            vi_cursor: None,
+            history_len: carried.history_len,
+            vi_cursor: carried.vi_cursor,
             selection: carried.selection,
             placements,
             palette,
@@ -214,7 +220,9 @@ impl FrameTracker {
 struct Carried {
     cursor: Cursor,
     display_offset: DisplayOffset,
+    history_len: u32,
     selection: Option<SelectionRange>,
+    vi_cursor: Option<ViCursor>,
 }
 
 #[cfg(test)]
@@ -282,7 +290,9 @@ mod tests {
             Carried {
                 cursor: device.cursor(),
                 display_offset: device.display_offset(),
+                history_len: 0,
                 selection: None,
+                vi_cursor: None,
             },
             Some(&listed),
             None,

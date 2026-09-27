@@ -27,9 +27,7 @@ bevy_cef_core = { workspace = true }
 bevy_orzmux = { path = "crates/bevy_orzmux" }
 bevy_orzma_tty_renderer = { path = "crates/bevy_orzma_tty_renderer" }
 bevy_orzma_webview = { path = "crates/bevy_orzma_webview" }
-bevy_orzma_webview_host = { path = "crates/bevy_orzma_webview_host", features = [
-  "cef",
-] }
+orzma_webview_host = { path = "crates/orzma_webview_host" }
 orzmux = { path = "crates/orzmux" }
 orzma_tty = { path = "crates/orzma_tty" }
 orzma_vt = { path = "crates/orzma_vt" }
@@ -69,7 +67,7 @@ workspace = true
 
 [workspace]
 resolver = "2"
-members = ["crates/*", "sdk/ratatui_orzma", "apps/orzmd", "apps/orzbrowser"]
+members = ["crates/*", "sdk/ratatui_orzma", "apps/orzmd", "apps/orzbrowser", "apps/cef_render_process"]
 
 [workspace.package]
 version = "0.2.0-dev"

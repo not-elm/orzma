@@ -7,6 +7,7 @@ pub mod grid;
 pub mod margins;
 pub mod selection;
 pub mod tabs;
+pub mod vi;
 pub mod viewport;
 
 pub(crate) mod cursor;
@@ -40,6 +41,7 @@ use crate::screen::selection::{
 };
 use crate::screen::state::ScreenState;
 use crate::screen::tabs::{CharacterTabEdit, TabStops};
+use crate::screen::vi::ScreenVi;
 use crate::screen::viewport::{DisplayOffset, Scroll, Viewport, ViewportLine};
 use crate::screen::webview_placements::WebviewPlacements;
 use std::ops::{Range, RangeInclusive};
@@ -67,6 +69,7 @@ pub struct Screen {
     checkpoint: Checkpoint,
     webview_placements: WebviewPlacements,
     selection: ScreenSelection,
+    vi: ScreenVi,
 }
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
@@ -135,6 +138,7 @@ impl Screen {
             checkpoint: Checkpoint::default(),
             webview_placements: WebviewPlacements::new(),
             selection: ScreenSelection::new(),
+            vi: ScreenVi::new(),
         }
     }
 }
@@ -851,6 +855,12 @@ impl Screen {
     /// departing row to history and holds a scrolled-back viewport on
     /// the row it was showing. It also clears the cursor's landing
     /// cell, since the rows moved under it.
+    ///
+    /// A vi cursor inside the shifted rows moves up with them, stopping at
+    /// the first shifted row. When the shift feeds history, a vi cursor on
+    /// a history row the viewport shows moves up as well, and the vi cursor
+    /// stops at the viewport's top row instead. The vi cursor stays inside
+    /// the viewport.
     fn shift_rows_up(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
@@ -863,6 +873,16 @@ impl Screen {
                 self.hold_scrolled_viewport();
             }
         }
+        if self.is_vi_mode() {
+            let top = if feeds_history {
+                self.viewport_lines().0
+            } else {
+                GridLine::from(first)
+            };
+            self.vi
+                .follow_rows(top, GridLine::from(bottom), -i32::from(count));
+            let _ = self.clamp_vi_cursor();
+        }
         Some(DamageSpan::Full)
     }
 
@@ -873,6 +893,9 @@ impl Screen {
     /// The rows pushed past the bottom margin are discarded, and nothing
     /// reaches history. It also clears the cursor's landing cell, since
     /// the rows moved under it.
+    ///
+    /// A vi cursor inside the shifted rows moves down with them, stopping
+    /// at the bottom margin, and is pulled back inside the viewport.
     fn shift_rows_down(&mut self, first: ScreenLine, count: u16) -> Option<DamageSpan> {
         let bottom = self.scroll_region.bottom_margin();
         let count = self.clamped_rows(first, count)?;
@@ -880,6 +903,14 @@ impl Screen {
         let fill = self.state.pen.erase_cell();
         for _ in 0..count {
             self.grid.scroll_down_one(first, bottom, fill.clone());
+        }
+        if self.is_vi_mode() {
+            self.vi.follow_rows(
+                GridLine::from(first),
+                GridLine::from(bottom),
+                i32::from(count),
+            );
+            let _ = self.clamp_vi_cursor();
         }
         Some(DamageSpan::Full)
     }
@@ -1265,6 +1296,12 @@ impl Screen {
         self.grid.size()
     }
 
+    /// Number of history rows this screen retains, saturating at
+    /// `u32::MAX`.
+    pub fn history_len(&self) -> u32 {
+        u32::try_from(self.grid.history_len()).unwrap_or(u32::MAX)
+    }
+
     /// The write cursor as an emitted frame carries it.
     ///
     /// The screen supplies the position; `text_cursor` supplies every
@@ -1438,8 +1475,8 @@ impl Screen {
     ///
     /// Covers the screen-scoped actions of `RIS`: the grid and its
     /// history, the cursor, the SGR pen, the scrolling margins, the
-    /// origin mode, the tabulation stops, and the character set
-    /// mapping.
+    /// origin mode, the tabulation stops, the character set mapping, and
+    /// the vi cursor.
     ///
     /// Reports [`DamageSpan::Full`], or nothing when the grid was
     /// already blank and carried no history; the cursor homes either
@@ -1460,6 +1497,7 @@ impl Screen {
     /// - `RIS` (`ESC c`) — its screen-scoped actions
     pub fn reset(&mut self) -> Option<DamageSpan> {
         let cleared = self.selection.clear();
+        let _ = self.vi.clear();
         let dirty = !self.grid.is_blank() || cleared;
         self.grid.reset();
         self.viewport = Viewport::default();
@@ -1520,7 +1558,9 @@ impl Screen {
     ///
     /// A height change returns the margins to the whole page.
     ///
-    /// A scrolled-back viewport tracks the rows it was showing.
+    /// A scrolled-back viewport tracks the rows it was showing. The vi
+    /// cursor follows the rows the resize moves and is pulled back inside
+    /// the viewport.
     pub fn resize(&mut self, size: GridSize) -> Option<DamageSpan> {
         let old = self.grid.size();
         if old == size {
@@ -1551,6 +1591,7 @@ impl Screen {
         self.set_display_offset(DisplayOffset(
             self.viewport.offset.0.saturating_sub(u32::from(reclaimed)),
         ));
+        let _ = self.clamp_vi_cursor();
         Some(DamageSpan::Full)
     }
 
@@ -1562,8 +1603,8 @@ impl Screen {
     /// come back from history, and so do the rows a rewrap frees while the
     /// text or the cursor reached the bottom row; under
     /// [`ScrollbackOnGrow::Keep`] they stay blank. The cursor, the saved
-    /// cursor, the selection's ends, the placement anchors, and a
-    /// scrolled-back viewport follow the text they stood on; an armed
+    /// cursor, the selection's ends, the placement anchors, a scrolled-back
+    /// viewport, and the vi cursor follow the text they stood on; an armed
     /// deferred wrap survives when the cursor lands on a row's right edge,
     /// and a change of height alone leaves the cursor's deferred wrap as it
     /// was. A whole-line selection keeps the whole rows it covered, and a
@@ -1573,7 +1614,9 @@ impl Screen {
     /// dropped row is cleared, a placement whose anchor row is dropped
     /// stops resolving so the next [`Self::evict_lost_anchors`] names it,
     /// and a viewport whose top row is dropped moves to the oldest history
-    /// row.
+    /// row. A vi cursor whose row is dropped moves to the viewport's
+    /// top-left cell, and a vi cursor that followed its text is then
+    /// pulled back inside the viewport.
     ///
     /// # Invariants
     ///
@@ -1605,6 +1648,7 @@ impl Screen {
             &anchors,
             self.viewport.offset.0,
             old.cols,
+            self.vi.point(),
         );
         let armed = self.state.pending_wrap;
         self.grid
@@ -1657,15 +1701,16 @@ impl Screen {
         ) = Self::cursor_at(saved, size.cols, last_line);
     }
 
-    /// Moves the selection, the placements and a scrolled-back viewport onto
-    /// the positions a reflow to `cols` columns carried `riders` to, with
-    /// `anchors` the placements' anchors from before it.
+    /// Moves the selection, the placements, a scrolled-back viewport and the
+    /// vi cursor onto the positions a reflow to `cols` columns carried
+    /// `riders` to, with `anchors` the placements' anchors from before it.
     ///
     /// A selection end that stood on the right edge of a row ending its
     /// logical line lands on the right edge again. A selection with an end
     /// on a dropped row is cleared, a placement whose anchor row is dropped
-    /// moves to a retired id, and a viewport whose top row is dropped moves
-    /// to the oldest history row.
+    /// moves to a retired id, a viewport whose top row is dropped moves to
+    /// the oldest history row, and a vi cursor whose row is dropped moves to
+    /// the viewport's top-left cell.
     fn land_riders(&mut self, riders: &Riders, anchors: &[(LineId, GridColumn)], cols: u16) {
         if let Some(ends) = riders.selection {
             self.land_selection(riders, ends, cols);
@@ -1674,6 +1719,9 @@ impl Screen {
         if let Some(index) = riders.viewport {
             self.land_viewport(riders.moved(index));
         }
+        if let Some(index) = riders.vi {
+            self.land_vi_cursor(riders.moved(index));
+        }
     }
 
     /// Moves the selection onto the positions a reflow to `cols` columns
@@ -1681,26 +1729,63 @@ impl Screen {
     /// either end is gone.
     ///
     /// An end that stood on the right edge of a row ending its logical line
-    /// lands on the right edge again.
+    /// lands on the right edge again. In vi mode the landed selection covers
+    /// both of its end cells.
     fn land_selection(&mut self, riders: &Riders, ends: [(usize, bool); 2], cols: u16) {
-        let ends = ends.map(|(index, on_line_end_edge)| {
-            riders.moved(index).and_then(|point| {
-                self.grid.line_id_at(point.line()).map(|line| SelectionEnd {
-                    line,
-                    boundary: if on_line_end_edge {
+        let Some((anchor, moving)) = self.selection.ends() else {
+            return;
+        };
+        let vi_simple = self.is_vi_mode() && self.selection.kind() == Some(SelectionKind::Simple);
+        let landed =
+            [(anchor, ends[0]), (moving, ends[1])].map(|(end, (index, on_line_end_edge))| {
+                riders.moved(index).and_then(|point| {
+                    let boundary = if on_line_end_edge {
                         cols
                     } else {
                         point.boundary().min(cols)
-                    },
+                    };
+                    self.land_selection_end(end, point.line(), boundary, vi_simple)
                 })
-            })
-        });
-        match ends {
-            [Some(anchor), Some(moving)] => self.selection.relocate(anchor, moving),
+            });
+        match landed {
+            [Some(anchor), Some(moving)] => {
+                self.selection.relocate(anchor, moving);
+                if self.is_vi_mode() {
+                    let _ = self.include_selection_cells();
+                }
+            }
             _ => {
                 let _ = self.selection.clear();
             }
         }
+    }
+
+    /// The end `end` becomes once a reflow carries its boundary to
+    /// `boundary` on `line`; `None` when the row is gone. `vi_simple` says
+    /// whether the selection is a character selection in vi mode.
+    ///
+    /// In a character selection in vi mode, an end set from the right side
+    /// of a cell that lands on the left edge of a row the row above wraps
+    /// onto moves to where the row above wraps, so it still names the same
+    /// cell.
+    fn land_selection_end(
+        &self,
+        end: SelectionEnd,
+        line: GridLine,
+        boundary: u16,
+        vi_simple: bool,
+    ) -> Option<SelectionEnd> {
+        let id = self.grid.line_id_at(line)?;
+        let above = GridLine(line.0 - 1);
+        if vi_simple
+            && boundary == 0
+            && end.side() == CellSide::Right
+            && let Some(cells) = self.grid.wrap_at(above)
+            && let Some(above_id) = self.grid.line_id_at(above)
+        {
+            return Some(end.relocated(above_id, cells));
+        }
+        Some(end.relocated(id, boundary))
     }
 
     /// Re-anchors each placement on the position a reflow to `cols`
@@ -1739,6 +1824,25 @@ impl Screen {
         self.set_display_offset(DisplayOffset(offset));
     }
 
+    /// Moves the vi cursor onto the cell a reflow carried it to, pulled
+    /// inside the viewport and onto the last column or before; onto the
+    /// viewport's top-left cell when its row is gone.
+    fn land_vi_cursor(&mut self, point: Option<TrackedPoint>) {
+        let (top, _) = self.viewport_lines();
+        let landed = point.map_or(
+            GridPoint {
+                line: top,
+                column: GridColumn(0),
+            },
+            |point| GridPoint {
+                line: point.line(),
+                column: GridColumn(point.boundary()),
+            },
+        );
+        let _ = self.vi.set(landed);
+        let _ = self.clamp_vi_cursor();
+    }
+
     /// The cursor position `point` stands for on a screen `cols` wide
     /// whose last row is `last_line`: a point on the right edge parks on
     /// the last column with the deferred wrap armed.
@@ -1759,9 +1863,9 @@ impl Screen {
         u16::try_from(reclaimed).expect("a growth never exceeds u16::MAX rows")
     }
 
-    /// Moves the live cursor and the saved one down by the rows a resize
-    /// reclaimed from history and up by the rows it scrolled away, so
-    /// both keep pointing at the row they were on.
+    /// Moves the live cursor, the saved one, and the vi cursor down by the
+    /// rows a resize reclaimed from history and up by the rows it scrolled
+    /// away, so all three keep pointing at the row they were on.
     fn shift_cursors(&mut self, reclaimed: u16, required_scrolling: u16) {
         let follow_moved_rows = |line: &mut ScreenLine| {
             line.0 = line
@@ -1771,6 +1875,8 @@ impl Screen {
         };
         follow_moved_rows(&mut self.state.line);
         follow_moved_rows(&mut self.checkpoint.line);
+        self.vi
+            .shift(i32::from(reclaimed) - i32::from(required_scrolling));
     }
 
     fn clamp_cursors(&mut self, size: GridSize) {
@@ -1863,8 +1969,11 @@ impl Screen {
 /// its rows.
 impl Screen {
     /// Anchors a new selection at `cell`, replacing any active one;
-    /// returns whether the state changed. A cell outside the grid is
-    /// rejected and leaves the current selection untouched.
+    /// returns whether the selection state changed or, in vi mode, whether
+    /// the vi cursor moved. A cell outside the grid is rejected and leaves
+    /// the current selection untouched.
+    ///
+    /// In vi mode the vi cursor also moves to `cell`.
     pub fn start_selection(
         &mut self,
         cell: GridPoint,
@@ -1874,17 +1983,30 @@ impl Screen {
         let Some(end) = self.selection_end(cell, side) else {
             return false;
         };
-        self.selection.start(end, kind)
+        let started = self.selection.start(end, kind);
+        let moved = self.is_vi_mode() && self.vi.set(cell);
+        let _ = self.clamp_vi_cursor();
+        started || moved
     }
 
     /// Moves the active selection's moving end to `cell`; returns
-    /// whether it moved. It is a no-op without an active selection or for
-    /// a cell outside the grid.
+    /// whether the selection changed or, in vi mode, whether the vi cursor
+    /// moved. It is a no-op without an active selection or for a cell
+    /// outside the grid.
+    ///
+    /// In vi mode the vi cursor also moves to `cell`, and the selection
+    /// covers both of its end cells.
     pub fn extend_selection(&mut self, cell: GridPoint, side: CellSide) -> bool {
         let Some(end) = self.selection_end(cell, side) else {
             return false;
         };
-        self.selection.extend(end)
+        if self.selection.ends().is_none() || !self.is_vi_mode() {
+            return self.selection.extend(end);
+        }
+        let moved = self.vi.set(cell);
+        let _ = self.clamp_vi_cursor();
+        let followed = self.extend_covering(end);
+        moved || followed
     }
 
     /// Drops the active selection; returns whether there was one, even
@@ -1928,6 +2050,16 @@ impl Screen {
     fn selection_end(&self, cell: GridPoint, side: CellSide) -> Option<SelectionEnd> {
         let line = self.grid.line_id_at_point(cell)?;
         Some(SelectionEnd::at(line, cell.column, side))
+    }
+
+    /// Moves the active selection's moving end to `end` and makes the
+    /// selection cover both of its end cells; returns whether either end
+    /// moved.
+    fn extend_covering(&mut self, end: SelectionEnd) -> bool {
+        let before = self.selection.ends();
+        let _ = self.selection.extend(end);
+        let _ = self.include_selection_cells();
+        self.selection.ends() != before
     }
 
     /// Appends to `out` the text of the cells in `columns` of the row at
@@ -1981,12 +2113,15 @@ struct Riders {
     /// The index in `points` of the top row a scrolled-back viewport shows;
     /// `None` at the live tail.
     viewport: Option<usize>,
+    /// The index in `points` of the vi cursor's cell; `None` outside vi
+    /// mode.
+    vi: Option<usize>,
 }
 
 impl Riders {
     /// Gathers what a reflow of `grid` from `cols` columns carries: the ends
-    /// of `selection`, the placement `anchors`, and the top row of a
-    /// viewport scrolled back by `viewport` rows.
+    /// of `selection`, the placement `anchors`, the top row of a viewport
+    /// scrolled back by `viewport` rows, and the vi cursor's cell `vi`.
     ///
     /// A whole-line selection is carried from the left edge of its top row
     /// to the right edge of its bottom row.
@@ -1996,16 +2131,19 @@ impl Riders {
         anchors: &[(LineId, GridColumn)],
         viewport: u32,
         cols: u16,
+        vi: Option<GridPoint>,
     ) -> Self {
         let mut riders = Self {
-            points: Vec::with_capacity(anchors.len() + 3),
+            points: Vec::with_capacity(anchors.len() + 4),
             selection: None,
             anchors: 0..0,
             viewport: None,
+            vi: None,
         };
         riders.carry_selection(grid, selection, cols);
         riders.carry_anchors(grid, anchors);
         riders.carry_viewport(viewport);
+        riders.carry_vi(vi);
         riders
     }
 
@@ -2023,12 +2161,12 @@ impl Riders {
         let Some((anchor, moving)) = selection.ends() else {
             return;
         };
-        let lines = [anchor, moving].map(|end| grid.grid_line(end.line));
+        let lines = [anchor, moving].map(|end| grid.grid_line(end.line()));
         let anchor_on_top = lines[0].map(|line| line.0) <= lines[1].map(|line| line.0);
         let boundaries = match selection.kind() {
             Some(SelectionKind::Lines) if anchor_on_top => [0, cols],
             Some(SelectionKind::Lines) => [cols, 0],
-            _ => [anchor.boundary, moving.boundary],
+            _ => [anchor.boundary(), moving.boundary()],
         };
         self.selection = Some([
             self.carry_selection_end(grid, lines[0], boundaries[0], cols),
@@ -2072,6 +2210,14 @@ impl Riders {
             .ok()
             .map(|offset| TrackedPoint::new(GridLine(-offset), 0));
         self.viewport = Some(self.carry(top));
+    }
+
+    /// Carries the vi cursor's cell; nothing outside vi mode.
+    fn carry_vi(&mut self, vi: Option<GridPoint>) {
+        let Some(point) = vi else {
+            return;
+        };
+        self.vi = Some(self.carry(Some(TrackedPoint::new(point.line, point.column.0))));
     }
 
     /// Adds `point` to the carried positions, returning its index in

@@ -620,7 +620,7 @@ mod tests {
     /// linked cell.
     ///
     /// Case: the pointer crosses a hyperlink on a terminal whose mouse input
-    /// is suppressed, such as one in vi mode.
+    /// is suppressed while an IME composition is in progress.
     #[test]
     fn hover_skips_terminal_mouse_disabled_surface() {
         let mut app = App::new();

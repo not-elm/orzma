@@ -26,12 +26,11 @@ use bevy::render::RenderPlugin;
 #[cfg(not(target_os = "macos"))]
 use bevy_cef::prelude::early_exit_if_subprocess;
 use bevy_orzma_tty_renderer::prelude::TerminalRendererPlugin;
-use bevy_orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
-use bevy_orzma_webview_host::WebviewAssetRegistry;
+use bevy_orzma_webview::{OrzmaWebviewPlugin, WebviewAssetRegistry, cef_plugin};
 use bevy_orzmux::prelude::{
     OrzmuxClient, OrzmuxConfig, OrzmuxConnection, OrzmuxPlugin, OrzmuxSystems,
 };
-use configs::{OrzmaConfigsPlugin, cursor_policy, wheel_config};
+use configs::{OrzmaConfigsPlugin, cursor_policy, semantic_escape_chars, wheel_config};
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
 use session::SessionPlugin;
@@ -51,6 +50,7 @@ fn main() {
     // env vars, which is unsound once other threads may read the environment.
     ensure_terminfo_env();
     ensure_utf8_locale_env();
+    clear_inherited_control_env();
 
     let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
     let orzma_registry = WebviewAssetRegistry::default();
@@ -68,17 +68,7 @@ fn main() {
     );
     let wakers = AppWakers::new(app.world())
         .unwrap_or_else(|| fatal("the window event loop is unavailable"));
-    let orzmux = OrzmuxClient::spawn(
-        OrzmuxConfig {
-            shell: pre_configs.orzma.shell.clone(),
-            scrollback_rows: SCROLLBACK_ROWS,
-            wheel: wheel_config(&pre_configs.mouse),
-            cursor: cursor_policy(&pre_configs.cursor),
-            shell_integration: pre_configs.orzma.shell_integration,
-        },
-        wakers.input().clone(),
-    )
-    .unwrap_or_else(|err| fatal(err));
+    let input_waker = wakers.input().clone();
     let cef_profile = CefProfileDir::acquire()
         .unwrap_or_else(|err| fatal(format!("cannot create the CEF profile directory: {err}")));
     app.add_plugins(cef_plugin(orzma_registry.clone(), cef_profile.path()))
@@ -94,12 +84,29 @@ fn main() {
             OrzmaUiPlugin,
         ))
         .add_plugins((
-            OrzmaWebviewPlugin::new(orzma_registry, wakers.input().clone()),
+            OrzmaWebviewPlugin::new(orzma_registry),
             WindowTitlePlugin,
             WindowIconPlugin,
             RedrawPlugin::new(wakers),
-        ))
-        .insert_resource(OrzmuxConnection(orzmux))
+        ));
+    // NOTE: the client binds the control socket, whose runtime directory only
+    // its drop removes, and every startup step above can exit the process
+    // without running destructors (`fatal`, and `OrzmaConfigsPlugin` on an
+    // invalid config); spawning the client last keeps a failed start from
+    // leaving that directory behind.
+    let orzmux = OrzmuxClient::spawn(
+        OrzmuxConfig {
+            shell: pre_configs.orzma.shell.clone(),
+            scrollback_rows: SCROLLBACK_ROWS,
+            wheel: wheel_config(&pre_configs.mouse),
+            cursor: cursor_policy(&pre_configs.cursor),
+            semantic_escape_chars: semantic_escape_chars(&pre_configs.selection),
+            shell_integration: pre_configs.orzma.shell_integration,
+        },
+        input_waker,
+    )
+    .unwrap_or_else(|err| fatal(err));
+    app.insert_resource(OrzmuxConnection(orzmux))
         .configure_sets(
             Update,
             OrzmaSystems::Input.after(OrzmuxSystems::ApplyLayout),
@@ -123,8 +130,28 @@ fn fatal(message: impl Display) -> ! {
 fn primary_window() -> Window {
     Window {
         title: "orzma".to_string(),
+        name: cfg!(target_os = "linux").then(|| "orzma".to_string()),
         ime_enabled: false,
         ..default()
+    }
+}
+
+/// Removes `ORZMA_SOCK` and `ORZMA_TOKEN` from orzma's own environment, so a
+/// pane's shell never inherits the control variables of an orzma pane this
+/// instance was started from; a pane gets them only from its own backend.
+///
+/// # Invariants
+///
+/// Must be called before any thread is spawned (i.e. at the very top of
+/// `main()`): it writes process environment variables, which is unsound once
+/// another thread may read the environment concurrently.
+fn clear_inherited_control_env() {
+    // SAFETY: the caller invokes this before App::new() spawns any task-pool
+    // thread, so no other thread can read the environment concurrently with
+    // these writes (see # Invariants).
+    unsafe {
+        std::env::remove_var("ORZMA_SOCK");
+        std::env::remove_var("ORZMA_TOKEN");
     }
 }
 
@@ -239,6 +266,17 @@ mod tests {
         // calls `set_ime_allowed` only on a live `false -> true` change. Starting
         // `true` means that transition never fires and the OS IME never arms.
         assert!(!primary_window().ime_enabled);
+    }
+
+    /// Asserts that the primary window is named `orzma` on Linux and left
+    /// unnamed elsewhere.
+    ///
+    /// Case: a user installs orzma with `install.sh` and launches it from the
+    /// desktop's app grid, whose dock matches the window to `orzma.desktop`.
+    #[test]
+    fn primary_window_is_named_orzma_only_on_linux() {
+        let expected = cfg!(target_os = "linux").then(|| "orzma".to_string());
+        assert_eq!(primary_window().name, expected);
     }
 
     #[test]

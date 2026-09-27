@@ -1,11 +1,12 @@
 //! The vi-cursor motion the host UI asks a terminal entity to perform.
-//!
-//! TODO: move [`ViMotion`] to the VT layer and re-export it here.
 
+use crate::OrzmuxConnection;
+use crate::requests::PaneSender;
 use bevy::prelude::*;
+pub use orzma_vt::prelude::ViMotion;
+use orzmux::prelude::OrzmuxCommand;
 
 /// Fired by the host UI to move a specific terminal entity's vi cursor.
-/// The backend has no vi mode, so applying it does nothing.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyViMotion {
     #[event_target]
@@ -14,66 +15,26 @@ pub struct RequestTtyViMotion {
     pub motion: ViMotion,
 }
 
-/// A vi-cursor motion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViMotion {
-    /// One line up.
-    Up,
-    /// One line down.
-    Down,
-    /// One cell left.
-    Left,
-    /// One cell right.
-    Right,
-    /// First column of the line.
-    First,
-    /// Last column of the line.
-    Last,
-    /// First non-blank column of the line.
-    FirstOccupied,
-    /// Top line of the viewport.
-    High,
-    /// Middle line of the viewport.
-    Middle,
-    /// Bottom line of the viewport.
-    Low,
-    /// Start of the previous semantic word.
-    SemanticLeft,
-    /// Start of the next semantic word.
-    SemanticRight,
-    /// End of the previous semantic word.
-    SemanticLeftEnd,
-    /// End of the next semantic word.
-    SemanticRightEnd,
-    /// Start of the previous whitespace-delimited word.
-    WordLeft,
-    /// Start of the next whitespace-delimited word.
-    WordRight,
-    /// End of the previous whitespace-delimited word.
-    WordLeftEnd,
-    /// End of the next whitespace-delimited word.
-    WordRightEnd,
-    /// Matching bracket of the one under the cursor.
-    Bracket,
-    /// Previous paragraph break.
-    ParagraphUp,
-    /// Next paragraph break.
-    ParagraphDown,
-}
-
 pub(super) struct ViMotionPlugin;
 
 impl Plugin for ViMotionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(apply_vi_motion);
+        app.add_observer(apply_vi_motion.run_if(resource_exists::<OrzmuxConnection>));
     }
 }
 
-fn apply_vi_motion(_e: On<RequestTtyViMotion>) {}
+fn apply_vi_motion(e: On<RequestTtyViMotion>, panes: PaneSender) {
+    panes.send_for(e.terminal, |pane| OrzmuxCommand::ViMotion {
+        pane,
+        motion: e.motion,
+    });
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
+    use orzmux::prelude::{OrzmuxCommand, PaneId};
 
     /// Every `(target, motion)` an observer saw, in fire order.
     #[derive(Resource, Default)]
@@ -168,5 +129,28 @@ mod tests {
                 assert_ne!(a, b, "{a:?} and {b:?} must be distinct motions");
             }
         }
+    }
+
+    /// Asserts that a motion request becomes a `ViMotion` command for the
+    /// addressed pane.
+    ///
+    /// Case: the user presses `j` in vi mode on a pane.
+    #[test]
+    fn a_motion_request_becomes_a_vi_motion_command_for_the_pane() {
+        let (mut app, commands) = app_with_connection(ViMotionPlugin);
+        let pane = spawn_pane(&mut app, PaneId(5));
+        app.world_mut().trigger(RequestTtyViMotion {
+            terminal: pane,
+            motion: ViMotion::Down,
+        });
+        let sent = sent(&commands);
+        assert_eq!(sent.len(), 1);
+        assert!(matches!(
+            sent[0],
+            OrzmuxCommand::ViMotion {
+                pane: PaneId(5),
+                motion: ViMotion::Down
+            }
+        ));
     }
 }
