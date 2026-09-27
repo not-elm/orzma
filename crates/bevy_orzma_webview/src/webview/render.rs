@@ -50,6 +50,9 @@ pub fn cef_plugin(orzma_registry: WebviewAssetRegistry, root_cache_path: &Path) 
 /// On Windows the config always carries `disable-gpu-compositing`, so the
 /// embedded pages composite on the CPU rather than on the GPU.
 ///
+/// On Linux the config always carries `no-first-run`, so CEF starts without
+/// Chromium's first-run flow, including its EULA prompt.
+///
 /// The `debug` feature additionally exposes `remote-debugging-port`, a local
 /// Chromium DevTools (CDP) endpoint on `127.0.0.1:9222` for inspecting the
 /// embedded webview. It is off by default.
@@ -67,6 +70,12 @@ fn cef_command_line_config() -> CommandLineConfig {
     // pinned CEF carries it.
     #[cfg(target_os = "windows")]
     let config = config.with_switch("disable-gpu-compositing");
+    // NOTE: Chromium 152 on Linux gates browser startup on a first-run EULA
+    // dialog, and CEF does not patch that gate out. The profile directory is
+    // created empty on every launch, so every launch is a first run; without this
+    // switch `CefInitialize` fails with result code 28 (EULA_REFUSED).
+    #[cfg(target_os = "linux")]
+    let config = config.with_switch("no-first-run");
     #[cfg(feature = "debug")]
     let config = config.with_switch_value("remote-debugging-port", "9222");
     config
@@ -409,6 +418,17 @@ mod tests {
                 .count_in_flight_for_test(),
             1
         );
+    }
+
+    /// Asserts that the Linux CEF command line carries `no-first-run`.
+    ///
+    /// Case: the user launches orzma on Linux, where every launch starts CEF
+    /// with a freshly created, empty profile directory.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_command_line_skips_first_run() {
+        let config = cef_command_line_config();
+        assert!(config.switches.contains(&"no-first-run"));
     }
 
     fn address_changed_app() -> (App, crossbeam_channel::Receiver<String>) {
