@@ -10,6 +10,7 @@ import os
 import shutil
 import struct
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,12 +71,17 @@ def companion_cargo_build_argv(triple: str, profile: str, names: tuple[str, ...]
     return argv
 
 
-def render_process_install_argv(version: str, triple: str, root: Path) -> list[str]:
+def render_process_install_argv(
+    version: str, triple: str, root: Path, target_dir: Path
+) -> list[str]:
     # NOTE: --target is mandatory. Without it RUSTFLAGS reaches build scripts and
     # build dependencies, and the cc build of ring is compiled against the static CRT.
     # --force keeps a second staging run from failing on the already-installed binary.
+    # --target-dir must stay short: cef-dll-sys compiles the CEF wrapper with MSVC under
+    # it, and cl.exe fails with C1083 once an object path passes MAX_PATH (260).
     return ["cargo", "install", f"{RENDER_PROCESS_BIN}@{version}",
-            "--target", triple, "--root", str(root), "--locked", "--force"]
+            "--target", triple, "--root", str(root), "--target-dir", str(target_dir),
+            "--locked", "--force"]
 
 
 def render_process_installed(tools_dir: Path, version: str, triple: str) -> bool:
@@ -334,6 +340,7 @@ class StageConfig:
     cef_dir: Path
     out_dir: Path
     render_process_bin: Path | None
+    render_process_target_dir: Path
     skip_build: bool
     rebuild_render_process: bool = False
 
@@ -362,6 +369,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=f"reinstall {RENDER_PROCESS_BIN} even when the pinned version is already "
              "installed under the tools dir",
     )
+    p.add_argument(
+        "--render-process-target-dir", default=str(Path(tempfile.gettempdir()) / "orzrp"),
+        help=f"cargo target dir for building {RENDER_PROCESS_BIN}; keep it short, since "
+             "the CEF wrapper's object paths under it must stay within MAX_PATH",
+    )
     p.add_argument("--out-dir", default=str(REPO_ROOT / "target" / "dist"))
     p.add_argument("--refresh-inventory", action="store_true",
                    help="rewrite build/windows/cef-inventory.json from --cef-dir and exit")
@@ -377,6 +389,7 @@ def resolve_config(args: argparse.Namespace) -> StageConfig:
         render_process_bin=(
             Path(args.render_process_bin).expanduser() if args.render_process_bin else None
         ),
+        render_process_target_dir=Path(args.render_process_target_dir).expanduser(),
         skip_build=args.skip_build,
         rebuild_render_process=args.rebuild_render_process,
     )
@@ -410,7 +423,12 @@ def cargo_build(cfg: StageConfig) -> None:
     ):
         print(f"==> reusing {RENDER_PROCESS_BIN} {RENDER_PROCESS_VERSION} from {cfg.tools_dir}")
         return
-    run(render_process_install_argv(RENDER_PROCESS_VERSION, TARGET_TRIPLE, cfg.tools_dir), env=env)
+    run(
+        render_process_install_argv(
+            RENDER_PROCESS_VERSION, TARGET_TRIPLE, cfg.tools_dir, cfg.render_process_target_dir
+        ),
+        env=env,
+    )
 
 
 def assert_inventory_clean(missing: list[str], unclassified: list[str], mismatched: list[str]) -> None:
