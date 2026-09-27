@@ -283,6 +283,9 @@ impl Screen {
     /// Pulls the vi cursor inside the viewport and onto the last column or
     /// before; returns whether it moved.
     pub fn clamp_vi_cursor(&mut self) -> bool {
+        if !self.is_vi_mode() {
+            return false;
+        }
         let (top, bottom) = self.viewport_lines();
         let last_column = self.grid.size().cols.saturating_sub(1);
         self.vi.clamp(top, bottom, last_column)

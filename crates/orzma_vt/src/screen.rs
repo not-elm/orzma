@@ -873,14 +873,16 @@ impl Screen {
                 self.hold_scrolled_viewport();
             }
         }
-        let top = if feeds_history {
-            self.viewport_lines().0
-        } else {
-            GridLine::from(first)
-        };
-        self.vi
-            .follow_rows(top, GridLine::from(bottom), -i32::from(count));
-        let _ = self.clamp_vi_cursor();
+        if self.is_vi_mode() {
+            let top = if feeds_history {
+                self.viewport_lines().0
+            } else {
+                GridLine::from(first)
+            };
+            self.vi
+                .follow_rows(top, GridLine::from(bottom), -i32::from(count));
+            let _ = self.clamp_vi_cursor();
+        }
         Some(DamageSpan::Full)
     }
 
@@ -902,12 +904,14 @@ impl Screen {
         for _ in 0..count {
             self.grid.scroll_down_one(first, bottom, fill.clone());
         }
-        self.vi.follow_rows(
-            GridLine::from(first),
-            GridLine::from(bottom),
-            i32::from(count),
-        );
-        let _ = self.clamp_vi_cursor();
+        if self.is_vi_mode() {
+            self.vi.follow_rows(
+                GridLine::from(first),
+                GridLine::from(bottom),
+                i32::from(count),
+            );
+            let _ = self.clamp_vi_cursor();
+        }
         Some(DamageSpan::Full)
     }
 
@@ -1766,15 +1770,15 @@ impl Screen {
     ) -> Option<SelectionEnd> {
         let id = self.grid.line_id_at(line)?;
         let above = GridLine(line.0 - 1);
-        let wraps_above = if vi_simple && boundary == 0 && end.side() == CellSide::Right {
-            self.grid.wrap_at(above)
-        } else {
-            None
-        };
-        Some(match (wraps_above, self.grid.line_id_at(above)) {
-            (Some(cells), Some(above_id)) => end.relocated(above_id, cells),
-            _ => end.relocated(id, boundary),
-        })
+        if vi_simple
+            && boundary == 0
+            && end.side() == CellSide::Right
+            && let Some(cells) = self.grid.wrap_at(above)
+            && let Some(above_id) = self.grid.line_id_at(above)
+        {
+            return Some(end.relocated(above_id, cells));
+        }
+        Some(end.relocated(id, boundary))
     }
 
     /// Re-anchors each placement on the position a reflow to `cols`

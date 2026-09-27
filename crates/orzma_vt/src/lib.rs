@@ -549,6 +549,10 @@ impl Vt for OrzmaVt {
     fn vi_cursor(&self) -> Option<ViCursor> {
         self.device.vi_cursor()
     }
+
+    fn is_vi_mode(&self) -> bool {
+        self.device.is_vi_mode()
+    }
 }
 
 #[cfg(test)]
