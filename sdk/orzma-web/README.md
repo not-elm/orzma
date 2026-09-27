@@ -21,5 +21,5 @@ if (isOrzmaAvailable()) {
 
 See [Building Webview Apps](https://not-elm.github.io/orzma/building-webview-apps.html#the-page-side)
 for how the page and the program fit together, and the
-[Protocol Reference](https://not-elm.github.io/orzma/protocol-reference.html#the-windoworzma-bridge)
+[Webview Protocol](https://not-elm.github.io/orzma/protocol-reference.html#the-windoworzma-bridge)
 for the bridge's full behavior.

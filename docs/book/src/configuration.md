@@ -40,9 +40,9 @@ below.
 ## Settings
 
 Every key below shows its default value. Keep only the lines you want to
-change; omitted keys fall back to these defaults. Key bindings have their own
-pages: the `[shortcuts]` table is described in [Key Bindings](key-bindings.md),
-and the `[vi-mode]` table in [Vi Mode](vi-mode.md).
+change; omitted keys fall back to these defaults. The `[shortcuts]` table is
+described in [Key Bindings](key-bindings.md), and the keys and actions of the
+`[vi-mode]` table in [Vi Mode](vi-mode.md).
 
 ### `[orzma]`
 
@@ -140,13 +140,7 @@ cells_per_notch = 0.5            # f32. Wheel accumulation threshold per notch, 
 axis_lock_ratio = 0.9            # f32, clamped to 0.0..=1.0; a non-finite value reverts to 0.9. Trackpad dominant-axis lock: horizontal scroll kept only when |x|/hypot(x,y) >= this. 0.0 disables; 1.0 = pure-horizontal only.
 double_click_timeout_ms = 400    # u32. Max ms between clicks to count as double/triple.
 click_drift_px = 8.0             # f32. Max pointer drift (logical px) between clicks of a multi-click.
-# The five keys below are accepted but not used yet: changing them has no effect.
-drag_threshold_px = 4.0          # f32. Pointer travel (logical px) before a press becomes a drag.
-divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divider grab zone.
-# --- advanced drag-autoscroll tuning (rarely changed) ---
-autoscroll_base_period_ms = 50     # u32. Tick interval when drag-scrolling at the pane edge.
-autoscroll_min_period_ms = 16      # u32. Floor on the autoscroll interval.
-autoscroll_step_ms = 4             # u32. Interval decrement per cell past the edge.
+divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divider grab zone; never below half a cell. A non-finite value reverts to 4.0.
 # Other mouse numbers are not range-checked; out-of-range values are used as-is.
 ```
 
@@ -162,4 +156,62 @@ tint_color = "#3a3b45"    # "#RRGGBB". Background tint target. Invalid hex silen
 tint = 0.85               # f32 0..=1. Tint strength (0 = off, 1 = full tint).
 webview_dim = 0.55        # f32 0..=1. Brightness multiplier for inactive webview overlays.
 webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = full color, 1 = grey).
+```
+
+### `[vi-mode]`
+
+```toml
+[vi-mode]
+# Vi-mode key bindings. The Vi Mode page describes the key syntax, the
+# duplicate-key rule, and what each action does.
+
+# --- cursor motion ---
+cursor-left        = ["h", "ArrowLeft"]
+cursor-down        = ["j", "ArrowDown"]
+cursor-up          = ["k", "ArrowUp"]
+cursor-right       = ["l", "ArrowRight"]
+line-start         = ["0"]
+line-end           = ["$"]
+line-first-char    = ["^"]
+next-word          = ["w"]
+previous-word      = ["b"]
+next-word-end      = ["e"]
+next-space         = ["W"]
+previous-space     = ["B"]
+next-space-end     = ["E"]
+screen-top         = ["H"]
+screen-middle      = ["M"]
+screen-bottom      = ["L"]
+previous-paragraph = ["{"]
+next-paragraph     = ["}"]
+matching-bracket   = ["%"]
+
+# --- scrolling ---
+history-top        = ["g"]
+history-bottom     = ["G"]
+page-up            = ["Ctrl+B"]
+page-down          = ["Ctrl+F"]
+half-page-up       = ["Ctrl+U"]
+half-page-down     = ["Ctrl+D"]
+scroll-up          = ["Ctrl+Y"]
+scroll-down        = ["Ctrl+E"]
+
+# --- selection ---
+toggle-selection      = ["v", "Space"]
+toggle-line-selection = ["V"]
+toggle-rect-selection = ["Ctrl+V"]
+
+# --- copy / exit ---
+yank = ["y", "Enter"]
+exit = ["q", "Escape", "Ctrl+C"]
+
+# --- search / jump (not implemented yet) ---
+search-forward     = ["/"]
+search-backward    = ["?"]
+search-next        = ["n"]
+search-previous    = ["N"]
+jump-forward       = ["f"]
+jump-backward      = ["F"]
+jump-to-forward    = ["t"]
+jump-to-backward   = ["T"]
 ```

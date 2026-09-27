@@ -11,15 +11,19 @@ leave without copying.
 > `toggle-rect-selection` (`Ctrl+V`) currently selects whole lines, because
 > rectangular selection is not implemented yet.
 
-The mouse keeps working in vi mode: a click moves the vi cursor, a drag
-selects text (and moves the vi cursor to where the drag ends), and the wheel
-scrolls the scrollback, even while a program such as nvim tracks the mouse.
-A selection started with the mouse can be extended with the motion keys, and
-the other way round.
+The mouse keeps working in vi mode, even while a program such as nvim tracks
+the mouse: a click moves the vi cursor, and a drag selects text (and moves the
+vi cursor to where the drag ends). A selection started with the mouse can be
+extended with the motion keys, while a click or a drag always starts a new
+selection. On the primary screen, where the shell runs, the wheel scrolls the
+scrollback. On the alternate screen, where full-screen programs such as nvim
+and less run, the wheel sends arrow keys to the program.
 
 ## Keys
 
-A `[vi-mode]` entry is an optional `Ctrl+` prefix plus exactly one key.
+Vi-mode keys are set in the [`[vi-mode]`](configuration.md#vi-mode) table of
+the configuration file. A `[vi-mode]` entry is an optional `Ctrl+` prefix plus
+exactly one key.
 
 - **Keys** are either a single character, matched **case-sensitively**
   (`"w"` and `"W"` are different bindings — Shift is expressed through the
@@ -33,14 +37,15 @@ A `[vi-mode]` entry is an optional `Ctrl+` prefix plus exactly one key.
 - After `Ctrl+`, the key must be an ASCII alphanumeric character or a named
   key — `Ctrl+$` is a parse error. `Ctrl+` entries match on the physical key
   pressed (not the character it produces), so they behave the same regardless
-  of layout or case.
+  of layout or case, and they do not match while Shift is also held.
 - **Values** are a single key string (`yank = "Y"`) or an array of key
   strings (`exit = ["q", "Escape", "Ctrl+C"]`); any action can be bound to
   zero, one, or several keys.
 - **`""` or `[]` unbinds** an action (for example, `search-forward = ""`).
-- **Duplicate keys are a startup error**: if the same key string is bound to
-  more than one `[vi-mode]` action, orzma fails at startup naming every
-  colliding action (as duplicate chords are in `[shortcuts]`). An unknown
+- **Duplicate keys are a startup error**: if the same key, however it is
+  spelled (`"Space"` and `" "`, `"Ctrl+F"` and `"ctrl+f"`), is bound more than
+  once in `[vi-mode]`, orzma fails at startup naming every colliding action
+  (as duplicate chords are in `[shortcuts]`). An unknown
   action name, like the parse errors above, makes orzma ignore the whole
   file instead (see [Validation](configuration.md#validation)).
 
@@ -54,10 +59,12 @@ validate across the two tables; check your own bindings for overlap.
 Two actions decline the keystroke instead of shadowing it, so the `[vi-mode]`
 binding still runs:
 
-- `paste` does nothing in vi mode, so a direct paste chord passes through —
-  the stock `Ctrl+V` reaches `toggle-rect-selection`.
+- A direct `paste` chord does nothing in vi mode, so it passes through — the
+  stock `Ctrl+V` on Windows and Linux reaches `toggle-rect-selection`. A
+  `<Leader>`-scoped `paste` binding still pastes.
 - `copy` passes a Ctrl-only chord through whenever there is no selection to
-  copy — the stock `Ctrl+C` reaches `exit`.
+  copy — the stock `Ctrl+C` on Windows and Linux reaches `exit`. With a
+  selection, it copies and clears the selection without leaving vi mode.
 
 ## Actions
 
@@ -67,8 +74,8 @@ binding still runs:
 | `cursor-down` | `j`, `ArrowDown` | Move the cursor one cell down. |
 | `cursor-up` | `k`, `ArrowUp` | Move the cursor one cell up. |
 | `cursor-right` | `l`, `ArrowRight` | Move the cursor one cell right. |
-| `line-start` | `0` | Jump to column 0. |
-| `line-end` | `$` | Jump to the last column. |
+| `line-start` | `0` | Jump to column 0 (of the first row, on a wrapped line). |
+| `line-end` | `$` | Jump to the last non-blank column; pressed again, jump to the last column, or to the end of the text on a wrapped line. |
 | `line-first-char` | `^` | Jump to the first non-blank column. |
 | `next-word` | `w` | Jump to the next (semantic) word start. |
 | `previous-word` | `b` | Jump to the previous (semantic) word start. |
@@ -81,7 +88,7 @@ binding still runs:
 | `screen-bottom` | `L` | Jump to the bottom visible line. |
 | `previous-paragraph` | `{` | Jump to the previous paragraph boundary. |
 | `next-paragraph` | `}` | Jump to the next paragraph boundary. |
-| `matching-bracket` | `%` | Jump to the matching bracket. |
+| `matching-bracket` | `%` | Jump to the bracket matching the one under the cursor. |
 | `history-top` | `g` | Scroll to the oldest history line. |
 | `history-bottom` | `G` | Scroll to the live tail. |
 | `page-up` | `Ctrl+B` | Scroll one page up. |
@@ -110,73 +117,15 @@ characters in [`[selection] semantic_escape_chars`](configuration.md#selection).
 ## Escape and unbound keys
 
 By default, `Escape` is bound to the `exit` action, which leaves vi mode
-entirely. To deselect a selection in orzma without leaving vi mode, press `v`
-(toggle-selection is a toggle: with a selection active, it clears it).
+entirely. To deselect without leaving vi mode, press the toggle key that
+matches the selection's kind: `v` (or `Space`) clears a character-wise
+selection and `V` a line-wise one. The other key switches the selection to its
+own kind instead of clearing it.
 
 Keys not bound to any `[vi-mode]` action are swallowed while vi mode is
 active (they never reach the pane) — this includes stock `copy-mode-vi` keys
 that orzma does not carry over by default, such as `:` (goto-line), digit
 repeat prefixes, `o` (other-end), `A` (append-and-cancel), `X` / `M-x`
 (mark), `;` / `,` (jump repeat), `z` (scroll-middle), and `D`
-(copy-end-of-line-and-cancel). Bind them to a `[vi-mode]` action yourself
-if you need them; more built-in actions may be added later.
-
-## Example
-
-The stock `[vi-mode]` table:
-
-```toml
-[vi-mode]
-# Vi-mode key bindings. See "Keys" above for the key
-# syntax and the duplicate-key rule.
-
-# --- cursor motion (trailing comment: ViMotion variant / copy-mode command, for reference) ---
-cursor-left        = ["h", "ArrowLeft"]     # Left            / cursor-left
-cursor-down        = ["j", "ArrowDown"]     # Down            / cursor-down
-cursor-up          = ["k", "ArrowUp"]       # Up              / cursor-up
-cursor-right       = ["l", "ArrowRight"]    # Right           / cursor-right
-line-start         = ["0"]                  # First           / start-of-line
-line-end           = ["$"]                  # Last            / end-of-line
-line-first-char    = ["^"]                  # FirstOccupied   / back-to-indentation
-next-word          = ["w"]                  # SemanticRight   / next-word
-previous-word      = ["b"]                  # SemanticLeft    / previous-word
-next-word-end      = ["e"]                  # SemanticRightEnd / next-word-end
-next-space         = ["W"]                  # WordRight       / next-space
-previous-space     = ["B"]                  # WordLeft        / previous-space
-next-space-end     = ["E"]                  # WordRightEnd    / next-space-end
-screen-top         = ["H"]                  # High            / top-line
-screen-middle      = ["M"]                  # Middle          / middle-line
-screen-bottom      = ["L"]                  # Low             / bottom-line
-previous-paragraph = ["{"]                  # ParagraphUp     / previous-paragraph
-next-paragraph     = ["}"]                  # ParagraphDown   / next-paragraph
-matching-bracket   = ["%"]                  # Bracket         / next-matching-bracket
-
-# --- scrolling ---
-history-top        = ["g"]                  # Top      / history-top
-history-bottom     = ["G"]                  # Bottom   / history-bottom
-page-up            = ["Ctrl+B"]             # PageUp   / page-up
-page-down          = ["Ctrl+F"]             # PageDown / page-down
-half-page-up       = ["Ctrl+U"]             # HalfUp   / halfpage-up
-half-page-down     = ["Ctrl+D"]             # HalfDown / halfpage-down
-scroll-up          = ["Ctrl+Y"]             # LineUp   / scroll-up
-scroll-down        = ["Ctrl+E"]             # LineDown / scroll-down
-
-# --- selection ---
-toggle-selection      = ["v", "Space"]      # Simple / begin-selection
-toggle-line-selection = ["V"]               # Lines  / select-line
-toggle-rect-selection = ["Ctrl+V"]          # Block  / rectangle-toggle
-
-# --- copy / exit ---
-yank = ["y", "Enter"]                       # copy the selection, then leave vi mode
-exit = ["q", "Escape", "Ctrl+C"]            # leave vi mode
-
-# --- search / jump (not implemented yet — see the note at the top) ---
-search-forward     = ["/"]                  # opens a prompt -> -X search-forward
-search-backward    = ["?"]                  # opens a prompt -> -X search-backward
-search-next        = ["n"]                  # repeats the last search -> -X search-again
-search-previous    = ["N"]                  # repeats it reversed -> -X search-reverse
-jump-forward       = ["f"]                  # opens a prompt -> -X jump-forward
-jump-backward      = ["F"]                  # opens a prompt -> -X jump-backward
-jump-to-forward    = ["t"]                  # opens a prompt -> -X jump-to-forward
-jump-to-backward   = ["T"]                  # opens a prompt -> -X jump-to-backward
-```
+(copy-end-of-line-and-cancel). orzma has no actions for these; you can only
+bind such a key to one of the actions above.

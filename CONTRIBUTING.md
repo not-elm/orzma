@@ -27,12 +27,9 @@ Then, from the repository root:
 
 ```sh
 pnpm install
-just setup-cef   # one-time, macOS and Windows: installs the Chromium Embedded Framework and its render process
+just setup-cef   # one-time: installs the Chromium Embedded Framework and its render process
 just run         # builds and runs orzma
 ```
-
-Linux has no `just setup-cef`: the build downloads CEF and copies it beside the
-binary.
 
 | Command | What it does |
 | --- | --- |
@@ -59,7 +56,7 @@ browser-side frontend.
 flowchart TD
     orzma["orzma (the app)"]
     webview["bevy_orzma_webview"]
-    host["bevy_orzma_webview_host"]
+    host["orzma_webview_host"]
     renderer["bevy_orzma_tty_renderer"]
     bevy_orzmux["bevy_orzmux"]
     orzmux["orzmux"]
@@ -67,20 +64,19 @@ flowchart TD
     vt["orzma_vt"]
     configs["orzma_configs"]
     cef["bevy_cef (crates.io)"]
-    cefcore["bevy_cef_core (crates.io)"]
     sdk["ratatui_orzma (SDK)"]
     orzmd["orzmd"]
     orzbrowser["orzbrowser"]
     orzma --> webview
     orzma --> configs
     webview --> renderer
-    webview --> host
     webview --> cef
     renderer --> bevy_orzmux
     bevy_orzmux --> orzmux
     orzmux --> tty
+    orzmux --> host
     tty --> vt
-    host --> cefcore
+    host --> vt
     orzmd --> sdk
     orzbrowser --> sdk
 ```
@@ -96,14 +92,15 @@ a path through other crates is left out.
 | `orzmux` | The multiplexer backend: a thread that owns every pane and the pane layout. |
 | `bevy_orzmux` | Connects the backend to the Bevy app. |
 | `bevy_orzma_tty_renderer` | Draws the terminal grid on the GPU. |
-| `bevy_orzma_webview` | Webviews: the control socket, mounting, and the `window.orzma` bridge. |
-| `bevy_orzma_webview_host` | Serves webview content through the `orzma://` scheme. |
+| `orzma_webview_host` | The webview server: the control socket and every program's registrations, placements, and focus. |
+| `bevy_orzma_webview` | Draws webviews with CEF, serves their content through the `orzma://` scheme, and relays the `window.orzma` bridge. |
 | `orzma_configs` | Loads `config.toml`. |
 | `ratatui_orzma` (`sdk/`) | The Rust SDK for webview apps. `@orzma/web` is its page-side companion. |
 
-At run time, the `orzmux` thread owns each pane's PTY and terminal state; the app
-sends it commands and receives layout snapshots and frames, which
-`bevy_orzma_tty_renderer` draws. Programs in a pane reach webviews through the
+At run time, the `orzmux` thread owns each pane's PTY and terminal state and runs
+the webview host. The app sends it commands and receives layout snapshots,
+frames, and webview events, which `bevy_orzma_tty_renderer` and
+`bevy_orzma_webview` draw. Programs in a pane reach the webview host through the
 [webview protocol](https://not-elm.github.io/orzma/protocol-reference.html).
 
 ## Conventions

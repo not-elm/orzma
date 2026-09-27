@@ -1,4 +1,4 @@
-# Protocol Reference
+# Webview Protocol
 
 > orzma is in early development; this wire format is documented as it is today
 > and may change between releases. The [SDKs](#sdks) track these changes for
@@ -18,7 +18,7 @@ page. It spans three surfaces:
    call, subscribe to, and emit events to the registering program.
 
 Three actors participate: the **registering program** (running in a pane), the
-**orzma host**, and the **webview page**. A registration is a *Tier 1* (dynamic,
+**orzma host**, and the **webview page**. A registration is a _Tier 1_ (dynamic,
 runtime-registered) webview — the only kind this protocol describes.
 
 End to end: a program connects to the control socket, registers content and
@@ -39,7 +39,7 @@ sequenceDiagram
     P->>H: register {kind, …}
     H-->>P: {ok, handle, instance}
     P->>H: APC Omount#59;n=instance,r=rows,c=cols
-    H->>W: load orzma://handle/
+    H->>W: load orzma://handle/…
     W->>H: window.orzma.call
     H->>P: {op: call, reqId, method}
     P->>H: {op: reply, reqId, value}
@@ -78,8 +78,9 @@ them from its own environment:
   currently `orzma:` followed by 26 lowercase base32 characters, but do not
   parse it).
 
-If either variable is absent, the program is not running inside an orzma pane
-and cannot use the protocol.
+If either variable is absent, the program is not running inside an orzma pane,
+or orzma could not open its control socket, and the program cannot use the
+protocol.
 
 ### Peer authentication
 
@@ -94,13 +95,14 @@ Either way, only processes running as the same user can reach the handshake.
 The **first** line a program sends MUST be a `hello` carrying `$ORZMA_TOKEN`:
 
 ```json
-{"op":"hello","token":"orzma:mzxw6ytboi3tmnrqgq2tgmzvgm"}
+{ "op": "hello", "token": "orzma:mzxw6ytboi3tmnrqgq2tgmzvgm" }
 ```
 
 The token binds the connection to the pane it was issued for. If the first line
 is not a valid `hello`, or the token does not resolve, the host closes the
-connection without a reply. A second `hello` on an already-handshaked
-connection is ignored.
+connection without a reply. A successful `hello` gets no reply either; the
+program may send requests right after it. A second `hello` on an
+already-handshaked connection is ignored.
 
 ### Reply vs. push
 
@@ -125,23 +127,33 @@ correlation is positional: a client matches replies to its pending requests by
 their order. (The back-channel `call`/`reply` pair below uses an explicit
 `reqId` instead.)
 
+After the handshake, the host skips a line that is not valid JSON, names an
+unknown `op`, or lacks or mistypes a required field, without replying and
+without closing the connection; unknown extra fields are ignored. A malformed
+`register` or `new_instance` therefore gets no reply, so a client that matches
+replies by position must send only well-formed requests.
+
 ### Program → host messages
 
 Every program line carries an `op`:
 
-| `op` | Fields | Meaning |
-| --- | --- | --- |
-| `hello` | `token` | Handshake; first line only. |
-| `register` | `kind` + per-kind fields | Register content; mints a handle and its first instance. |
-| `new_instance` | `handle` | Mint an additional instance on a handle this connection owns. |
-| `unregister` | `handle` | Release a handle owned by this connection; removes its mounted views. |
-| `reply` | `reqId`, `ok`, `value?`, `error?` | Answer a host `call` (use the `call`'s `reqId`). |
-| `emit` | `handle`, `event`, `payload` | Push an event to every page mounted from the handle (delivered to `window.orzma.on`). |
-| `focus` | `instance` (string or `null`) | Set app-owned focus to a mounted placement, or `null` to blur. Focusing a placement also makes its pane the active pane; a blur leaves the active pane unchanged. |
-| `navigate` | `instance`, `action` | Navigate one mounted placement in place. |
-| `mount` | `instance`, `row`, `col`, `rows`, `cols` | Mount one placement at a 0-based cell of the pane's active screen, the socket form of the APC `mount` (see below). |
-| `unmount` | `instance` | Remove one placement mounted with the socket `mount`. |
-| `set_forward_keys` | `handle`, `keys` (array of chords) | Replace the forward keys of a handle this connection owns, on the registration and on every mounted placement; later mounts carry the new list. No reply; a handle this connection does not own is ignored. |
+| `op`               | Fields                                   | Meaning                                                                                                                                                                                                     |
+| ------------------ | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hello`            | `token`                                  | Handshake; first line only.                                                                                                                                                                                 |
+| `register`         | `kind` + per-kind fields                 | Register content; mints a handle and its first instance.                                                                                                                                                    |
+| `new_instance`     | `handle`                                 | Mint an additional instance on a handle this connection owns.                                                                                                                                               |
+| `unregister`       | `handle`                                 | Release a handle owned by this connection; removes its mounted views.                                                                                                                                       |
+| `reply`            | `reqId`, `ok`, `value?`, `error?`        | Answer a host `call` (use the `call`'s `reqId`).                                                                                                                                                            |
+| `emit`             | `handle`, `event`, `payload`             | Push an event to every page mounted from the handle (delivered to `window.orzma.on`). Ignored for a `url` view without the bridge.                                                                          |
+| `focus`            | `instance` (string or `null`)            | Set app-owned focus to a mounted, interactive placement, or `null` to blur. Focusing a placement also makes its pane the active pane; a blur leaves the active pane unchanged.                              |
+| `navigate`         | `instance`, `action`                     | Navigate one mounted placement in place.                                                                                                                                                                    |
+| `mount`            | `instance`, `row`, `col`, `rows`, `cols` | Mount one placement at a 0-based cell of the pane's active screen, the socket form of the APC `mount` (see below).                                                                                          |
+| `unmount`          | `instance`                               | Remove one placement, whether the socket `mount` or the APC `mount` placed it.                                                                                                                              |
+| `set_forward_keys` | `handle`, `keys` (array of chords)       | Replace the forward keys of a handle this connection owns, on the registration and on every mounted placement; later mounts carry the new list. No reply; a handle this connection does not own is ignored. |
+
+Only `register` and `new_instance` are answered. The host silently ignores any
+other op it refuses, such as one naming a handle or instance this connection
+does not own.
 
 `navigate.action` is one of the strings `"back"`, `"forward"`, `"reload"`, or
 the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
@@ -150,11 +162,11 @@ the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
 
 `register` carries a `kind` discriminator and its fields:
 
-| `kind` | Required | Optional (default) | Served at |
-| --- | --- | --- | --- |
-| `dir` | `root` (absolute dir path), `entry` (safe relative path, e.g. `index.html`) | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/` |
-| `inline` | `html` (full document, ≤ 4 MiB) | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `orzma://<handle>/index.html` |
-| `url` | `url` (`http`/`https` only) | `interactive` (`true`), `bridge` (`false`), `forward_keys` (`[]`), `preload` (`[]`) | the remote URL directly (no `orzma://` origin) |
+| `kind`   | Required                                                                    | Optional (default)                                                                  | Served at                                      |
+| -------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `dir`    | `root` (absolute dir path), `entry` (safe relative path, e.g. `index.html`) | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`)                     | `orzma://<handle>/<entry>`                     |
+| `inline` | `html` (full document, ≤ 4 MiB)                                             | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`)                     | `orzma://<handle>/index.html`                  |
+| `url`    | `url` (`http`/`https` only)                                                 | `interactive` (`true`), `bridge` (`false`), `forward_keys` (`[]`), `preload` (`[]`) | the remote URL directly (no `orzma://` origin) |
 
 - `interactive` — whether the mounted view accepts pointer/keyboard input.
 - `forward_keys` — the initial [forward keys](#forward-keys); replace them
@@ -167,14 +179,17 @@ the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
 
 ### Focus
 
-A pointer press inside a mounted interactive view's rect always gives that
-view keyboard focus and makes its pane the active pane. While a view holds
-focus, the host delivers keys to the page, except the view's
-[forward keys](#forward-keys), which go to the pane's PTY instead.
+Outside vi mode, a pointer press inside a mounted interactive view's rect
+gives that view keyboard focus and makes its pane the active pane, and a press
+on the terminal outside every view's rect gives the keyboard back to the
+terminal. While a view holds focus, the host delivers keys to the page, except
+the view's [forward keys](#forward-keys), which go to the pane's PTY instead,
+and orzma's `<Leader>` shortcuts and release-focus shortcut, which still run.
 
-A `focus` op moves focus to a placement this connection owns, or, with
-`null`, takes it back from whichever view in this connection's pane holds
-it. The active pane does not change on a blur.
+A `focus` op moves focus to a mounted, interactive placement this connection
+owns, or, with `null`, takes it back from whichever view in this connection's
+pane holds it. A `focus` naming an unmounted or non-interactive placement is
+ignored. The active pane does not change on a blur.
 
 Every change is reported to the program that registered the placement with a
 `focus_changed` push, whatever caused it: a click, a `focus` op, vi mode,
@@ -191,7 +206,7 @@ the program and never the page. `register` carries the initial list;
 `set_forward_keys` replaces it wholesale. Each chord is:
 
 ```json
-{"mods":["alt"],"key":"h"}
+{ "mods": ["alt"], "key": "h" }
 ```
 
 `mods` is any subset of `"alt"`, `"ctrl"`, `"shift"`, `"meta"`. `key` is one of:
@@ -199,7 +214,8 @@ the program and never the page. `register` carries the initial list;
 - a lowercase letter `a`–`z`, a digit `0`–`9`, `tab`, `backtab`, `f1`–`f12`,
   `esc`, `" "` (space), `up`, `down`, `left`, `right`, `pageup`, `pagedown`,
   `home`, `end`, `enter`, `backspace`, `delete` — matched against the physical
-  key with the exact modifier set;
+  key with the exact modifier set. `backtab` names the same key as `tab`, so
+  include `"shift"` in `mods` to match Shift+Tab;
 - one ASCII punctuation character such as `/`, `?`, `[`, `]`, `:` — matched
   against the character the key produced, whichever key produced it, with
   Shift ignored and the other modifiers exact. Characters typed through a dead
@@ -214,12 +230,12 @@ still reach the page.
 
 Every host push carries an `op`:
 
-| `op` | Fields | Meaning / response |
-| --- | --- | --- |
-| `call` | `handle`, `instance`, `reqId`, `method`, `params` | A page `window.orzma.call(method, params)`. Respond with a `reply` carrying the same `reqId`. |
-| `event` | `handle`, `event`, `payload` | A page `window.orzma.emit(event, payload)`. Fire-and-forget; no response. |
-| `compositing` | `handle`, `instance`, `active` (bool) | The placement first composited (`true`) or was unmounted after compositing (`false`). |
-| `focus_changed` | `handle`, `instance`, `focused` (bool) | The placement gained (`true`) or lost (`false`) keyboard focus. A move between placements sends `false` for the old one before `true` for the new one. |
+| `op`            | Fields                                            | Meaning / response                                                                                                                                     |
+| --------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `call`          | `handle`, `instance`, `reqId`, `method`, `params` | A page `window.orzma.call(method, params)`. Respond with a `reply` carrying the same `reqId`.                                                          |
+| `event`         | `handle`, `event`, `payload`                      | A page `window.orzma.emit(event, payload)`. Fire-and-forget; no response.                                                                              |
+| `compositing`   | `handle`, `instance`, `active` (bool)             | The placement first appeared on screen (`true`), or was unmounted after that (`false`). Only a view with the bridge gets this push.                    |
+| `focus_changed` | `handle`, `instance`, `focused` (bool)            | The placement gained (`true`) or lost (`false`) keyboard focus. A move between placements sends `false` for the old one before `true` for the new one. |
 
 `call` names the instance whose page called; `event` does not, because a
 program reads events per handle rather than per placement. A program running
@@ -232,8 +248,9 @@ Two directional details that are easy to get wrong:
   program as `op:"event"`. A program's own `emit` message (`op:"emit"`) is
   delivered to pages' `window.orzma.on(name, …)`. Same idea ("named event"), two
   `op` values depending on direction.
-- **`urlChanged`.** For a `url` view, the host reports top-level address changes
-  as an `op:"call"` with `method:"urlChanged"` and `params:{"url":"<new>"}`.
+- **`urlChanged`.** For a `url` view registered with `bridge:true`, the host
+  reports top-level address changes as an `op:"call"` with
+  `method:"urlChanged"` and `params:{"url":"<new>"}`.
   Despite the `call` shape it is fire-and-forget — any `reply` is discarded. Use
   it to track page-driven navigation.
 
@@ -245,17 +262,17 @@ registration, and the instance is its first placement. A successful
 `new_instance` replies `{"ok":true,"instance":"<instance>"}`. A rejected request
 of either kind replies `{"ok":false,"error":"<code>"}`:
 
-| `error` | Cause |
-| --- | --- |
-| `invalid_root` | `dir.root` is not an absolute path to an existing directory. |
-| `unsafe_entry` | `dir.entry` is empty, absolute, or contains `..`/`.`. |
-| `html_too_large` | `inline.html` exceeds 4 MiB. |
-| `invalid_url` | `url.url` does not parse or has no host. |
-| `unsupported_scheme` | `url.url` is not `http`/`https`. |
-| `unknown_handle` | `new_instance.handle` names no live registration. |
-| `not_owner` | `new_instance.handle` is registered, but by another connection. |
-| `owner_gone` | The register request's pane has already closed. |
-| `internal` | The host failed to process the request. |
+| `error`              | Cause                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------ |
+| `invalid_root`       | `dir.root` is not an absolute path to an existing directory.                               |
+| `unsafe_entry`       | `dir.entry` is empty or absolute, or contains a `..` component or a leading `.` component. |
+| `html_too_large`     | `inline.html` exceeds 4 MiB.                                                               |
+| `invalid_url`        | `url.url` does not parse or has no host.                                                   |
+| `unsupported_scheme` | `url.url` is not `http`/`https`.                                                           |
+| `unknown_handle`     | `new_instance.handle` names no live registration.                                          |
+| `not_owner`          | `new_instance.handle` is registered, but by another connection.                            |
+| `owner_gone`         | The register request's pane has already closed.                                            |
+| `internal`           | The host failed to process the request.                                                    |
 
 ### Handle semantics
 
@@ -263,9 +280,9 @@ A handle is opaque, unique per registration, and lowercase: 128 CSPRNG bits
 base32-encoded over the alphabet `a-z2-7`, which keeps it spellable as a URL
 host. That encoding is unpadded, so a handle is always 26 characters. Treat
 it as a token: do not parse it. Each handle owns one isolated
-`orzma://<handle>/` origin, and it is what `unregister`, `emit`, and
-`new_instance` address. A handle is never mounted — a mount addresses an
-instance.
+`orzma://<handle>/` origin, and it is what `unregister`, `emit`,
+`set_forward_keys`, and `new_instance` address. A handle is never mounted — a
+mount addresses an instance.
 
 ### Instance semantics
 
@@ -277,10 +294,11 @@ additional one — so uniqueness is structural and nothing on the wire negotiate
 it.
 
 An instance stays valid for as long as its handle is registered, whether or not
-it is currently mounted. Mounting an instance that is already live updates its
-rectangle in place and leaves the page untouched; mounting one after it was
-unmounted builds the page again from scratch. Every instance of a handle serves
-that handle's registered content, and each one mounts independently.
+it is currently mounted. Mounting an instance that is already live moves and
+resizes its rectangle to the new mount and leaves the page untouched; mounting
+one after it was unmounted builds the page again from scratch. Every instance
+of a handle serves that handle's registered content, and each one mounts
+independently.
 
 ### Example exchange
 
@@ -311,9 +329,10 @@ mount:    \x1b_Omount;n=<instance>,r=<rows>,c=<cols>\x1b\
 unmount:  \x1b_Ounmount;n=<instance>\x1b\
 ```
 
-The payload is at most 1024 bytes. A multi-byte character inside a key or a
-value makes that field malformed, but one outside a key or a value is
-silently dropped by the terminal's APC collector rather than rejected.
+The payload is at most 1024 bytes. Keep it to ASCII: the terminal does not
+decode UTF-8 inside an APC. It silently drops some bytes of a multi-byte
+character, and a byte in the range `0x80`–`0x9F`, which many multi-byte
+characters contain, ends the sequence early and shows the rest of it as text.
 
 ### Socket form
 
@@ -345,7 +364,8 @@ ESC _ O mount ; n=<instance>,r=<rows>,c=<cols> ST
 
 - `instance` — an instance from `register` or `new_instance`; exactly 32
   lowercase hex digits.
-- `rows` — decimal `1`–`200`. `cols` — decimal `1`–`400`. Digits only, no sign.
+- `rows` — decimal `1`–`200`. `cols` — decimal `1`–`400`. Write plain decimal
+  digits.
 
 All three keys are required and order-independent (`c=80,n=<instance>,r=24` is
 the same mount as `n=<instance>,r=24,c=80`). A repeated key, an unknown key —
@@ -361,8 +381,8 @@ the cursor.
 ESC _ O unmount [ ; n=<instance> ] ST
 ```
 
-- No params section → unmount every inline placement this program has on the
-  terminal.
+- No params section → unmount every placement on this terminal, on both
+  screens, whichever program in the pane mounted it.
 - `n=` → unmount that one placement.
 
 `n` is the only key an unmount accepts, so no key-ordering rule applies. An
@@ -404,7 +424,8 @@ handle's origin. Each handle is its own isolated origin.
 - **`dir`** — files are served from the registered `root`. Requests that escape
   the root — a `..` or `.` path component, an absolute path, or their
   percent-encoded forms — are rejected; each file is capped at 64 MiB; the
-  content type is inferred from the file extension.
+  content type is inferred from the file extension. The check looks at the
+  path only, so a symlink inside the root is followed wherever it points.
 - **`inline`** — the single registered document is served only at `index.html`;
   any subresource request returns 404. Use `dir` for multi-file content.
 - **`url`** — the remote `http(s)` page is loaded directly and has **no**
@@ -418,18 +439,25 @@ registered with `bridge:true`. A page should feature-detect before using it.
 
 ### API
 
-| Method | Returns | Meaning |
-| --- | --- | --- |
+| Method                  | Returns   | Meaning                                                                                          |
+| ----------------------- | --------- | ------------------------------------------------------------------------------------------------ |
 | `call(method, params?)` | `Promise` | Invoke a program method; resolves with the program's `reply` value, rejects with `Error(error)`. |
-| `on(event, handler)` | `void` | Subscribe to a program `emit`. |
-| `off(event, handler)` | `void` | Remove a handler by reference. |
-| `emit(event, payload?)` | `void` | Send a one-way event to the program (arrives as `op:"event"`). |
+| `on(event, handler)`    | `void`    | Subscribe to a program `emit`.                                                                   |
+| `off(event, handler)`   | `void`    | Remove a handler by reference.                                                                   |
+| `emit(event, payload?)` | `void`    | Send a one-way event to the program (arrives as `op:"event"`).                                   |
 
 A `call` has **no client-side timeout** — if the program never replies, the
 Promise stays pending. The host injects a rejection when it cannot route the
-call: `no_owner` (the view has no registering connection), `owner_unavailable`
-(the connection's writer is gone), or `owner_disconnected` (the program
-disconnected with the call in flight).
+call: `no_owner` (the page has no bridge, or its placement was unmounted),
+`owner_unavailable` (the program's connection can no longer be written to, or
+orzma's multiplexer has stopped), or `owner_disconnected` (the program
+disconnected with the call in flight). A `call` whose method is not a string
+rejects at once with a `TypeError`.
+
+The bridge subscribes one handler of its own: a program `emit` named `scroll`
+with the payload `{"action":"<action>"}`, where `<action>` is `down`, `up`,
+`halfDown`, `halfUp`, `pageDown`, `pageUp`, `top`, or `bottom`, scrolls the
+page. It does nothing when the page has registered its own `scroll` handler.
 
 ### Binary round-trip
 
@@ -464,17 +492,35 @@ if (isOrzmaAvailable()) {
   from it, and removes its mounted views.
 - Closing the control connection purges all of that program's handles, removes
   their views, and rejects every in-flight `call` with `owner_disconnected`.
-- The `compositing` push reports one placement's first paint (`active:true`) and
-  its teardown after compositing (`active:false`), naming both the `handle` and
-  the `instance` it belongs to.
+  The host treats the end of the program's sending side as a close, so a
+  program must not shut down its write half while it wants its registrations
+  to live.
+- When the pane a program runs in closes, the host releases every registration
+  made from that pane and removes its views, although the program's connection
+  stays open. The program gets `compositing` `false` and `focus_changed`
+  `false` for the placements that had them. Afterwards a `register` fails with
+  `owner_gone`, and requests naming the released handles or instances are
+  ignored or fail with `unknown_handle`.
+- The terminal also unmounts a placement on its own when the row it is anchored
+  to leaves the terminal (it scrolls out of the scrollback, the terminal is
+  reset, or a resize drops it), and when the program leaves the alternate
+  screen the placement was mounted on. The instance stays valid and can be
+  mounted again. The program learns of this only through `compositing` `false`
+  (for a bridged view) and `focus_changed` `false` (if the view held focus).
+- For a view with the bridge, the `compositing` push reports the first time
+  one placement appears on screen (`active:true`), which can be before the
+  page has painted, and its unmount after that (`active:false`). It names both
+  the `handle` and the `instance`.
 
 ## Security model
 
 - **Same user only.** The host restricts the control socket to orzma's own
   user: by peer user id on Unix, by the socket directory's DACL on Windows.
 - **Scoped to one pane.** A connection's token binds it to the pane that issued
-  `$ORZMA_TOKEN`; a program may only mount, focus, navigate, and emit to
-  registrations it made itself.
+  `$ORZMA_TOKEN`. Control-socket ops act only on registrations the connection
+  made itself; an APC `mount` takes effect only in the pane that registered the
+  instance's handle, and an APC `unmount` acts on any placement in the pane it
+  is written to.
 - **Unguessable, isolated identifiers.** Tokens, handles, and instances are all
   128-bit CSPRNG values, and each handle is its own `orzma://` origin.
 - **Authorized replies.** Back-channel `reqId`s are a shared, monotonic counter

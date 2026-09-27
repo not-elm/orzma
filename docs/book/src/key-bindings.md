@@ -90,9 +90,10 @@ Binding `paste` to `Ctrl+V` does take that key away from the program running in
 the terminal, so readline's quoted-insert and vim's visual-block mode no longer
 see it. Set `paste = "Ctrl+Shift+V"` to give it back.
 
-How `Ctrl+C` copies or interrupts, and how `Shift` works with programs that
-track the mouse, are described in
-[Terminal Features](terminal-features.md#selection-and-clipboard).
+A copy chord that uses `Ctrl` alone, such as the stock `Ctrl+C`, copies only
+while text is selected; with nothing selected, it reaches the program as usual,
+so `Ctrl+C` still interrupts. A copy chord with any other modifier, such as the
+macOS `Cmd+C`, always copies.
 
 ## Actions
 
@@ -120,39 +121,24 @@ the seven that differ elsewhere.
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side by side (vertical divider); the new pane becomes active. |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (horizontal divider); the new pane becomes active. |
 | `kill-pane` | `<Leader>p` | Kill the active pane; its shell is terminated. |
-| `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (not implemented yet). |
-| `new-window` | `<Leader>c` | Open a new window (not implemented yet). |
-| `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (not implemented yet). |
-| `next-window` | `<Leader>]` | Switch to the next window (not implemented yet). |
-| `previous-window` | `<Leader>[` | Switch to the previous window (not implemented yet). |
-| `select-window-0` | `<Leader>0` | Switch to the window at index 0 (not implemented yet). |
-| `select-window-1` | `<Leader>1` | Switch to the window at index 1 (not implemented yet). |
-| `select-window-2` | `<Leader>2` | Switch to the window at index 2 (not implemented yet). |
-| `select-window-3` | `<Leader>3` | Switch to the window at index 3 (not implemented yet). |
-| `select-window-4` | `<Leader>4` | Switch to the window at index 4 (not implemented yet). |
-| `select-window-5` | `<Leader>5` | Switch to the window at index 5 (not implemented yet). |
-| `select-window-6` | `<Leader>6` | Switch to the window at index 6 (not implemented yet). |
-| `select-window-7` | `<Leader>7` | Switch to the window at index 7 (not implemented yet). |
-| `select-window-8` | `<Leader>8` | Switch to the window at index 8 (not implemented yet). |
-| `select-window-9` | `<Leader>9` | Switch to the window at index 9 (not implemented yet). |
-| `rename-window` | `<Leader>r` | Open the rename prompt for the active window (not implemented yet). |
 
-> [!NOTE]
-> The actions marked "not implemented yet" are accepted and validated at
-> startup, but pressing them does nothing, whether they are bound directly or
-> behind the leader.
+The window actions (`new-window`, `next-window`, `select-window-0` and the
+rest), `rename-window`, and `zoom-pane` that orzma 0.1.0 accepted have been
+removed. A configuration that still sets one of them is ignored as a whole (see
+[Validation](configuration.md#validation)), so delete those lines when you
+upgrade.
 
 ## Conflicts and turning the leader off
 
 Two consequences of the stock `<Leader>` defaults worth knowing:
 
 - **Rebinding a `<Leader>` chord that a stock default already uses** (e.g.
-  `enter-vi-mode = "<Leader>c"`, which collides with the default
-  `new-window = "<Leader>c"`) is a startup validation error naming both
-  actions. Unbind the stock default explicitly (`new-window = ""`) or pick a
-  free chord.
+  `split-vertical-pane = "<Leader>h"`, which collides with the default
+  `select-left-pane = "<Leader>h"`) is a startup validation error naming both
+  actions. Unbind the stock default explicitly (`select-left-pane = ""`) or
+  pick a free chord.
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
-  stock defaults that includes all 29 leader-bound actions above, silently
+  stock defaults that includes all 13 leader-bound actions above, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g.
   `split-vertical-pane = "Ctrl+Shift+I"`.
@@ -181,8 +167,8 @@ The stock `[shortcuts]` table, with the macOS defaults:
 # the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
 # tap the modifier with no other key, then the next key). Defaults to "Cmd" on
 # macOS and "Alt" elsewhere, and is active only when at least one action is
-# bound to "<Leader>..." — the stock defaults below already bind more than two
-# dozen actions to "<Leader>...", so the tap leader is armed out of the box.
+# bound to "<Leader>..." — the stock defaults below already bind thirteen
+# actions to "<Leader>...", so the tap leader is armed out of the box.
 # Set "" to disable it. "Shift" is not allowed as a tap.
 leader = "Cmd"
 # Modifier-tap window (ms): a press+release within this time, with no intervening
@@ -216,7 +202,6 @@ select-right-pane     = "<Leader>l"    # select-pane -R
 split-vertical-pane   = "<Leader>i"    # split-window -h (side-by-side)
 split-horizontal-pane = "<Leader>o"    # split-window -v (stacked)
 kill-pane             = "<Leader>p"    # kill-pane
-zoom-pane             = "<Leader>z"    # resize-pane -Z
 resize-left-pane      = "<Leader:r>Shift+H"  # resize-pane -L 5 (repeatable)
 resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
 resize-up-pane        = "<Leader:r>Shift+K"  # resize-pane -U 5 (repeatable)
@@ -226,23 +211,4 @@ resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
 increase-font-size    = "Cmd+Plus"   # Ctrl+Plus off macOS
 decrease-font-size    = "Cmd+-"      # Ctrl+- off macOS
 reset-font-size       = "Cmd+0"      # Ctrl+0 off macOS
-
-# --- window actions (not implemented yet) ---
-new-window            = "<Leader>c"        # new-window
-kill-window           = "<Leader>Shift+X"  # kill-window, after a confirm prompt
-next-window           = "<Leader>]"        # next-window
-previous-window       = "<Leader>["        # previous-window
-select-window-0       = "<Leader>0"        # select-window at display index 0
-select-window-1       = "<Leader>1"
-select-window-2       = "<Leader>2"
-select-window-3       = "<Leader>3"
-select-window-4       = "<Leader>4"
-select-window-5       = "<Leader>5"
-select-window-6       = "<Leader>6"
-select-window-7       = "<Leader>7"
-select-window-8       = "<Leader>8"
-select-window-9       = "<Leader>9"
-
-# --- rename action (not implemented yet) ---
-rename-window         = "<Leader>r"        # opens the rename prompt for the active window
 ```

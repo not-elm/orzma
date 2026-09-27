@@ -14,12 +14,11 @@ and exchange messages with it.
 The user guide is published at <https://not-elm.github.io/orzma/> with each
 release. Its sources are in [`docs/book/src`](docs/book/src).
 
-- [Getting Started](https://not-elm.github.io/orzma/) — install orzma and take
-  the first steps.
+- [Getting Started](https://not-elm.github.io/orzma/) — install orzma.
 - [Configuration](https://not-elm.github.io/orzma/configuration.html) and
   [Key Bindings](https://not-elm.github.io/orzma/key-bindings.html).
 - [Building Webview Apps](https://not-elm.github.io/orzma/building-webview-apps.html)
-  and the [Protocol Reference](https://not-elm.github.io/orzma/protocol-reference.html).
+  and the [Webview Protocol](https://not-elm.github.io/orzma/protocol-reference.html).
 
 ## Installation
 

@@ -94,30 +94,3 @@ kept.
 
 Every install includes the [companion apps](companion-apps.md) `orzmd` and
 `orzbrowser`. To build orzma from source, see [Contributing](contributing.md).
-
-## First steps
-
-Start orzma. It opens one pane that runs your shell.
-
-Pane commands start with the *leader*: tap `Cmd` on macOS or `Alt` on Windows
-and Linux — press and release it without any other key — and then press the
-command's key.
-
-| Keys | Action |
-| --- | --- |
-| Leader, then `i` | Split the pane side by side. |
-| Leader, then `o` | Split the pane top and bottom. |
-| Leader, then `h` / `j` / `k` / `l` | Move to the pane on the left / below / above / on the right. |
-| Leader, then `p` | Close the active pane. |
-
-To see a web page inside the terminal, open a Markdown file with the bundled
-viewer. In a directory that has a `README.md`, such as a project you have
-cloned, run the command below, and press `q` to quit it:
-
-```sh
-orzmd README.md
-```
-
-orzma reads its settings from `~/.config/orzma/config.toml`
-(`%USERPROFILE%\.config\orzma\config.toml` on Windows). The file is optional;
-see [Configuration](configuration.md) for every setting.

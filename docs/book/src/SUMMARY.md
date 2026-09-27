@@ -5,8 +5,6 @@
 # User Guide
 
 - [Multiplexer](multiplexer.md)
-- [Webviews](webviews.md)
-- [Terminal Features](terminal-features.md)
 - [Vi Mode](vi-mode.md)
 - [Companion Apps](companion-apps.md)
 
@@ -17,6 +15,6 @@
 
 # Developer Guide
 
-- [Contributing](contributing.md)
 - [Building Webview Apps](building-webview-apps.md)
-- [Protocol Reference](protocol-reference.md)
+- [Webview Protocol](protocol-reference.md)
+- [Contributing](contributing.md)

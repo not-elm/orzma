@@ -62,8 +62,3 @@ pane, the new pane starts in your home directory.
 
 Panes that do not have focus are drawn with a tint. Change or turn off the
 effect in the [`[inactive_pane]`](configuration.md#inactive_pane) table.
-
-> [!NOTE]
-> Windows (groups of panes you switch between) and zooming a pane are not
-> implemented yet. Their actions, such as `new-window` and `zoom-pane`, are
-> accepted in the configuration but do nothing.

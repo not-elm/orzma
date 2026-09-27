@@ -184,5 +184,5 @@ if (isOrzmaAvailable()) {
 ## Next steps
 
 - The full API is on [docs.rs](https://docs.rs/ratatui_orzma).
-- The [Protocol Reference](protocol-reference.md) describes the wire protocol,
-  for writing a client in another language.
+- The [Webview Protocol](protocol-reference.md) page describes the wire
+  protocol, for writing a client in another language.

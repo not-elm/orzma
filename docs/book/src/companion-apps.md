@@ -1,8 +1,8 @@
 # Companion Apps
 
-orzma comes with two terminal apps built on [webviews](webviews.md) with the
-`ratatui_orzma` SDK: **orzmd**, a Markdown viewer, and **orzbrowser**, a
-keyboard-driven browser. Homebrew links both into your `PATH`, and the
+orzma comes with two terminal apps that show web pages inside the terminal,
+built with the `ratatui_orzma` SDK: **orzmd**, a Markdown viewer, and
+**orzbrowser**, a keyboard-driven browser. Homebrew links both into your `PATH`, and the
 Windows installer and the Linux `.deb` add them to it; the Linux tarball keeps
 them in `~/.local/share/orzma` (see [Getting Started](getting-started.md#linux)).
 To build them from a clone of the repository instead, run `just install-apps`.
