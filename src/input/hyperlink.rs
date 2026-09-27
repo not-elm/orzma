@@ -1,8 +1,10 @@
-//! OSC 8 hyperlink hover detection and cursor-icon control across every
-//! terminal surface (the shell terminal and webview hosts): the only
-//! writer of `HyperlinkHoverState` and the window's `CursorIcon`.
+//! OSC 8 hyperlink hover and cursor-icon control: this module alone writes
+//! `HyperlinkHoverState`, and over an inline webview that owns the pointer it
+//! leaves `CursorIcon` to CEF except to restore CEF's last cursor on entry.
 
-use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled};
+use crate::input::bindings::OrzmaMouseConfig;
+use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled, WebviewMouseDisabled};
+use crate::input::mouse::TerminalSurfaces;
 use crate::input::mouse::separator::{GrabbedSeparator, SeparatorHit, SeparatorNodes};
 use crate::input::{InputPhase, current_modifiers};
 use crate::surface::OrzmaTerminal;
@@ -16,7 +18,6 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
-use bevy_cef::prelude::WebviewSource;
 use bevy_orzma_tty_renderer::prelude::{
     HyperlinkHoverState, TerminalCellMetricsResource, TerminalCells, TerminalView,
 };
@@ -29,14 +30,17 @@ pub(super) struct HyperlinkInputPlugin;
 
 impl Plugin for HyperlinkInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, insert_initial_cursor_icon)
+        app.init_resource::<CefCursor>()
+            .add_message::<CursorIconInserted>()
+            .add_systems(Startup, watch_primary_window_cursor)
             .add_systems(
                 Update,
                 hyperlink_hover_and_cursor
                     .run_if(
                         on_message::<MouseMotion>
                             .or_else(on_message::<CursorMoved>)
-                            .or_else(on_message::<KeyboardInput>),
+                            .or_else(on_message::<KeyboardInput>)
+                            .or_else(on_message::<CursorIconInserted>),
                     )
                     .in_set(InputPhase::Hover),
             );
@@ -53,7 +57,8 @@ pub(crate) fn link_modifier_held(mods: &Modifiers) -> bool {
     }
 }
 
-/// Every mouse-enabled `OrzmaTerminal` surface.
+/// Every terminal surface, with the input gates that decide who owns the
+/// pointer over it.
 type HoverSurfaces<'w, 's> = Query<
     'w,
     's,
@@ -62,25 +67,29 @@ type HoverSurfaces<'w, 's> = Query<
         &'static ComputedNode,
         &'static ComputedStackIndex,
         &'static UiGlobalTransform,
+        Has<TerminalMouseDisabled>,
+        Has<MouseClaimedByWebview>,
+        Has<WebviewMouseDisabled>,
     ),
-    (
-        With<OrzmaTerminal>,
-        Without<TerminalMouseDisabled>,
-        Without<MouseClaimedByWebview>,
-    ),
+    With<OrzmaTerminal>,
 >;
 
-/// Skips any surface with input suppressed (`TerminalMouseDisabled`) or claimed by a
-/// webview (`MouseClaimedByWebview`), so hover never advertises a link the
-/// mouse dispatcher would refuse to open. A divider the pointer holds or
-/// hovers claims the cursor before any surface is read, leaving the hover
-/// state empty; a held divider keeps the cursor even while the pointer
-/// reports no position, which is what a drag past the window's edge does.
+/// Over a surface whose inline webview owns the pointer
+/// (`MouseClaimedByWebview` without `WebviewMouseDisabled`), leaves the cursor
+/// to CEF and writes CEF's last cursor once on the frame the pointer enters.
+/// Over a claimed surface whose webview input is disabled, or an unclaimed
+/// surface with `TerminalMouseDisabled`, shows the arrow. Neither advertises a
+/// link. A divider the pointer holds or hovers claims the cursor before any
+/// surface is read, leaving the hover state empty; a held divider keeps the
+/// cursor even while the pointer reports no position, which is what a drag past
+/// the window's edge does.
 fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
+    mut was_over_webview: Local<bool>,
     windows: Query<&Window, With<PrimaryWindow>>,
     targets: HoverTargetParams,
+    cef_cursor: Res<CefCursor>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let Some(cursor_phys) = windows
@@ -89,6 +98,7 @@ fn hyperlink_hover_and_cursor(
         .and_then(|window| Some(window.cursor_position()? * window.scale_factor()))
     else {
         reset_hover_state(&mut hover);
+        *was_over_webview = false;
         apply_cursor(&mut cursor_icons, cursor_decision(targets.unlocated()));
         return;
     };
@@ -100,7 +110,15 @@ fn hyperlink_hover_and_cursor(
     hover.hyperlink_id = None;
 
     let target = targets.target(&mut hover, cursor_phys);
-    apply_cursor(&mut cursor_icons, cursor_decision(target));
+    let over_webview = matches!(target, HoverTarget::Webview);
+    let entering_webview = over_webview && !*was_over_webview;
+    *was_over_webview = over_webview;
+    let decision = if entering_webview {
+        cef_cursor.0
+    } else {
+        cursor_decision(target)
+    };
+    apply_cursor(&mut cursor_icons, decision);
 }
 
 /// Clears every per-cursor field of the hover state, including
@@ -143,8 +161,10 @@ fn write_cursor_icon(
 }
 
 /// Which region the mouse is over, distilled to what the cursor needs.
-/// `Default` covers everything that is neither terminal grid nor a CEF
-/// render area (chrome, gaps, an unobservable window).
+/// `Webview` is a page that owns the pointer, whose cursor is CEF's.
+/// `Default` covers everything else that is not a terminal grid: chrome,
+/// gaps, an unobservable window, and surfaces whose mouse input is
+/// suppressed.
 enum HoverTarget {
     Separator(SplitOrientation),
     Terminal { has_link: bool, modifier_held: bool },
@@ -157,12 +177,14 @@ enum HoverTarget {
 #[derive(SystemParam)]
 struct HoverTargetParams<'w, 's> {
     surfaces: HoverSurfaces<'w, 's>,
+    /// The surfaces a new press can reach, the same set a divider grab needs.
+    pressable: TerminalSurfaces<'w, 's>,
     terminals: Query<'w, 's, (&'static TerminalView, &'static TerminalCells)>,
-    webview_hosts: Query<'w, 's, &'static WebviewSource>,
     separators: SeparatorNodes<'w, 's>,
     grabbed: Query<'w, 's, &'static OrzmuxSeparator, With<GrabbedSeparator>>,
     metrics: Res<'w, TerminalCellMetricsResource>,
     geometry: Option<Res<'w, PaneGeometry>>,
+    mouse: Res<'w, OrzmaMouseConfig>,
 }
 
 impl HoverTargetParams<'_, '_> {
@@ -194,32 +216,53 @@ impl HoverTargetParams<'_, '_> {
 
     /// The orientation of the divider whose grab band contains
     /// `cursor_phys`, in window physical px, or `None` while the pane
-    /// geometry is unknown.
+    /// geometry is unknown or no surface accepts a new press.
     fn hovered(&self, cursor_phys: Vec2) -> Option<SplitOrientation> {
         let geometry = self.geometry.as_deref()?;
-        SeparatorHit::at(cursor_phys, geometry, self.separators.iter()).map(|hit| hit.orientation)
+        if self.pressable.is_empty() {
+            return None;
+        }
+        SeparatorHit::at(
+            cursor_phys,
+            geometry,
+            self.mouse.divider_grab_tolerance_px,
+            self.separators.iter(),
+        )
+        .map(|hit| hit.orientation)
     }
 
-    /// The region for the topmost mouse-enabled surface under
-    /// `cursor_phys`, in window physical px. Records that surface and
-    /// the hyperlink id of the cell under the pointer in `hover`,
-    /// leaving both untouched over anything but a terminal grid.
+    /// The region for the topmost terminal surface under `cursor_phys`, in
+    /// window physical px. Over a terminal grid whose mouse input is live,
+    /// records that surface and the hyperlink id of the cell under the
+    /// pointer in `hover`; elsewhere leaves both untouched.
     fn over_surface(&self, hover: &mut HyperlinkHoverState, cursor_phys: Vec2) -> HoverTarget {
-        let Some(entity) = topmost_surface_at(cursor_phys, self.surfaces.iter()) else {
+        let candidates = self
+            .surfaces
+            .iter()
+            .map(|(entity, node, stack, transform, ..)| (entity, node, stack, transform));
+        let Some(entity) = topmost_surface_at(cursor_phys, candidates) else {
             return HoverTarget::Default;
         };
-        if self.webview_hosts.contains(entity) {
-            return HoverTarget::Webview;
+        let Ok((_, node, _, transform, mouse_disabled, claimed, webview_disabled)) =
+            self.surfaces.get(entity)
+        else {
+            return HoverTarget::Default;
+        };
+        if claimed {
+            return if webview_disabled {
+                HoverTarget::Default
+            } else {
+                HoverTarget::Webview
+            };
+        }
+        if mouse_disabled {
+            return HoverTarget::Default;
         }
         let Ok((view, cells)) = self.terminals.get(entity) else {
             return HoverTarget::Default;
         };
         let (cell_w, cell_h) = cell_pitch_phys(&self.metrics.metrics);
-        let id = self
-            .surfaces
-            .get(entity)
-            .ok()
-            .and_then(|(_, node, _, transform)| phys_to_pane_local(node, transform, cursor_phys))
+        let id = phys_to_pane_local(node, transform, cursor_phys)
             .map(|local| cell_at_local(local, cell_w, cell_h, view.cols, view.rows))
             .and_then(|(col, row, _side)| {
                 cells.hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
@@ -251,19 +294,55 @@ fn cursor_decision(target: HoverTarget) -> Option<SystemCursorIcon> {
     }
 }
 
-/// Inserts an initial `CursorIcon::System(SystemCursorIcon::Default)`
-/// (the arrow) on the primary window so the hover system can mutate the
-/// component without first having to insert it. The arrow is the default
-/// for non-terminal regions; the hover system narrows it to the I-beam
-/// over terminal text.
-fn insert_initial_cursor_icon(
-    mut commands: Commands,
-    windows: Query<Entity, (With<PrimaryWindow>, Without<CursorIcon>)>,
+/// The system cursor last inserted on the primary window: CEF's latest
+/// choice, or the startup arrow before CEF asked for any.
+// TODO: drop this and the restore on entering a page once the webview
+// router sends CEF a mouse-leave when the pointer exits a page; Blink then
+// reports its cursor again on re-entry.
+#[derive(Resource, Default)]
+struct CefCursor(Option<SystemCursorIcon>);
+
+/// An insert of `CursorIcon` on the primary window, which may have replaced
+/// the cursor the hover system chose.
+#[derive(Message)]
+struct CursorIconInserted;
+
+/// Records the system cursor inserted on the primary window as CEF's latest
+/// choice, and reports every insert as a `CursorIconInserted`.
+fn record_cef_cursor(
+    ev: On<Insert, CursorIcon>,
+    mut cef_cursor: ResMut<CefCursor>,
+    mut inserted: MessageWriter<CursorIconInserted>,
+    windows: Query<&CursorIcon, With<PrimaryWindow>>,
 ) {
-    for window in windows.iter() {
-        commands
-            .entity(window)
-            .insert(CursorIcon::System(SystemCursorIcon::Default));
+    // NOTE: only `bevy_cef` (and the startup arrow) insert `CursorIcon`; the
+    // hover system writes it through `DerefMut`, which fires no `Insert`. A
+    // hover write that inserted instead would be recorded as CEF's choice.
+    if let Ok(CursorIcon::System(icon)) = windows.get(ev.event_target())
+        && cef_cursor.0 != Some(*icon)
+    {
+        cef_cursor.0 = Some(*icon);
+    }
+    inserted.write(CursorIconInserted);
+}
+
+/// Attaches `record_cef_cursor` to the primary window, then inserts the
+/// arrow on a window that has no `CursorIcon` yet, so the hover system can
+/// mutate the component without inserting it. The observer records that
+/// arrow as `CefCursor`'s first value.
+fn watch_primary_window_cursor(
+    mut commands: Commands,
+    windows: Query<(Entity, Has<CursorIcon>), With<PrimaryWindow>>,
+) {
+    for (window, has_cursor) in windows.iter() {
+        let mut window = commands.entity(window);
+        // NOTE: the observer must be attached before the arrow is inserted, or
+        // `CefCursor` stays `None` and the first entry into a page restores
+        // nothing.
+        window.observe(record_cef_cursor);
+        if !has_cursor {
+            window.insert(CursorIcon::System(SystemCursorIcon::Default));
+        }
     }
 }
 
@@ -397,6 +476,11 @@ mod tests {
         }
     }
 
+    /// Asserts that with no surface under the pointer the hover state is
+    /// cleared and the cursor shows the arrow.
+    ///
+    /// Case: the pane whose link the pointer rested on closes, and the pointer
+    /// then moves over the empty window.
     #[test]
     fn hover_with_no_panes_leaves_entity_none_and_cursor_default() {
         let mut app = App::new();
@@ -405,6 +489,8 @@ mod tests {
         app.init_resource::<HyperlinkHoverState>();
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(hover_test_metrics());
+        app.init_resource::<CefCursor>();
+        app.init_resource::<OrzmaMouseConfig>();
         app.add_systems(Update, hyperlink_hover_and_cursor);
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(10.0, 10.0)));
@@ -468,6 +554,8 @@ mod tests {
         app.init_resource::<HyperlinkHoverState>();
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(hover_test_metrics());
+        app.init_resource::<CefCursor>();
+        app.init_resource::<OrzmaMouseConfig>();
         app.add_systems(Update, hyperlink_hover_and_cursor);
 
         {
@@ -528,7 +616,7 @@ mod tests {
     }
 
     /// Asserts that a `TerminalMouseDisabled` surface is never hovered: the hover
-    /// state stays empty and the cursor keeps the default arrow even over a
+    /// state stays empty and the cursor shows the default arrow even over a
     /// linked cell.
     ///
     /// Case: the pointer crosses a hyperlink on a terminal whose mouse input
@@ -541,6 +629,8 @@ mod tests {
         app.init_resource::<HyperlinkHoverState>();
         app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(hover_test_metrics());
+        app.init_resource::<CefCursor>();
+        app.init_resource::<OrzmaMouseConfig>();
         app.add_systems(Update, hyperlink_hover_and_cursor);
 
         {
@@ -559,7 +649,7 @@ mod tests {
             .spawn((
                 window,
                 PrimaryWindow,
-                CursorIcon::System(SystemCursorIcon::Default),
+                CursorIcon::System(SystemCursorIcon::Grab),
             ))
             .id();
 
@@ -588,109 +678,305 @@ mod tests {
         assert_eq!(
             icon,
             Some(&CursorIcon::System(SystemCursorIcon::Default)),
-            "with input suppressed the cursor stays the arrow, not a link pointer"
+            "with input suppressed the cursor shows the arrow, not a link pointer"
         );
     }
 
-    /// Asserts that a `MouseClaimedByWebview` surface is never hovered: the
-    /// hover state stays empty and the cursor keeps the default arrow even
-    /// over a linked cell.
-    ///
-    /// Case: the pointer crosses a hyperlink drawn underneath a mounted
-    /// page, where the click belongs to the page rather than the terminal.
-    #[test]
-    fn hover_skips_webview_claimed_surface() {
+    /// A hover world with the pointer at `cursor` (logical px), an 8x16 px
+    /// cell, a primary window carrying the CEF-cursor recorder whose cursor
+    /// starts as `start` (recorded as CEF's), and two 80x80 terminal surfaces
+    /// side by side: a plain one at x 0..80 and one at x 80..160 carrying
+    /// `gates`. Returns the app and the window entity.
+    fn gated_hover_app(cursor: Vec2, start: SystemCursorIcon, gates: impl Bundle) -> (App, Entity) {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_message::<MouseMotion>();
-        app.init_resource::<HyperlinkHoverState>();
-        app.init_resource::<ButtonInput<KeyCode>>();
-        app.insert_resource(hover_test_metrics());
-        app.add_systems(Update, hyperlink_hover_and_cursor);
-
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            if cfg!(target_os = "macos") {
-                keys.press(KeyCode::SuperLeft);
-            } else {
-                keys.press(KeyCode::ControlLeft);
-            }
-        }
-
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseMotion>()
+            .init_resource::<HyperlinkHoverState>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<CefCursor>()
+            .init_resource::<OrzmaMouseConfig>()
+            .add_message::<CursorIconInserted>()
+            .insert_resource(hover_test_metrics())
+            .add_systems(Update, hyperlink_hover_and_cursor);
         let mut window = Window::default();
-        window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
+        window.set_cursor_position(Some(cursor));
         let window_entity = app
             .world_mut()
-            .spawn((
-                window,
-                PrimaryWindow,
-                CursorIcon::System(SystemCursorIcon::Default),
-            ))
+            .spawn((window, PrimaryWindow))
+            .observe(record_cef_cursor)
+            .insert(CursorIcon::System(start))
             .id();
-
         let (view, cells) = linked_grid();
         app.world_mut().spawn((
             OrzmaTerminal,
+            ComputedNode {
+                size: Vec2::new(80.0, 80.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(40.0, 40.0),
+            view,
+            cells,
+        ));
+        let (view, cells) = linked_grid();
+        app.world_mut().spawn((
+            OrzmaTerminal,
+            gates,
+            ComputedNode {
+                size: Vec2::new(80.0, 80.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(120.0, 40.0),
+            view,
+            cells,
+        ));
+        (app, window_entity)
+    }
+
+    fn move_cursor(app: &mut App, window: Entity, cursor: Option<Vec2>) {
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .expect("the hover world has a primary window")
+            .set_cursor_position(cursor);
+    }
+
+    fn cursor_of(app: &App, window: Entity) -> Option<CursorIcon> {
+        app.world().get::<CursorIcon>(window).cloned()
+    }
+
+    /// Asserts that the startup system gives the primary window the arrow and
+    /// records as CEF's choice only the cursors inserted on that window.
+    ///
+    /// Case: orzma starts, and bevy_cef later inserts a page's cursor on every
+    /// entity in the world, the primary window among them.
+    #[test]
+    fn only_cursors_inserted_on_the_primary_window_are_recorded() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<CefCursor>()
+            .add_message::<CursorIconInserted>()
+            .add_systems(Startup, watch_primary_window_cursor);
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        let other = app.world_mut().spawn_empty().id();
+        app.update();
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Default))
+        );
+        assert_eq!(
+            app.world().resource::<CefCursor>().0,
+            Some(SystemCursorIcon::Default)
+        );
+
+        app.world_mut()
+            .entity_mut(other)
+            .insert(CursorIcon::System(SystemCursorIcon::Wait));
+        assert_eq!(
+            app.world().resource::<CefCursor>().0,
+            Some(SystemCursorIcon::Default),
+            "an insert on another entity is not CEF's choice for the window"
+        );
+        app.world_mut()
+            .entity_mut(window)
+            .insert(CursorIcon::System(SystemCursorIcon::Pointer));
+        assert_eq!(
+            app.world().resource::<CefCursor>().0,
+            Some(SystemCursorIcon::Pointer)
+        );
+    }
+
+    /// Asserts that over a surface whose inline webview owns the pointer,
+    /// hover stays empty and the cursor CEF set is left in place.
+    ///
+    /// Case: the user moves the pointer across a link on a page mounted in
+    /// a pane, and CEF has just switched the cursor to the pointing hand.
+    #[test]
+    fn hover_leaves_the_cursor_to_cef_over_a_claimed_surface() {
+        let (mut app, window) = gated_hover_app(
+            Vec2::new(84.0, 8.0),
+            SystemCursorIcon::Pointer,
             MouseClaimedByWebview,
-            ComputedNode {
-                size: Vec2::new(80.0, 80.0),
-                ..ComputedNode::DEFAULT
-            },
-            UiGlobalTransform::from_xy(40.0, 40.0),
-            view,
-            cells,
-        ));
-
-        app.update();
-
-        let hover = app.world().resource::<HyperlinkHoverState>();
-        assert_eq!(
-            hover.entity, None,
-            "a claimed surface must not be hovered — the click belongs to the page, so no link affordance"
         );
+        app.update();
+        app.update();
+        let hover = app.world().resource::<HyperlinkHoverState>();
+        assert_eq!(hover.entity, None);
         assert_eq!(hover.hyperlink_id, None);
-        let icon = app.world().entity(window_entity).get::<CursorIcon>();
         assert_eq!(
-            icon,
-            Some(&CursorIcon::System(SystemCursorIcon::Default)),
-            "with the surface claimed by the webview the cursor stays the arrow, not a link pointer"
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Pointer))
         );
     }
 
-    /// Asserts that a surface hosting a webview is not treated as a
-    /// terminal: the hover state stays empty and the window cursor is left
-    /// untouched for CEF to own.
+    /// Asserts that a page owning an IME composition keeps the cursor CEF set
+    /// and advertises no link, even though the terminal's own mouse input is
+    /// suppressed.
     ///
-    /// Case: the pointer moves over an inline webview overlay whose page
-    /// manages its own cursor.
+    /// Case: the user is converting Japanese text in a text field on a page
+    /// mounted in a pane and moves the pointer over a link on that page.
     #[test]
-    fn hover_over_webview_host_leaves_cursor_to_cef() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_message::<MouseMotion>();
-        app.init_resource::<HyperlinkHoverState>();
-        app.init_resource::<ButtonInput<KeyCode>>();
-        app.insert_resource(hover_test_metrics());
-        app.add_systems(Update, hyperlink_hover_and_cursor);
+    fn a_page_owning_a_composition_keeps_the_cef_cursor() {
+        let (mut app, window) = gated_hover_app(
+            Vec2::new(84.0, 8.0),
+            SystemCursorIcon::Pointer,
+            (MouseClaimedByWebview, TerminalMouseDisabled),
+        );
+        app.update();
+        let hover = app.world().resource::<HyperlinkHoverState>();
+        assert_eq!(hover.entity, None);
+        assert_eq!(hover.hyperlink_id, None);
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Pointer))
+        );
+    }
 
+    /// Asserts that a claimed surface whose webview input is also disabled
+    /// shows the arrow and advertises no link.
+    ///
+    /// Case: the user enters vi mode in a pane that has a page mounted and
+    /// moves the pointer over that page.
+    #[test]
+    fn a_claimed_surface_with_webview_input_disabled_shows_the_arrow() {
+        let (mut app, window) = gated_hover_app(
+            Vec2::new(84.0, 8.0),
+            SystemCursorIcon::Pointer,
+            (
+                MouseClaimedByWebview,
+                WebviewMouseDisabled,
+                TerminalMouseDisabled,
+            ),
+        );
+        app.update();
+        assert_eq!(app.world().resource::<HyperlinkHoverState>().entity, None);
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Default))
+        );
+    }
+
+    /// Asserts that the cursor CEF last inserted is written back once on the
+    /// frame the pointer enters the page, and not again while it stays.
+    ///
+    /// Case: the user moves from the shell prompt onto a page whose link had
+    /// shown the pointing hand before, then lingers on the page.
+    #[test]
+    fn entering_a_page_restores_the_last_cef_cursor_once() {
+        let (mut app, window) = gated_hover_app(
+            Vec2::new(4.0, 8.0),
+            SystemCursorIcon::Default,
+            MouseClaimedByWebview,
+        );
+        app.world_mut()
+            .entity_mut(window)
+            .insert(CursorIcon::System(SystemCursorIcon::Pointer));
+        app.update();
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Text)),
+            "over the plain terminal the I-beam is written"
+        );
+
+        move_cursor(&mut app, window, Some(Vec2::new(84.0, 8.0)));
+        app.update();
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Pointer)),
+            "entering the page restores CEF's last cursor"
+        );
+
+        *app.world_mut()
+            .get_mut::<CursorIcon>(window)
+            .expect("the window has a cursor") = CursorIcon::System(SystemCursorIcon::Grab);
+        app.update();
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Grab)),
+            "staying on the page writes nothing"
+        );
+    }
+
+    /// Asserts that leaving the window re-arms the restore, so coming back
+    /// onto the page writes CEF's last cursor again.
+    ///
+    /// Case: the user drags the pointer off the window while over a page and
+    /// brings it back onto the same page.
+    #[test]
+    fn leaving_the_window_rearms_the_restore() {
+        let (mut app, window) = gated_hover_app(
+            Vec2::new(84.0, 8.0),
+            SystemCursorIcon::Default,
+            MouseClaimedByWebview,
+        );
+        app.world_mut()
+            .entity_mut(window)
+            .insert(CursorIcon::System(SystemCursorIcon::Pointer));
+        app.update();
+
+        move_cursor(&mut app, window, None);
+        app.update();
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Default)),
+            "outside the window the arrow is written"
+        );
+        move_cursor(&mut app, window, Some(Vec2::new(84.0, 8.0)));
+        app.update();
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Pointer)),
+            "coming back onto the page restores CEF's last cursor"
+        );
+    }
+
+    /// Asserts that moving from a page back onto terminal text writes the
+    /// I-beam.
+    ///
+    /// Case: the user moves the pointer off a mounted page onto the shell
+    /// output beside it.
+    #[test]
+    fn leaving_a_page_for_terminal_text_writes_the_i_beam() {
+        let (mut app, window) = gated_hover_app(
+            Vec2::new(84.0, 8.0),
+            SystemCursorIcon::Pointer,
+            MouseClaimedByWebview,
+        );
+        app.update();
+        move_cursor(&mut app, window, Some(Vec2::new(4.0, 8.0)));
+        app.update();
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Text))
+        );
+    }
+
+    /// Asserts that a cursor inserted on the window while the pointer rests
+    /// on terminal text is replaced by the I-beam on the next update, with no
+    /// pointer or key input.
+    ///
+    /// Case: the user moves the pointer off a page onto the shell text beside
+    /// it and stops, and CEF's report of the link the pointer just crossed
+    /// arrives a frame later.
+    #[test]
+    fn a_late_cef_cursor_over_terminal_text_is_replaced() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseMotion>()
+            .add_message::<CursorMoved>()
+            .add_message::<KeyboardInput>()
+            .init_resource::<HyperlinkHoverState>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<OrzmaMouseConfig>()
+            .insert_resource(hover_test_metrics())
+            .add_plugins(HyperlinkInputPlugin);
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
-        // A distinctive starting cursor that the Webview decision must leave untouched.
-        let window_entity = app
-            .world_mut()
-            .spawn((
-                window,
-                PrimaryWindow,
-                CursorIcon::System(SystemCursorIcon::Pointer),
-            ))
-            .id();
-
-        // A webview host: an OrzmaTerminal carrying WebviewSource. `on_add_inject_render`
-        // would also give it a (rendered-over) grid, so the webview check must win.
+        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
         let (view, cells) = linked_grid();
         app.world_mut().spawn((
             OrzmaTerminal,
-            WebviewSource::new("orzma://example/index.html"),
             ComputedNode {
                 size: Vec2::new(80.0, 80.0),
                 ..ComputedNode::DEFAULT
@@ -699,19 +985,16 @@ mod tests {
             view,
             cells,
         ));
-
         app.update();
 
-        let hover = app.world().resource::<HyperlinkHoverState>();
+        app.world_mut()
+            .entity_mut(window)
+            .insert(CursorIcon::System(SystemCursorIcon::Pointer));
+        app.update();
+
         assert_eq!(
-            hover.entity, None,
-            "a webview host must not be treated as a terminal even though it carries a grid"
-        );
-        let icon = app.world().entity(window_entity).get::<CursorIcon>();
-        assert_eq!(
-            icon,
-            Some(&CursorIcon::System(SystemCursorIcon::Pointer)),
-            "over a webview host the cursor is left untouched for bevy_cef to own"
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Text))
         );
     }
 
@@ -729,6 +1012,8 @@ mod tests {
             .add_message::<MouseMotion>()
             .init_resource::<HyperlinkHoverState>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<CefCursor>()
+            .init_resource::<OrzmaMouseConfig>()
             .insert_resource(hover_test_metrics())
             .insert_resource(PaneGeometry {
                 cell_px: CellPixels {
@@ -808,6 +1093,42 @@ mod tests {
             app.world().resource::<HyperlinkHoverState>().entity,
             None,
             "a pointer the divider owns hovers no terminal, so no link affordance is offered"
+        );
+    }
+
+    /// Asserts that a divider's grab band shows the arrow rather than a
+    /// resize cursor while no surface accepts a new press.
+    ///
+    /// Case: the user is converting Japanese text in the shell and moves the
+    /// pointer onto the groove between two side-by-side panes.
+    #[test]
+    fn a_divider_shows_no_resize_cursor_while_no_surface_takes_a_press() {
+        let mut app = divider_hover_app(2.0, Vec2::new(20.0, 40.0));
+        app.world_mut().spawn((
+            OrzmuxSeparator {
+                split: SplitId(1),
+                orientation: SplitOrientation::Vertical,
+            },
+            ComputedNode {
+                size: Vec2::new(2.0, 160.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(26.0, 80.0),
+        ));
+        let terminal = app
+            .world_mut()
+            .query_filtered::<Entity, With<OrzmaTerminal>>()
+            .single(app.world())
+            .expect("the divider world has one terminal surface");
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(TerminalMouseDisabled);
+
+        app.update();
+
+        assert_eq!(
+            window_cursor(&mut app),
+            Some(CursorIcon::System(SystemCursorIcon::Default))
         );
     }
 

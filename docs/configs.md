@@ -11,11 +11,19 @@ orzma resolves the config path in this order:
 2. `$XDG_CONFIG_HOME/orzma/config.toml` — if `$XDG_CONFIG_HOME` is set.
 3. `~/.config/orzma/config.toml` — the default.
 
-Unknown sections are rejected at startup, as are unknown keys in `[cursor]`,
-`[orzma]`, `[keyboard]`, `[shortcuts]`, `[vi-mode]`, `[selection]`, and `[font]`. Unknown keys in
-`[mouse]` and `[inactive_pane]` are silently ignored. Most invalid values are
-startup errors too; the few that are silently clamped or reverted are noted
-inline below.
+Unknown sections, and unknown keys in `[cursor]`, `[orzma]`, `[keyboard]`,
+`[shortcuts]`, `[vi-mode]`, `[selection]`, and `[font]`, make the whole file
+fail to parse:
+orzma prints a warning and starts with every setting at its default, ignoring
+the rest of the file too. This includes the window actions and `zoom-pane`
+that older versions accepted under `[shortcuts]`; delete those lines when
+upgrading. Unknown keys in `[mouse]` and `[inactive_pane]` are silently
+ignored. A value orzma cannot read (a malformed chord, an unknown word, or the
+wrong type) fails the whole file the same way. Conflicting bindings (including
+a leader chord that is also a direct binding), a leader key orzma cannot map,
+and an invalid `[font]` size or style stop orzma at startup instead, and so
+does a `[font]` family that is not installed. The few values that are silently
+clamped or reverted are noted inline below.
 
 ## Example config
 
@@ -36,7 +44,7 @@ shell_integration = true
 
 [cursor]
 # Unlike the other enum-valued keys, an unrecognized `style` word silently
-# reverts to the default instead of being a startup error.
+# reverts to the default instead of failing the whole file.
 style = "block"           # block | underline | bar
 blink_interval = 750      # milliseconds; 0 keeps the caret steady whatever a program asks for. Any other value below 10 is silently raised to 10.
 blink_timeout = 5         # seconds; 0 blinks indefinitely. Silently raised to twice blink_interval (one full on/off cycle) when shorter.
@@ -96,13 +104,8 @@ cells_per_notch = 0.5            # f32. Wheel accumulation threshold per notch, 
 axis_lock_ratio = 0.9            # f32 in 0.0..=1.0. Trackpad dominant-axis lock: horizontal scroll kept only when |x|/hypot(x,y) >= this. 0.0 disables; 1.0 = pure-horizontal only.
 double_click_timeout_ms = 400    # u32. Max ms between clicks to count as double/triple.
 click_drift_px = 8.0             # f32. Max pointer drift (logical px) between clicks of a multi-click.
-drag_threshold_px = 4.0          # f32. Pointer travel (logical px) before a press becomes a drag.
-divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divider grab zone.
-# --- advanced drag-autoscroll tuning (rarely changed) ---
-autoscroll_base_period_ms = 50     # u32. Tick interval when drag-scrolling at the pane edge.
-autoscroll_min_period_ms = 16      # u32. Floor on the autoscroll interval.
-autoscroll_step_ms = 4             # u32. Interval decrement per cell past the edge.
-# Mouse numbers are not range-checked; out-of-range values are used as-is.
+divider_grab_tolerance_px = 4.0  # f32. Half-width (logical px) of the pane-divider grab zone; never below half a cell. inf / nan revert to 4.0.
+# Mouse numbers are not range-checked, except that axis_lock_ratio is clamped to 0.0..=1.0 and a non-finite axis_lock_ratio or divider_grab_tolerance_px reverts to its default.
 
 [inactive_pane]
 # Visual treatment of panes that don't have focus. Float fields are clamped
@@ -121,8 +124,8 @@ webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = f
 # the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
 # tap the modifier with no other key, then the next key). Defaults to "Cmd" on
 # macOS and "Alt" elsewhere, and is active only when at least one action is
-# bound to "<Leader>..." — the stock defaults below already bind more than two
-# dozen actions to "<Leader>...", so the tap leader is armed out of the box.
+# bound to "<Leader>..." — the stock defaults below already bind thirteen
+# actions to "<Leader>...", so the tap leader is armed out of the box.
 # Set "" to disable it. "Shift" is not allowed as a tap.
 leader = "Cmd"
 # Modifier-tap window (ms): a press+release within this time, with no intervening
@@ -142,7 +145,7 @@ repeat-time-ms = 500
 # never collide.
 
 # --- existing actions ---
-paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for a leader binding.
+paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>v" for a leader binding.
 copy                  = "Cmd+C"        # Copy the focused terminal's selection to the system clipboard.
 release-webview-focus = "<Leader>u"
 quit                  = "Cmd+Q"        # Unbound by default off macOS, where the window manager closes the window.
@@ -156,7 +159,6 @@ select-right-pane     = "<Leader>l"    # select-pane -R
 split-vertical-pane   = "<Leader>i"    # split-window -h (side-by-side)
 split-horizontal-pane = "<Leader>o"    # split-window -v (stacked)
 kill-pane             = "<Leader>p"    # kill-pane
-zoom-pane             = "<Leader>z"    # resize-pane -Z
 resize-left-pane      = "<Leader:r>Shift+H"  # resize-pane -L 5 (repeatable)
 resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
 resize-up-pane        = "<Leader:r>Shift+K"  # resize-pane -U 5 (repeatable)
@@ -166,25 +168,6 @@ resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
 increase-font-size    = "Cmd+Plus"   # Ctrl+Plus off macOS
 decrease-font-size    = "Cmd+-"      # Ctrl+- off macOS
 reset-font-size       = "Cmd+0"      # Ctrl+0 off macOS
-
-# --- window actions (no effect until the built-in multiplexer lands) ---
-new-window            = "<Leader>c"        # new-window
-kill-window           = "<Leader>Shift+X"  # kill-window, after a confirm prompt
-next-window           = "<Leader>]"        # next-window
-previous-window       = "<Leader>["        # previous-window
-select-window-0       = "<Leader>0"        # select-window at display index 0
-select-window-1       = "<Leader>1"
-select-window-2       = "<Leader>2"
-select-window-3       = "<Leader>3"
-select-window-4       = "<Leader>4"
-select-window-5       = "<Leader>5"
-select-window-6       = "<Leader>6"
-select-window-7       = "<Leader>7"
-select-window-8       = "<Leader>8"
-select-window-9       = "<Leader>9"
-
-# --- rename action (no effect until the built-in multiplexer lands) ---
-rename-window         = "<Leader>r"        # opens the rename prompt for the active window
 
 [vi-mode]
 # Vi-mode key bindings for Alacritty vi mode. See "Vi-mode keys" below for
@@ -255,8 +238,8 @@ A chord is zero or more modifiers followed by exactly one key, joined with `+`.
 Examples: `Cmd+Shift+Q`, `Ctrl+Alt+ArrowLeft`, `Cmd+Plus`.
 
 Invalid chords — an empty token (`Cmd+`), an unknown named key (`Cmd+F12`), a
-duplicated modifier (`Cmd+Meta+S`), or more than one key (`Cmd+S+T`) — fail at
-startup.
+duplicated modifier (`Cmd+Meta+S`), or more than one key (`Cmd+S+T`) — make the
+whole file fail to parse, as described under "File location".
 
 ## Repeatable bindings (`<Leader:r>`)
 
@@ -351,34 +334,6 @@ the seven that differ elsewhere.
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side by side (vertical divider); the new pane becomes active. |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (horizontal divider); the new pane becomes active. |
 | `kill-pane` | `<Leader>p` | Kill the active pane; its shell is terminated. |
-| `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (no effect until the built-in multiplexer lands). |
-| `new-window` | `<Leader>c` | Open a new window (no effect until the built-in multiplexer lands). |
-| `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (no effect until the built-in multiplexer lands). |
-| `next-window` | `<Leader>]` | Switch to the next window (no effect until the built-in multiplexer lands). |
-| `previous-window` | `<Leader>[` | Switch to the previous window (no effect until the built-in multiplexer lands). |
-| `select-window-0` | `<Leader>0` | Switch to the window at index 0 (no effect until the built-in multiplexer lands). |
-| `select-window-1` | `<Leader>1` | Switch to the window at index 1 (no effect until the built-in multiplexer lands). |
-| `select-window-2` | `<Leader>2` | Switch to the window at index 2 (no effect until the built-in multiplexer lands). |
-| `select-window-3` | `<Leader>3` | Switch to the window at index 3 (no effect until the built-in multiplexer lands). |
-| `select-window-4` | `<Leader>4` | Switch to the window at index 4 (no effect until the built-in multiplexer lands). |
-| `select-window-5` | `<Leader>5` | Switch to the window at index 5 (no effect until the built-in multiplexer lands). |
-| `select-window-6` | `<Leader>6` | Switch to the window at index 6 (no effect until the built-in multiplexer lands). |
-| `select-window-7` | `<Leader>7` | Switch to the window at index 7 (no effect until the built-in multiplexer lands). |
-| `select-window-8` | `<Leader>8` | Switch to the window at index 8 (no effect until the built-in multiplexer lands). |
-| `select-window-9` | `<Leader>9` | Switch to the window at index 9 (no effect until the built-in multiplexer lands). |
-| `rename-window` | `<Leader>r` | Open the rename prompt for the active window (no effect until the built-in multiplexer lands). |
-
-Note: some actions have no effect yet. `paste`, `copy`, `quit`,
-`release-webview-focus`, `enter-vi-mode` (Alacritty vi mode), `select-*-pane`,
-`resize-*-pane`, `split-*-pane`, and `kill-pane` all work today through the
-built-in multiplexer backend. The remaining 16 window/zoom/rename actions
-above (`zoom-pane`, `new-window`, `kill-window`, `next-window`,
-`previous-window`, `select-window-0`…`9`, `rename-window`) are no-ops until
-the built-in multiplexer grows zoom and window support — the bindings are
-accepted and validated at startup, but pressing them does nothing. This
-applies whether an action is bound directly or as a leader-scoped key (e.g.
-`<Leader>s`), and regardless of whether the leader is a chord or a modifier
-tap.
 
 Note on resizing: `resize-*-pane` moves one divider of the active pane 5
 cells in the key's direction, picking it the way tmux's `resize-pane` does.
@@ -396,13 +351,13 @@ divider never moves against the key, and a key with no divider to move on its
 axis does nothing. In vi mode each step needs the leader again (see
 "Repeatable bindings" above).
 
-Note on the leader: because the stock defaults above bind more than two dozen
-actions to `<Leader>...`, the tap leader is armed by default — tapping and
-releasing the leader modifier (`Cmd` on macOS, `Alt` elsewhere, with no other
-key/mouse press in between) arms the leader, and the very next keystroke either
-fires a bound `<Leader>` action or is swallowed if nothing matches.
-`LeaderPending` has no expiry: after an accidental tap, the next keystroke is
-consumed one way or the other, it does not time out on its own.
+Note on the leader: because the stock defaults above bind thirteen actions
+to `<Leader>...`, the tap leader is armed by default — tapping and releasing
+the leader modifier (`Cmd` on macOS, `Alt` elsewhere, with no other
+key/mouse press in between) arms the leader, and the very next keystroke
+either fires a bound `<Leader>` action or is swallowed if nothing matches.
+`LeaderPending` has no expiry: after an accidental tap, the next keystroke
+is consumed one way or the other, it does not time out on its own.
 
 Holding the leader modifier still behaves normally: only a bare press and
 release arms the leader, so `Alt+h` continues to reach the shell as a
@@ -412,15 +367,15 @@ window also disarms an in-progress tap.
 Two consequences of the stock `<Leader>` defaults worth knowing:
 
 - **Rebinding a `<Leader>` chord that a stock default already uses** (e.g.
-  `enter-vi-mode = "<Leader>c"`, which collides with the default
-  `new-window = "<Leader>c"`) is a startup validation error naming both
-  actions. Unbind the stock default explicitly (`new-window = ""`) or pick a
-  free chord.
+  `split-vertical-pane = "<Leader>h"`, which collides with the default
+  `select-left-pane = "<Leader>h"`) is a startup validation error naming both
+  actions. Unbind the stock default explicitly (`select-left-pane = ""`) or
+  pick a free chord.
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
-  stock defaults that includes all 29 leader-bound actions above, silently
+  stock defaults that includes all 13 leader-bound actions above, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g.
-  `next-window = "Ctrl+Shift+]"`.
+  `select-left-pane = "Ctrl+Shift+H"`.
 
 `Ctrl++` is not a valid value: a chord is split on `+`, so write `Ctrl+Plus`.
 A `Plus` binding also fires with Shift held, since `+` is Shift+`=` on a US

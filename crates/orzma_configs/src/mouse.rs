@@ -1,5 +1,5 @@
-//! Mouse-input configuration: the `[mouse]` section's wheel, click, drag,
-//! and autoscroll settings.
+//! Mouse-input configuration: the `[mouse]` section's wheel, click, and
+//! divider-grab settings.
 
 use serde::{Deserialize, Serialize};
 
@@ -51,33 +51,26 @@ pub struct MouseConfig {
     /// Max cursor drift (logical px) between clicks counted as the
     /// same chord.
     pub click_drift_px: f32,
-    /// Drag-scroll tick rate (ms) at the pane edge. Decreased linearly
-    /// by `autoscroll_step_ms` per cell past the edge, floored at
-    /// `autoscroll_min_period_ms`.
-    pub autoscroll_base_period_ms: u32,
-    /// Hard floor (ms) on the drag-scroll rate.
-    pub autoscroll_min_period_ms: u32,
-    /// Linear decrement (ms per cell past the edge) applied to
-    /// `autoscroll_base_period_ms`.
-    pub autoscroll_step_ms: u32,
-    /// Pointer travel (logical px) before a left-press is treated as a drag
-    /// rather than a click. Below this, release fires a click (focus / word /
-    /// line); at or above it, the gesture becomes a resize or text drag.
-    pub drag_threshold_px: f32,
-    /// Half-width (logical px) of a pane divider's grab zone for resize.
+    /// Half-width (logical px) of a pane divider's grab zone for resize. A
+    /// value below half a cell grabs half a cell; `inf` and `nan` fall back
+    /// to the default of 4.0.
     pub divider_grab_tolerance_px: f32,
 }
 
 impl MouseConfig {
-    /// Clamps `axis_lock_ratio` to `0.0..=1.0`; a non-finite value falls back
-    /// to the default.
+    /// Clamps `axis_lock_ratio` to `0.0..=1.0`. A non-finite
+    /// `axis_lock_ratio` or `divider_grab_tolerance_px` falls back to its
+    /// default.
     pub(crate) fn normalize(&mut self) {
-        let default = Self::default().axis_lock_ratio;
+        let default = Self::default();
         self.axis_lock_ratio = if self.axis_lock_ratio.is_finite() {
             self.axis_lock_ratio.clamp(0.0, 1.0)
         } else {
-            default
+            default.axis_lock_ratio
         };
+        if !self.divider_grab_tolerance_px.is_finite() {
+            self.divider_grab_tolerance_px = default.divider_grab_tolerance_px;
+        }
     }
 }
 
@@ -92,10 +85,6 @@ impl Default for MouseConfig {
             axis_lock_ratio: 0.9,
             double_click_timeout_ms: 400,
             click_drift_px: 8.0,
-            autoscroll_base_period_ms: 50,
-            autoscroll_min_period_ms: 16,
-            autoscroll_step_ms: 4,
-            drag_threshold_px: 4.0,
             divider_grab_tolerance_px: 4.0,
         }
     }
@@ -105,6 +94,9 @@ impl Default for MouseConfig {
 mod tests {
     use super::*;
 
+    /// Asserts that every `[mouse]` key defaults to its documented value.
+    ///
+    /// Case: a user whose config.toml has no `[mouse]` section starts orzma.
     #[test]
     fn defaults_match_expected_values() {
         let cfg = MouseConfig::default();
@@ -116,10 +108,6 @@ mod tests {
         assert_eq!(cfg.axis_lock_ratio, 0.9);
         assert_eq!(cfg.double_click_timeout_ms, 400);
         assert_eq!(cfg.click_drift_px, 8.0);
-        assert_eq!(cfg.autoscroll_base_period_ms, 50);
-        assert_eq!(cfg.autoscroll_min_period_ms, 16);
-        assert_eq!(cfg.autoscroll_step_ms, 4);
-        assert_eq!(cfg.drag_threshold_px, 4.0);
         assert_eq!(cfg.divider_grab_tolerance_px, 4.0);
     }
 
@@ -171,5 +159,26 @@ mod tests {
     fn unknown_key_is_ignored() {
         let cfg: MouseConfig = toml::from_str("lines_per_notch = 5\nbogus = 1").unwrap();
         assert_eq!(cfg.lines_per_notch, 5);
+    }
+
+    /// Asserts that a non-finite divider grab tolerance falls back to the
+    /// default while a finite one, however small, is kept.
+    ///
+    /// Case: a user writes `divider_grab_tolerance_px = inf` in config.toml,
+    /// and another writes `0.5`.
+    #[test]
+    fn normalize_resets_a_non_finite_grab_tolerance() {
+        let normalized = |raw: f32| {
+            let mut cfg = MouseConfig {
+                divider_grab_tolerance_px: raw,
+                ..MouseConfig::default()
+            };
+            cfg.normalize();
+            cfg.divider_grab_tolerance_px
+        };
+        assert_eq!(normalized(f32::INFINITY), 4.0);
+        assert_eq!(normalized(f32::NAN), 4.0);
+        assert_eq!(normalized(0.5), 0.5);
+        assert_eq!(normalized(12.0), 12.0);
     }
 }

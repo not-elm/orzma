@@ -409,12 +409,6 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub kill_pane: Option<Binding>,
-    /// Toggle zoom on the active pane (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub zoom_pane: Option<Binding>,
     /// Moves a divider of the active pane 5 cells left; repeatable.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
@@ -439,96 +433,6 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_right_pane: Option<Binding>,
-    /// Open a new window (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub new_window: Option<Binding>,
-    /// Kill the active window, after a confirm prompt (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub kill_window: Option<Binding>,
-    /// Switch to the next window (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub next_window: Option<Binding>,
-    /// Switch to the previous window (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub previous_window: Option<Binding>,
-    /// Switch to the window at index0 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_0: Option<Binding>,
-    /// Switch to the window at index1 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_1: Option<Binding>,
-    /// Switch to the window at index2 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_2: Option<Binding>,
-    /// Switch to the window at index3 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_3: Option<Binding>,
-    /// Switch to the window at index4 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_4: Option<Binding>,
-    /// Switch to the window at index5 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_5: Option<Binding>,
-    /// Switch to the window at index6 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_6: Option<Binding>,
-    /// Switch to the window at index7 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_7: Option<Binding>,
-    /// Switch to the window at index8 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_8: Option<Binding>,
-    /// Switch to the window at index9 (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub select_window_9: Option<Binding>,
-    /// Open the rename prompt for the active window (no effect).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub rename_window: Option<Binding>,
     /// Timeout (ms) for a modifier-tap leader: press+release within this window
     /// with no intervening key/mouse press counts as a tap. Default 300; 0 is
     /// normalized to 300.
@@ -561,26 +465,10 @@ impl Default for Shortcuts {
             split_vertical_pane: Some(parse_default_binding("<Leader>i")),
             split_horizontal_pane: Some(parse_default_binding("<Leader>o")),
             kill_pane: Some(parse_default_binding("<Leader>p")),
-            zoom_pane: Some(parse_default_binding("<Leader>z")),
             resize_left_pane: Some(parse_default_binding("<Leader:r>Shift+H")),
             resize_down_pane: Some(parse_default_binding("<Leader:r>Shift+J")),
             resize_up_pane: Some(parse_default_binding("<Leader:r>Shift+K")),
             resize_right_pane: Some(parse_default_binding("<Leader:r>Shift+L")),
-            new_window: Some(parse_default_binding("<Leader>c")),
-            kill_window: Some(parse_default_binding("<Leader>Shift+X")),
-            next_window: Some(parse_default_binding("<Leader>]")),
-            previous_window: Some(parse_default_binding("<Leader>[")),
-            select_window_0: Some(parse_default_binding("<Leader>0")),
-            select_window_1: Some(parse_default_binding("<Leader>1")),
-            select_window_2: Some(parse_default_binding("<Leader>2")),
-            select_window_3: Some(parse_default_binding("<Leader>3")),
-            select_window_4: Some(parse_default_binding("<Leader>4")),
-            select_window_5: Some(parse_default_binding("<Leader>5")),
-            select_window_6: Some(parse_default_binding("<Leader>6")),
-            select_window_7: Some(parse_default_binding("<Leader>7")),
-            select_window_8: Some(parse_default_binding("<Leader>8")),
-            select_window_9: Some(parse_default_binding("<Leader>9")),
-            rename_window: Some(parse_default_binding("<Leader>r")),
             leader_tap_timeout_ms: 300,
             repeat_time_ms: 500,
         }
@@ -648,7 +536,6 @@ impl Shortcuts {
                 Shortcut::SplitPane(SplitOrientation::Horizontal),
             ),
             ("kill-pane", &self.kill_pane, Shortcut::KillPane),
-            ("zoom-pane", &self.zoom_pane, Shortcut::ZoomPane),
             (
                 "resize-left-pane",
                 &self.resize_left_pane,
@@ -669,65 +556,6 @@ impl Shortcuts {
                 &self.resize_right_pane,
                 Shortcut::ResizePane(PaneDirection::Right),
             ),
-            ("new-window", &self.new_window, Shortcut::NewWindow),
-            ("kill-window", &self.kill_window, Shortcut::KillWindow),
-            ("next-window", &self.next_window, Shortcut::NextWindow),
-            (
-                "previous-window",
-                &self.previous_window,
-                Shortcut::PreviousWindow,
-            ),
-            (
-                "select-window-0",
-                &self.select_window_0,
-                Shortcut::SelectWindow(0),
-            ),
-            (
-                "select-window-1",
-                &self.select_window_1,
-                Shortcut::SelectWindow(1),
-            ),
-            (
-                "select-window-2",
-                &self.select_window_2,
-                Shortcut::SelectWindow(2),
-            ),
-            (
-                "select-window-3",
-                &self.select_window_3,
-                Shortcut::SelectWindow(3),
-            ),
-            (
-                "select-window-4",
-                &self.select_window_4,
-                Shortcut::SelectWindow(4),
-            ),
-            (
-                "select-window-5",
-                &self.select_window_5,
-                Shortcut::SelectWindow(5),
-            ),
-            (
-                "select-window-6",
-                &self.select_window_6,
-                Shortcut::SelectWindow(6),
-            ),
-            (
-                "select-window-7",
-                &self.select_window_7,
-                Shortcut::SelectWindow(7),
-            ),
-            (
-                "select-window-8",
-                &self.select_window_8,
-                Shortcut::SelectWindow(8),
-            ),
-            (
-                "select-window-9",
-                &self.select_window_9,
-                Shortcut::SelectWindow(9),
-            ),
-            ("rename-window", &self.rename_window, Shortcut::RenameWindow),
         ]
         .into_iter()
     }
@@ -829,22 +657,8 @@ pub enum Shortcut {
     SplitPane(SplitOrientation),
     /// Kills the active pane.
     KillPane,
-    /// Toggles zoom on the active pane (no effect).
-    ZoomPane,
     /// Moves a divider of the active pane in the given direction.
     ResizePane(PaneDirection),
-    /// Opens a new window in the current session (no effect).
-    NewWindow,
-    /// Kills the active window after a confirm prompt (no effect).
-    KillWindow,
-    /// Switches to the next window (no effect).
-    NextWindow,
-    /// Switches to the previous window (no effect).
-    PreviousWindow,
-    /// Switches to the window with this display index (no effect).
-    SelectWindow(u8),
-    /// Opens the rename prompt for the active window (no effect).
-    RenameWindow,
 }
 
 /// The literal token marking a leader-scoped binding value (`<Leader>x`).
@@ -1382,7 +1196,7 @@ mod tests {
     }
 
     /// Asserts that the macOS default table binds the `Cmd` tap leader and
-    /// six direct `Cmd` chords, leaving the other 29 actions leader-scoped.
+    /// six direct `Cmd` chords, leaving the other 13 actions leader-scoped.
     ///
     /// Case: a user on macOS starts orzma with no config file at all.
     #[cfg(target_os = "macos")]
@@ -1402,13 +1216,13 @@ mod tests {
             s.copy,
             Some(Binding::Direct(parse_key_chord("Cmd+C").unwrap()))
         );
-        assert_eq!(s.bindings_iter().count(), 35);
+        assert_eq!(s.bindings_iter().count(), 19);
         assert_eq!(s.direct_chords().count(), 6);
-        assert_eq!(s.leader_chords().count(), 29);
+        assert_eq!(s.leader_chords().count(), 13);
     }
 
     /// Asserts that the non-macOS default table binds the `Alt` tap leader and
-    /// five direct `Ctrl` chords, leaves the other 29 actions leader-scoped,
+    /// five direct `Ctrl` chords, leaves the other 13 actions leader-scoped,
     /// and leaves `quit` unbound rather than binding a chord the window
     /// manager already owns.
     ///
@@ -1428,9 +1242,9 @@ mod tests {
             Some(Binding::Direct(parse_key_chord("Ctrl+C").unwrap()))
         );
         assert_eq!(s.quit, None);
-        assert_eq!(s.bindings_iter().count(), 35);
+        assert_eq!(s.bindings_iter().count(), 19);
         assert_eq!(s.direct_chords().count(), 5);
-        assert_eq!(s.leader_chords().count(), 29);
+        assert_eq!(s.leader_chords().count(), 13);
     }
 
     /// Asserts that every chord in the host default table is unique, so no
@@ -1460,11 +1274,14 @@ mod tests {
         }
     }
 
+    /// Asserts that `bindings_iter` lists one entry for each of the 19
+    /// actions.
+    ///
+    /// Case: orzma starts and turns the configured actions into its shortcut
+    /// table.
     #[test]
     fn bindings_iter_count_is_pinned_to_field_count() {
-        // NOTE: drift guard — adding a Shortcuts field without its
-        // bindings_iter() entry silently unbinds the action.
-        assert_eq!(Shortcuts::default().bindings_iter().count(), 35);
+        assert_eq!(Shortcuts::default().bindings_iter().count(), 19);
     }
 
     #[test]
@@ -1486,6 +1303,11 @@ mod tests {
         );
     }
 
+    /// Asserts that the stock pane actions sit on non-repeatable leader
+    /// chords.
+    ///
+    /// Case: a user with no config file splits, selects, and kills panes
+    /// through the leader.
     #[test]
     fn default_multiplexer_actions_are_leader_bound() {
         let s = Shortcuts::default();
@@ -1504,27 +1326,32 @@ mod tests {
             })
         );
         assert_eq!(
-            s.kill_window,
+            s.kill_pane,
             Some(Binding::Leader {
-                chord: parse_key_chord("Shift+X").unwrap(),
+                chord: parse_key_chord("p").unwrap(),
                 repeat: false,
             })
         );
         assert_eq!(
-            s.select_window_0,
+            s.split_horizontal_pane,
             Some(Binding::Leader {
-                chord: parse_key_chord("0").unwrap(),
+                chord: parse_key_chord("o").unwrap(),
                 repeat: false,
             })
         );
     }
 
+    /// Asserts that a pane action accepts a leader chord, an empty string that
+    /// unbinds it, and a direct chord.
+    ///
+    /// Case: a user moves the vertical split to `<Leader>g`, turns off
+    /// kill-pane, and puts the horizontal split on `Cmd+T`.
     #[test]
     fn multiplexer_actions_parse_from_flat_toml() {
         let toml = r#"
 split-vertical-pane = "<Leader>g"
-select-window-3 = ""
-new-window = "Cmd+T"
+kill-pane = ""
+split-horizontal-pane = "Cmd+T"
 "#;
         let s: Shortcuts = toml::from_str(toml).unwrap();
         assert_eq!(
@@ -1534,9 +1361,9 @@ new-window = "Cmd+T"
                 repeat: false,
             })
         );
-        assert_eq!(s.select_window_3, None);
+        assert_eq!(s.kill_pane, None);
         assert_eq!(
-            s.new_window,
+            s.split_horizontal_pane,
             Some(Binding::Direct(parse_key_chord("Cmd+T").unwrap()))
         );
     }
@@ -1548,12 +1375,17 @@ new-window = "Cmd+T"
         assert!(s.validate_no_leader_conflicts().is_ok());
     }
 
+    /// Asserts that a chord leader and leader-scoped bindings parse from flat
+    /// keys while the other actions keep their defaults.
+    ///
+    /// Case: a user sets a `Ctrl+A` leader and moves vi mode and kill-pane to
+    /// new leader chords.
     #[test]
     fn shortcuts_parses_flat_leader_and_bindings() {
         let toml = r#"
 leader = "Ctrl+A"
 enter-vi-mode = "<Leader>s"
-rename-window = "<Leader>d"
+kill-pane = "<Leader>d"
 "#;
         let s: Shortcuts = toml::from_str(toml).unwrap();
         assert_eq!(
@@ -1568,14 +1400,14 @@ rename-window = "<Leader>d"
             })
         );
         assert_eq!(
-            s.rename_window,
+            s.kill_pane,
             Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             })
         );
         assert_eq!(s.paste, Shortcuts::default().paste);
-        assert_eq!(s.leader_chords().count(), 29);
+        assert_eq!(s.leader_chords().count(), 13);
     }
 
     #[test]
@@ -1600,6 +1432,10 @@ rename-window = "<Leader>d"
         assert!(err[0].actions.contains(&"quit"));
     }
 
+    /// Asserts that two leader-scoped bindings sharing one chord are reported
+    /// as a single conflict naming both actions.
+    ///
+    /// Case: a user binds vi mode and kill-pane to `<Leader>d`.
     #[test]
     fn leader_conflict_detected() {
         let s = Shortcuts {
@@ -1607,7 +1443,7 @@ rename-window = "<Leader>d"
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
-            rename_window: Some(Binding::Leader {
+            kill_pane: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
@@ -1616,9 +1452,14 @@ rename-window = "<Leader>d"
         let err = s.validate_no_leader_conflicts().unwrap_err();
         assert_eq!(err.len(), 1);
         assert!(err[0].actions.contains(&"enter-vi-mode"));
-        assert!(err[0].actions.contains(&"rename-window"));
+        assert!(err[0].actions.contains(&"kill-pane"));
     }
 
+    /// Asserts that a repeatable and a non-repeatable leader binding on the
+    /// same chord still conflict.
+    ///
+    /// Case: a user binds vi mode to `<Leader:r>d` and kill-pane to
+    /// `<Leader>d`.
     #[test]
     fn leader_conflict_detected_across_repeat_flag() {
         let s = Shortcuts {
@@ -1626,7 +1467,7 @@ rename-window = "<Leader>d"
                 chord: parse_key_chord("d").unwrap(),
                 repeat: true,
             }),
-            rename_window: Some(Binding::Leader {
+            kill_pane: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
@@ -1635,41 +1476,44 @@ rename-window = "<Leader>d"
         let err = s.validate_no_leader_conflicts().unwrap_err();
         assert_eq!(err.len(), 1);
         assert!(err[0].actions.contains(&"enter-vi-mode"));
-        assert!(err[0].actions.contains(&"rename-window"));
+        assert!(err[0].actions.contains(&"kill-pane"));
     }
 
     /// Asserts that the macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 38 fields at once.
+    /// form, pinning every one of the 22 fields at once.
     ///
-    /// Case: a macOS user's config is serialized back out, so a stock binding
-    /// that silently changes shape is caught here.
+    /// Case: a macOS user's config is serialized back out.
     #[cfg(target_os = "macos")]
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"Cmd+Plus","decrease-font-size":"Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"Cmd+Plus","decrease-font-size":"Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
     /// Asserts that the non-macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 38 fields at once, with the unbound
+    /// form, pinning every one of the 22 fields at once, with the unbound
     /// `quit` emitted as an empty string.
     ///
-    /// Case: a Windows user's config is serialized back out, so a stock
-    /// binding that silently changes shape is caught here.
+    /// Case: a Windows user's config is serialized back out.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"Ctrl+Plus","decrease-font-size":"Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"Ctrl+Plus","decrease-font-size":"Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
+    /// Asserts that a chord leader serializes as its chord string and a
+    /// leader-scoped binding with the `<Leader>` token.
+    ///
+    /// Case: a user with a `Ctrl+A` leader and kill-pane on `<Leader>d` has
+    /// their config serialized back out.
     #[test]
     fn serialize_leader_binding_emits_leader_token() {
         let s = Shortcuts {
             leader: Some(Leader::Chord(parse_key_chord("Ctrl+A").unwrap())),
-            rename_window: Some(Binding::Leader {
+            kill_pane: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
@@ -1681,7 +1525,7 @@ rename-window = "<Leader>d"
             "leader serializes as its chord string; got {json}"
         );
         assert!(
-            json.contains(r#""rename-window":"<Leader>D""#),
+            json.contains(r#""kill-pane":"<Leader>D""#),
             "a Leader binding serializes with the <Leader> token; got {json}"
         );
     }
@@ -1723,9 +1567,13 @@ rename-window = "<Leader>d"
         assert!(parse_leader("Shift").is_err());
     }
 
+    /// Asserts that a bare-modifier leader parses as a tap leader and keeps
+    /// the configured tap timeout.
+    ///
+    /// Case: a user makes a tap of `Cmd` the leader with a 250 ms tap window.
     #[test]
     fn shortcuts_parses_bare_modifier_leader_and_timeout() {
-        let toml = "leader = \"Cmd\"\nleader-tap-timeout-ms = 250\nrename-window = \"<Leader>d\"\n";
+        let toml = "leader = \"Cmd\"\nleader-tap-timeout-ms = 250\nkill-pane = \"<Leader>d\"\n";
         let s: Shortcuts = toml::from_str(toml).unwrap();
         assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
         assert_eq!(s.leader_tap_timeout_ms, 250);
@@ -1789,10 +1637,15 @@ rename-window = "<Leader>d"
         assert!(parse_binding("<Leader:r>").is_err());
     }
 
+    /// Asserts that a repeatable leader binding serializes with the
+    /// `<Leader:r>` token.
+    ///
+    /// Case: a user with kill-pane on `<Leader:r>d` has their config
+    /// serialized back out.
     #[test]
     fn serialize_repeat_leader_binding_emits_repeat_token() {
         let s = Shortcuts {
-            rename_window: Some(Binding::Leader {
+            kill_pane: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: true,
             }),
@@ -1800,11 +1653,16 @@ rename-window = "<Leader>d"
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(
-            json.contains(r#""rename-window":"<Leader:r>D""#),
+            json.contains(r#""kill-pane":"<Leader:r>D""#),
             "a repeat Leader binding serializes with the <Leader:r> token; got {json}"
         );
     }
 
+    /// Asserts that `leader_chords` reports each leader binding's repeat
+    /// flag.
+    ///
+    /// Case: a user makes vi mode repeatable on `<Leader:r>s` and leaves
+    /// kill-pane non-repeatable on `<Leader>d`.
     #[test]
     fn leader_chords_carries_repeat_flag() {
         let s = Shortcuts {
@@ -1812,7 +1670,7 @@ rename-window = "<Leader>d"
                 chord: parse_key_chord("s").unwrap(),
                 repeat: true,
             }),
-            rename_window: Some(Binding::Leader {
+            kill_pane: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
@@ -1824,11 +1682,7 @@ rename-window = "<Leader>d"
                 .iter()
                 .any(|(l, _, _, r)| *l == "enter-vi-mode" && *r)
         );
-        assert!(
-            entries
-                .iter()
-                .any(|(l, _, _, r)| *l == "rename-window" && !*r)
-        );
+        assert!(entries.iter().any(|(l, _, _, r)| *l == "kill-pane" && !*r));
     }
 
     #[test]

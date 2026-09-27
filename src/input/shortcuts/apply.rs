@@ -82,11 +82,8 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
 /// (fires unconditionally — vi mode included; no-selection is a no-op
 /// downstream), the font-size zoom (window-wide, so it fires even with no
 /// focused surface), and the pane actions (select/split/kill/resize,
-/// targeting the backend's active pane). Window actions are no-ops; `Quit`
-/// and `ReleaseWebviewFocus` are handled upstream in `resolve_key_effects`.
-///
-/// TODO: implement window actions once the built-in multiplexer supports
-/// windows.
+/// targeting the backend's active pane). `Quit` and `ReleaseWebviewFocus` are
+/// handled upstream in `resolve_key_effects`.
 fn apply_shortcut(
     commands: &mut Commands,
     action: Shortcut,
@@ -127,15 +124,7 @@ fn apply_shortcut(
                 cells: PANE_RESIZE_CELLS,
             },
         }),
-        Shortcut::ZoomPane
-        | Shortcut::NewWindow
-        | Shortcut::KillWindow
-        | Shortcut::NextWindow
-        | Shortcut::PreviousWindow
-        | Shortcut::SelectWindow(_)
-        | Shortcut::RenameWindow
-        | Shortcut::Quit
-        | Shortcut::ReleaseWebviewFocus => {}
+        Shortcut::Quit | Shortcut::ReleaseWebviewFocus => {}
     }
 }
 
@@ -424,28 +413,6 @@ mod tests {
                     cells: 5,
                 },
             ]
-        );
-    }
-
-    /// Asserts that a pane action with no backend mapping yet resolves to a
-    /// no-op: no triggered event, spawn request, or pane action.
-    ///
-    /// Case: the user presses a leader-scoped zoom-pane binding.
-    #[test]
-    fn pane_action_without_backend_variant_is_noop() {
-        let (mut app, term) = dispatch_app(Shortcuts::default());
-        dispatch(
-            &mut app,
-            vec![action_effect(Shortcut::ZoomPane, true)],
-            Some(term),
-            false,
-            Modifiers::default(),
-        );
-        app.update();
-        let c = app.world().resource::<Captured>();
-        assert!(
-            c.order.is_empty() && c.spawns.is_empty() && c.pane_actions.is_empty(),
-            "a pane action with no backend mapping yet must resolve to a no-op"
         );
     }
 
