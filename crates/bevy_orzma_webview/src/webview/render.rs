@@ -53,27 +53,42 @@ impl Plugin for RenderPlugin {
 }
 
 /// One frame emitted by the page bridge (`orzma_bridge.js`) via
-/// `cef.emit({ kind: '…', … })`.
+/// `cef.emit({ kind: '…', … })`, told apart by its `kind`.
 ///
 /// It deserializes from the bare emitted object (`{kind, reqId, …}`), not
-/// from a `{"0": …}` wrapper.
-#[derive(Deserialize, Clone, Debug)]
-#[serde(transparent)]
-struct OrzmaFrame(Value);
+/// from a `{"0": …}` wrapper. A frame of any other `kind`, or with a
+/// missing or mistyped field, fails to deserialize and reaches no observer.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind")]
+enum OrzmaFrame {
+    /// A page's `window.orzma.call`.
+    #[serde(rename = "orzma.call")]
+    Call {
+        /// The page's own id for the call.
+        #[serde(rename = "reqId")]
+        req_id: String,
+        /// The method the page called.
+        method: String,
+        /// The call's argument; `null` when the page passed none.
+        #[serde(default)]
+        params: Value,
+    },
+    /// A page's `window.orzma.emit`.
+    #[serde(rename = "orzma.emit")]
+    Emit {
+        /// The event name.
+        event: String,
+        /// The event's payload; `null` when the page passed none.
+        #[serde(default)]
+        payload: Value,
+    },
+}
 
 /// The top-level URL an orzma webview last reported through
 /// `AddressChanged` or was last sent to by a `Navigate`, whichever came
 /// later.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 struct PageAddress(String);
-
-/// The `kind` discriminator of a page's `window.orzma.call` frame, emitted
-/// by `orzma_bridge.js`.
-const ORZMA_CALL_KIND: &str = "orzma.call";
-
-/// The `kind` discriminator of a page's `window.orzma.emit` frame, emitted
-/// by `orzma_bridge.js`.
-const ORZMA_EMIT_KIND: &str = "orzma.emit";
 
 /// CEF command-line switches for the embedded webview.
 ///
@@ -106,9 +121,8 @@ fn cef_command_line_config() -> CommandLineConfig {
     config
 }
 
-/// Reports a page's `window.orzma.call` (a `Receive<OrzmaFrame>` with
-/// `kind:"orzma.call"`) to the host as a `PageCall` of the webview's mount;
-/// any other `kind` is ignored.
+/// Reports a page's `window.orzma.call` (an [`OrzmaFrame::Call`]) to the
+/// host as a `PageCall` of the webview's mount; any other frame is ignored.
 ///
 /// The caller is the frame's webview, never the payload. A frame from a
 /// webview that is not a bridged orzma mount is rejected with `no_owner`,
@@ -120,57 +134,48 @@ fn on_orzma_call_frame(
     connection: Option<Res<OrzmuxConnection>>,
     webviews: Query<&Webview, With<Bridged>>,
 ) {
-    let payload = &frame.payload.0;
-    if payload.get("kind").and_then(Value::as_str) != Some(ORZMA_CALL_KIND) {
+    let OrzmaFrame::Call {
+        req_id,
+        method,
+        params,
+    } = &frame.payload
+    else {
         return;
-    }
+    };
     let webview = frame.webview;
-    let page_req = payload
-        .get("reqId")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     let Ok(view) = webviews.get(webview) else {
-        reject_orzma_call(&mut commands, webview, page_req, "no_owner");
+        reject_orzma_call(&mut commands, webview, req_id, "no_owner");
         return;
     };
     let Some(connection) = connection else {
-        reject_orzma_call(&mut commands, webview, page_req, "owner_unavailable");
+        reject_orzma_call(&mut commands, webview, req_id, "owner_unavailable");
         return;
     };
-    let method = payload
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     connection
         .0
         .send(OrzmuxCommand::Webview(WebviewCommand::PageCall {
             mount: view.mount(),
-            page_req: page_req.to_string(),
-            method: method.to_string(),
-            params: payload.get("params").cloned().unwrap_or(Value::Null),
+            page_req: req_id.clone(),
+            method: method.clone(),
+            params: params.clone(),
         }));
     if connection.0.is_disconnected() {
-        reject_orzma_call(&mut commands, webview, page_req, "owner_unavailable");
+        reject_orzma_call(&mut commands, webview, req_id, "owner_unavailable");
     }
 }
 
-/// Reports a page's `window.orzma.emit` (a `Receive<OrzmaFrame>` with
-/// `kind:"orzma.emit"`) to the host as a `PageEmit` of the webview's mount;
-/// any other `kind` is ignored. An emit with an empty event name, or from a
-/// webview that is not a bridged orzma mount, is dropped.
+/// Reports a page's `window.orzma.emit` (an [`OrzmaFrame::Emit`]) to the
+/// host as a `PageEmit` of the webview's mount; any other frame is ignored.
+/// An emit with an empty event name, or from a webview that is not a bridged
+/// orzma mount, is dropped.
 fn on_orzma_emit_frame(
     frame: On<Receive<OrzmaFrame>>,
     connection: Res<OrzmuxConnection>,
     webviews: Query<&Webview, With<Bridged>>,
 ) {
-    let payload = &frame.payload.0;
-    if payload.get("kind").and_then(Value::as_str) != Some(ORZMA_EMIT_KIND) {
+    let OrzmaFrame::Emit { event, payload } = &frame.payload else {
         return;
-    }
-    let event = payload
-        .get("event")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    };
     if event.is_empty() {
         tracing::debug!("orzma.emit frame with an empty event name; dropping");
         return;
@@ -185,8 +190,8 @@ fn on_orzma_emit_frame(
         .0
         .send(OrzmuxCommand::Webview(WebviewCommand::PageEmit {
             mount: view.mount(),
-            event: event.to_string(),
-            payload: payload.get("payload").cloned().unwrap_or(Value::Null),
+            event: event.clone(),
+            payload: payload.clone(),
         }));
 }
 
@@ -407,7 +412,8 @@ mod tests {
     fn frame(app: &mut App, webview: Entity, payload: Value) {
         app.world_mut().trigger(Receive {
             webview,
-            payload: OrzmaFrame(payload),
+            payload: serde_json::from_value::<OrzmaFrame>(payload)
+                .expect("a well-formed bridge frame"),
         });
         app.world_mut().flush();
     }
@@ -436,11 +442,63 @@ mod tests {
     #[test]
     fn orzma_frame_deserializes_from_bare_emitted_object() {
         let raw = r#"{"kind":"orzma.call","reqId":"o0","method":"greet","params":{"x":1}}"#;
-        let frame: OrzmaFrame = serde_json::from_str(raw).expect("transparent newtype");
-        assert_eq!(frame.0["kind"], ORZMA_CALL_KIND);
-        assert_eq!(frame.0["reqId"], "o0");
-        assert_eq!(frame.0["method"], "greet");
-        assert_eq!(frame.0["params"]["x"], 1);
+        let frame: OrzmaFrame = serde_json::from_str(raw).expect("a call frame");
+        assert_eq!(
+            frame,
+            OrzmaFrame::Call {
+                req_id: "o0".into(),
+                method: "greet".into(),
+                params: json!({"x": 1}),
+            }
+        );
+    }
+
+    /// Asserts that a call or emit frame without its argument deserializes
+    /// with a `null` argument.
+    ///
+    /// Case: a page calls `window.orzma.call("ping")` and
+    /// `window.orzma.emit("ready")` with no argument, so the bridge's
+    /// `JSON.stringify` leaves the field out.
+    #[test]
+    fn a_frame_without_its_argument_deserializes_with_null() {
+        let call: OrzmaFrame =
+            serde_json::from_str(r#"{"kind":"orzma.call","reqId":"o0","method":"ping"}"#)
+                .expect("a call frame");
+        let emit: OrzmaFrame = serde_json::from_str(r#"{"kind":"orzma.emit","event":"ready"}"#)
+            .expect("an emit frame");
+        assert_eq!(
+            call,
+            OrzmaFrame::Call {
+                req_id: "o0".into(),
+                method: "ping".into(),
+                params: Value::Null,
+            }
+        );
+        assert_eq!(
+            emit,
+            OrzmaFrame::Emit {
+                event: "ready".into(),
+                payload: Value::Null,
+            }
+        );
+    }
+
+    /// Asserts that a frame of an unknown kind, or with a mistyped or
+    /// missing field, fails to deserialize.
+    ///
+    /// Case: a page bypasses `window.orzma` and sends hand-built frames
+    /// through `cef.emit`.
+    #[test]
+    fn a_malformed_frame_fails_to_deserialize() {
+        for raw in [
+            r#"{"kind":"orzma.other","reqId":"o0"}"#,
+            r#"{"kind":"orzma.call","reqId":"o0","method":5}"#,
+            r#"{"kind":"orzma.call","method":"save"}"#,
+            r#"{"kind":"orzma.emit","event":null}"#,
+            r#"{"reqId":"o0","method":"save"}"#,
+        ] {
+            assert!(serde_json::from_str::<OrzmaFrame>(raw).is_err(), "{raw}");
+        }
     }
 
     /// Asserts that a page's `window.orzma.call` reaches the host as a
