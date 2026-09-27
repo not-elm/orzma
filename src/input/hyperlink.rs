@@ -4,6 +4,7 @@
 
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled, WebviewMouseDisabled};
+use crate::input::mouse::TerminalSurfaces;
 use crate::input::mouse::separator::{GrabbedSeparator, SeparatorHit, SeparatorNodes};
 use crate::input::{InputPhase, current_modifiers};
 use crate::surface::OrzmaTerminal;
@@ -176,6 +177,8 @@ enum HoverTarget {
 #[derive(SystemParam)]
 struct HoverTargetParams<'w, 's> {
     surfaces: HoverSurfaces<'w, 's>,
+    /// The surfaces a new press can reach, the same set a divider grab needs.
+    pressable: TerminalSurfaces<'w, 's>,
     terminals: Query<'w, 's, (&'static TerminalView, &'static TerminalCells)>,
     separators: SeparatorNodes<'w, 's>,
     grabbed: Query<'w, 's, &'static OrzmuxSeparator, With<GrabbedSeparator>>,
@@ -216,10 +219,7 @@ impl HoverTargetParams<'_, '_> {
     /// geometry is unknown or no surface accepts a new press.
     fn hovered(&self, cursor_phys: Vec2) -> Option<SplitOrientation> {
         let geometry = self.geometry.as_deref()?;
-        // NOTE: `drive_separator_drag` grabs a divider only while some surface
-        // takes a new press; this check must stay its mirror, or the resize
-        // cursor shows over a divider a press cannot move.
-        if !self.any_surface_takes_presses() {
+        if self.pressable.is_empty() {
             return None;
         }
         SeparatorHit::at(
@@ -229,14 +229,6 @@ impl HoverTargetParams<'_, '_> {
             self.separators.iter(),
         )
         .map(|hit| hit.orientation)
-    }
-
-    /// Whether some terminal surface carries neither `TerminalMouseDisabled`
-    /// nor `MouseClaimedByWebview`, and so accepts a new press.
-    fn any_surface_takes_presses(&self) -> bool {
-        self.surfaces
-            .iter()
-            .any(|(.., mouse_disabled, claimed, _)| !mouse_disabled && !claimed)
     }
 
     /// The region for the topmost terminal surface under `cursor_phys`, in
