@@ -3,6 +3,10 @@ name: release-linux
 on:
   push:
     tags: ["v*"]
+  # NOTE: pull requests trigger only on packaging-owned files. A Cargo.lock change
+  # that links a new system library, or an edit to the `bundle` recipe in the
+  # justfile, is caught first by the tag run, which then leaves the release without
+  # Linux assets; dispatch this workflow on main before pushing a release tag.
   pull_request:
     paths:
       - ".github/workflows/release-linux.yml"
@@ -15,10 +19,6 @@ on:
       - "build/linux/**"
       - "apps/cef_render_process/**"
       - "build.rs"
-      - "src/main.rs"
-      - "justfile"
-      - "Cargo.toml"
-      - "Cargo.lock"
   workflow_dispatch:
     inputs:
       version:
