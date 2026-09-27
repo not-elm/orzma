@@ -22,6 +22,11 @@ TARGET_TRIPLE = "aarch64-apple-darwin"
 CARGO_PROFILE = "dist"
 HELPER_SUFFIXES = ("", " (GPU)", " (Renderer)", " (Plugin)")
 COMPANION_BINS = ("orzbrowser", "orzmd")
+# NOTE: `just setup-cef` drops the debug render process into the shared CEF
+# framework's Libraries/ for `cargo run`. The bundle's helpers use the release
+# render process instead, so this copy is dead weight (~41 MiB) and, being a
+# non-dylib executable, is also skipped by the Libraries/ signing loop.
+DEV_ONLY_CEF_LIBRARIES = ("bevy_cef_debug_render_process",)
 MIN_MACOS = "11.0"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -286,6 +291,11 @@ def embed_cef(cfg: BundleConfig) -> None:
             shutil.rmtree(helper_app)
 
     run(["cp", "-R", str(cfg.cef_framework), str(frameworks)])
+    for name in DEV_ONLY_CEF_LIBRARIES:
+        dev_only = old_cef / "Libraries" / name
+        if dev_only.exists():
+            dev_only.unlink()
+            print(f"  Removed dev-only {name}")
 
     for suffix in HELPER_SUFFIXES:
         helper_name = f"{cfg.bin_name} Helper{suffix}"

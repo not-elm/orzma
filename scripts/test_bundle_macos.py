@@ -293,6 +293,18 @@ class AssembleAndEmbed(unittest.TestCase):
             self.assertEqual(hp["CFBundleIdentifier"], f"not.elm.orzma.{idsfx}")
             self.assertTrue(hp["LSUIElement"])
 
+    def test_embed_drops_dev_only_render_process(self):
+        _write_fake_macho(self.cfg.cef_framework / "Libraries" / "bevy_cef_debug_render_process")
+        bm.assemble_app(self.cfg)
+        bm.embed_cef(self.cfg)
+        libs = (self.cfg.app_path / "Contents" / "Frameworks"
+                / "Chromium Embedded Framework.framework" / "Libraries")
+        self.assertFalse((libs / "bevy_cef_debug_render_process").exists())
+        self.assertTrue((libs / "libEGL.dylib").is_file())
+        self.assertTrue(
+            (self.cfg.cef_framework / "Libraries" / "bevy_cef_debug_render_process").is_file()
+        )
+
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
 class CopyCompanions(unittest.TestCase):
