@@ -79,6 +79,8 @@ repository = "https://github.com/not-elm/orzma"
 publish = false
 
 [workspace.dependencies]
+# NOTE: list individual features only: the bundles (`ui_api`, `2d_api`, `3d_api`, `common_api`, `*_bevy_render`)
+# re-enable audio, glTF, animation, gizmos and the LUTs; PNG / HDR image loading is deliberately off.
 bevy = { version = "0.19", default-features = false, features = [
   "default_app",
   "std",
