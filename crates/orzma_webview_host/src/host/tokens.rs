@@ -12,15 +12,17 @@ pub(crate) struct Tokens<P> {
     by_token: HashMap<String, P>,
 }
 
-impl<P: PaneKey> Tokens<P> {
+impl<P> Default for Tokens<P> {
     /// No live pane and no token.
-    pub fn new() -> Self {
+    fn default() -> Self {
         Self {
             live: HashSet::new(),
             by_token: HashMap::new(),
         }
     }
+}
 
+impl<P: PaneKey> Tokens<P> {
     /// Marks `pane` live.
     pub fn mark_live(&mut self, pane: P) {
         self.live.insert(pane);
@@ -64,7 +66,7 @@ mod tests {
     /// closes a leftover process retries with the same token.
     #[test]
     fn a_token_resolves_only_while_its_pane_lives() {
-        let mut tokens = Tokens::new();
+        let mut tokens = Tokens::default();
         tokens.mark_live(1_u32);
         let token = tokens.issue(1).expect("a token mints");
         assert!(token.starts_with("orzma:"));
@@ -80,7 +82,7 @@ mod tests {
     /// Case: the user splits a pane and both shells connect.
     #[test]
     fn two_panes_get_different_tokens() {
-        let mut tokens = Tokens::new();
+        let mut tokens = Tokens::default();
         tokens.mark_live(1_u32);
         tokens.mark_live(2);
         let first = tokens.issue(1).expect("mints");

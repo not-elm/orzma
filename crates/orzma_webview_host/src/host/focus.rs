@@ -82,12 +82,14 @@ pub(crate) struct FocusState<P> {
     current: Option<FocusRoute<P>>,
 }
 
-impl<P: PaneKey> FocusState<P> {
+impl<P> Default for FocusState<P> {
     /// No mount holds focus.
-    pub fn new() -> Self {
+    fn default() -> Self {
         Self { current: None }
     }
+}
 
+impl<P: PaneKey> FocusState<P> {
     /// The route holding focus.
     pub fn current(&self) -> Option<&FocusRoute<P>> {
         self.current.as_ref()
@@ -134,7 +136,7 @@ mod tests {
     /// Case: the user clicks one page, then another, then the second again.
     #[test]
     fn moving_focus_reports_the_route_that_lost_it() {
-        let mut focus = FocusState::new();
+        let mut focus = FocusState::default();
         assert_eq!(focus.set(route(1)), FocusTransition::Moved { lost: None });
         assert_eq!(
             focus.set(route(2)),
@@ -151,7 +153,7 @@ mod tests {
     /// Case: the user presses the release-focus shortcut twice.
     #[test]
     fn clearing_focus_returns_the_holder_once() {
-        let mut focus = FocusState::new();
+        let mut focus = FocusState::default();
         let _ = focus.set(route(1));
         assert_eq!(focus.clear(), Some(route(1)));
         assert_eq!(focus.clear(), None);

@@ -420,13 +420,13 @@ impl<P: PaneKey> WebviewHost<P> {
     fn new(socket: Option<ControlSocket>) -> Self {
         Self {
             socket,
-            connections: Connections::new(),
-            tokens: Tokens::new(),
-            registry: Registry::new(),
-            mounts: Mounts::new(),
-            focus: FocusState::new(),
+            connections: Connections::default(),
+            tokens: Tokens::default(),
+            registry: Registry::default(),
+            mounts: Mounts::default(),
+            focus: FocusState::default(),
             active: None,
-            calls: InFlightCalls::new(),
+            calls: InFlightCalls::default(),
             composited: HashMap::new(),
         }
     }

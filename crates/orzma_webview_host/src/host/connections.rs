@@ -13,14 +13,16 @@ pub(crate) struct Connections<P> {
     by_id: HashMap<ConnectionId, Connection<P>>,
 }
 
-impl<P: PaneKey> Connections<P> {
+impl<P> Default for Connections<P> {
     /// No connection.
-    pub fn new() -> Self {
+    fn default() -> Self {
         Self {
             by_id: HashMap::new(),
         }
     }
+}
 
+impl<P: PaneKey> Connections<P> {
     /// Records that `connection` belongs to `pane` and writes through
     /// `writer`.
     pub fn insert(&mut self, connection: ConnectionId, pane: P, writer: Sender<String>) {
@@ -85,7 +87,7 @@ mod tests {
     /// Case: the host tells a program that its page took the keyboard.
     #[test]
     fn a_push_reaches_the_writer_as_one_line() {
-        let mut connections = Connections::new();
+        let mut connections = Connections::default();
         let (writer, lines) = unbounded();
         connections.insert(ConnectionId::new(1), 1_u32, writer);
         connections
@@ -103,7 +105,7 @@ mod tests {
     /// reporting it.
     #[test]
     fn a_push_to_a_closed_connection_is_refused() {
-        let mut connections = Connections::new();
+        let mut connections = Connections::default();
         assert!(matches!(
             connections.push(ConnectionId::new(9), &focus_push()),
             Err(WebviewHostError::Refused(Refusal::ConnectionClosed))

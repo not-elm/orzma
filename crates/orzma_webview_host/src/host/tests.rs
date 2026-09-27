@@ -18,15 +18,17 @@ struct Fixture {
     lines: HashMap<u64, Receiver<String>>,
 }
 
-impl Fixture {
-    fn new() -> Self {
+impl Default for Fixture {
+    fn default() -> Self {
         let (socket, _events) = ControlSocket::injected(SOCK);
         Self {
             host: WebviewHost::with_socket(socket),
             lines: HashMap::new(),
         }
     }
+}
 
+impl Fixture {
     /// Binds `pane` and returns its token.
     fn open_pane(&mut self, pane: u32) -> String {
         self.host
@@ -171,7 +173,7 @@ fn gui_focus(fixture: &mut Fixture, mount: Option<MountId>) -> HostOutput<u32> {
 /// A fixture with pane 1 active, connection 1 in it, and one mounted
 /// inline view; returns the handle, instance, and mount.
 fn focused_fixture() -> (Fixture, HandleId, InstanceId, MountId) {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let _ = fixture.host.active_pane_changed(Some(1));
     let (handle, instance) = fixture.registered(1, inline());
@@ -213,7 +215,7 @@ fn compositing(handle: &HandleId, instance: InstanceId, active: bool) -> Value {
 /// variables.
 #[test]
 fn binding_a_pane_hands_it_the_socket_and_a_token() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     let env = fixture.host.bind_pane(1).expect("a token mints");
     assert_eq!(env[0], ("ORZMA_SOCK".to_string(), SOCK.to_string()));
     assert_eq!(env[1].0, "ORZMA_TOKEN");
@@ -260,7 +262,7 @@ fn a_stopped_listener_drops_the_socket() {
 /// leftover process of a closed pane reconnects.
 #[test]
 fn a_hello_is_accepted_only_for_a_live_panes_token() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     let token = fixture.open_pane(1);
     assert!(fixture.connect(1, &token));
     assert!(!fixture.connect(2, "orzma:guess"));
@@ -281,7 +283,7 @@ fn a_hello_is_accepted_only_for_a_live_panes_token() {
 /// Case: a markdown viewer registers its rendered page inline.
 #[test]
 fn an_inline_register_serves_its_document() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (reply, output) = fixture.register(1, inline());
     let ServerMsg::Registered { handle, .. } = reply else {
@@ -303,7 +305,7 @@ fn an_inline_register_serves_its_document() {
 /// page.
 #[test]
 fn a_dir_register_serves_its_root_and_a_url_register_nothing() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let root = tempfile::tempdir().unwrap();
     let (_, output) = fixture.register(
@@ -332,7 +334,7 @@ fn a_dir_register_serves_its_root_and_a_url_register_nothing() {
 /// sends another `register`.
 #[test]
 fn a_register_from_a_closed_pane_replies_owner_gone() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let _ = fixture.host.pane_closed(1);
     let (reply, output) = fixture.register(1, inline());
@@ -357,7 +359,7 @@ fn a_register_from_a_closed_pane_replies_owner_gone() {
 /// Case: a program registers a relative root directory.
 #[test]
 fn an_invalid_register_replies_its_validation_code() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (reply, output) = fixture.register(
         1,
@@ -380,7 +382,7 @@ fn an_invalid_register_replies_its_validation_code() {
 /// tries the same handle, and a third names a stale handle.
 #[test]
 fn new_instance_serves_only_the_owner() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     fixture.connect_pane(2, 2);
     let (handle, first) = fixture.registered(1, inline());
@@ -406,7 +408,7 @@ fn new_instance_serves_only_the_owner() {
 /// another program tried to.
 #[test]
 fn unregister_releases_reservations_and_the_asset() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     fixture.connect_pane(2, 2);
     let (handle, first) = fixture.registered(1, inline());
@@ -444,7 +446,7 @@ fn unregister_releases_reservations_and_the_asset() {
 /// view.
 #[test]
 fn disconnect_releases_only_that_connections_registrations() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     fixture.connect_pane(2, 2);
     let (a, _) = fixture.registered(1, inline());
@@ -473,7 +475,7 @@ fn disconnect_releases_only_that_connections_registrations() {
 /// Case: a markdown viewer writes its APC mount and the VT accepts it.
 #[test]
 fn a_mount_reports_a_new_mount_with_its_spec() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (handle, instance) = fixture.registered(1, inline());
     let output = fixture.host.placement_signal(
@@ -511,7 +513,7 @@ fn a_mount_reports_a_new_mount_with_its_spec() {
 /// and a forward key, and mounts it.
 #[test]
 fn a_mount_spec_carries_the_registration_policy() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let chord = ForwardChord::new(vec!["alt".into()], "h");
     let (_, instance) = fixture.registered(
@@ -548,7 +550,7 @@ fn a_mount_spec_carries_the_registration_policy() {
 /// terminal, and a stale instance from a previous session is mounted.
 #[test]
 fn a_foreign_or_unknown_mount_is_reclaimed() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (_, instance) = fixture.registered(1, inline());
     let foreign = fixture.host.placement_signal(
@@ -589,7 +591,7 @@ fn a_foreign_or_unknown_mount_is_reclaimed() {
 /// window grows.
 #[test]
 fn a_remount_reports_only_a_size_change() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (_, instance) = fixture.registered(1, inline());
     let mount = fixture.mounted(1, instance);
@@ -625,7 +627,7 @@ fn a_remount_reports_only_a_size_change() {
 /// and re-mounting its placement.
 #[test]
 fn an_unmount_then_mount_starts_a_new_mount() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (_, instance) = fixture.registered(1, inline());
     let first = fixture.mounted(1, instance);
@@ -653,7 +655,7 @@ fn an_unmount_then_mount_starts_a_new_mount() {
 /// and later the VT trims history past a placement.
 #[test]
 fn unmount_all_and_eviction_end_only_what_they_name() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     fixture.connect_pane(2, 2);
     let (handle, a) = fixture.registered(1, inline());
@@ -693,7 +695,7 @@ fn unmount_all_and_eviction_end_only_what_they_name() {
 /// Case: a program mounts a thirteenth placement in one pane.
 #[test]
 fn a_rejected_mount_changes_nothing() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (_, instance) = fixture.registered(1, inline());
     assert_eq!(
@@ -710,7 +712,7 @@ fn a_rejected_mount_changes_nothing() {
 /// Case: orzmd in a Windows pane mounts its view over the socket.
 #[test]
 fn a_socket_mount_asks_the_multiplexer_to_mount() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (_, instance) = fixture.registered(1, inline());
     let output = fixture
@@ -741,7 +743,7 @@ fn a_socket_mount_asks_the_multiplexer_to_mount() {
 /// another asks for more rows than the VT supports.
 #[test]
 fn a_socket_mount_outside_the_size_range_is_refused() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (_, instance) = fixture.registered(1, inline());
     for (rows, cols) in [(0, 10), (MAX_ROWS + 1, 10), (10, 0), (10, MAX_COLS + 1)] {
@@ -764,7 +766,7 @@ fn a_socket_mount_outside_the_size_range_is_refused() {
 /// and a truncated id.
 #[test]
 fn socket_requests_for_foreign_unknown_or_malformed_instances_are_refused() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     fixture.connect_pane(2, 2);
     let (_, instance) = fixture.registered(1, inline());
@@ -791,7 +793,7 @@ fn socket_requests_for_foreign_unknown_or_malformed_instances_are_refused() {
 /// Case: orzmd in a Windows pane closes its view over the socket.
 #[test]
 fn a_socket_unmount_ends_the_mount_and_drops_the_reservation() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (_, instance) = fixture.registered(1, inline());
     let mount = fixture.mounted(1, instance);
@@ -822,7 +824,7 @@ fn a_socket_unmount_ends_the_mount_and_drops_the_reservation() {
 /// Case: a program unregisters its view while the page is on screen.
 #[test]
 fn unregistering_a_mounted_view_ends_its_mount() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (handle, instance) = fixture.registered(1, inline());
     let mount = fixture.mounted(1, instance);
@@ -849,7 +851,7 @@ fn unregistering_a_mounted_view_ends_its_mount() {
 /// Case: the user closes a pane whose program shows a page.
 #[test]
 fn closing_a_pane_ends_its_mounts_without_touching_the_vt() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (handle, instance) = fixture.registered(1, inline());
     let mount = fixture.mounted(1, instance);
@@ -873,7 +875,7 @@ fn closing_a_pane_ends_its_mounts_without_touching_the_vt() {
 /// for another placement of the page it had registered.
 #[test]
 fn new_instance_after_the_pane_closes_answers_unknown_handle() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (handle, _) = fixture.registered(1, inline());
     let _ = fixture.host.pane_closed(1);
@@ -1156,7 +1158,7 @@ fn a_socket_focus_on_a_foreign_unmounted_or_inert_placement_is_refused() {
 /// belongs to a program in another pane, which later blurs too.
 #[test]
 fn a_socket_blur_releases_only_its_own_panes_focus() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     fixture.connect_pane(2, 2);
     let _ = fixture.host.active_pane_changed(Some(2));
@@ -1234,7 +1236,7 @@ fn ending_the_focused_mount_releases_focus_first() {
 /// clicks it.
 #[test]
 fn a_display_only_url_view_gets_focus_pushes() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let _ = fixture.host.active_pane_changed(Some(1));
     let (handle, instance) = fixture.registered(1, url(false));
@@ -1299,7 +1301,7 @@ fn a_foreign_reply_leaves_the_call_pending() {
 /// calls while its program's connection is going away.
 #[test]
 fn a_page_call_without_a_bridge_or_writer_is_refused_locally() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (_, remote) = fixture.registered(1, url(false));
     let remote_mount = fixture.mounted(1, remote);
@@ -1497,7 +1499,7 @@ fn a_page_emit_is_forwarded_to_its_program() {
 /// Case: the user follows a link inside an embedded browser page.
 #[test]
 fn a_url_change_of_a_bridged_remote_page_is_reported() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (handle, instance) = fixture.registered(1, url(true));
     let mount = fixture.mounted(1, instance);
@@ -1550,7 +1552,7 @@ fn a_url_change_of_an_orzma_page_is_not_reported() {
 /// unmounted placement, and another program's page.
 #[test]
 fn a_navigation_reaches_the_mounted_page_after_validation() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     fixture.connect_pane(2, 2);
     let (handle, instance) = fixture.registered(1, url(false));
@@ -1625,7 +1627,7 @@ fn a_navigation_reaches_the_mounted_page_after_validation() {
 /// Esc alone, and then shows a second placement.
 #[test]
 fn set_forward_keys_replaces_the_chords() {
-    let mut fixture = Fixture::new();
+    let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     fixture.connect_pane(2, 2);
     let (handle, _) = fixture.registered(1, inline());

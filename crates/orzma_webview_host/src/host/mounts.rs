@@ -42,15 +42,17 @@ pub(crate) struct Mounts<P> {
     next: MountId,
 }
 
-impl<P: PaneKey> Mounts<P> {
+impl<P> Default for Mounts<P> {
     /// No mounted placement; the first mount minted is `MountId::new(1)`.
-    pub fn new() -> Self {
+    fn default() -> Self {
         Self {
             by_instance: HashMap::new(),
             next: MountId::new(1),
         }
     }
+}
 
+impl<P: PaneKey> Mounts<P> {
     /// Records that `instance` is mounted in `pane` over `size`: a new mount
     /// when it was not mounted, the same mount when it was.
     pub fn mount(&mut self, instance: InstanceId, pane: P, size: PlacementSize) -> MountChange {
@@ -111,7 +113,7 @@ mod tests {
     /// window grows.
     #[test]
     fn a_mounted_placement_keeps_its_mount_across_repeats() {
-        let mut mounts = Mounts::new();
+        let mut mounts = Mounts::default();
         let MountChange::New(mount) = mounts.mount(InstanceId(1), 1_u32, SMALL) else {
             panic!("the first mount is new");
         };
@@ -132,7 +134,7 @@ mod tests {
     /// placement again.
     #[test]
     fn a_remount_after_an_unmount_mints_a_new_mount() {
-        let mut mounts = Mounts::new();
+        let mut mounts = Mounts::default();
         let MountChange::New(first) = mounts.mount(InstanceId(1), 1_u32, SMALL) else {
             panic!("the first mount is new");
         };
@@ -150,7 +152,7 @@ mod tests {
     /// keeps its page.
     #[test]
     fn on_pane_lists_only_that_panes_mounts() {
-        let mut mounts = Mounts::new();
+        let mut mounts = Mounts::default();
         let _ = mounts.mount(InstanceId(1), 1_u32, SMALL);
         let _ = mounts.mount(InstanceId(2), 1, SMALL);
         let _ = mounts.mount(InstanceId(3), 2, SMALL);
@@ -166,7 +168,7 @@ mod tests {
     /// mounted again.
     #[test]
     fn a_mount_resolves_only_while_current() {
-        let mut mounts = Mounts::new();
+        let mut mounts = Mounts::default();
         let MountChange::New(first) = mounts.mount(InstanceId(1), 1_u32, SMALL) else {
             panic!("the first mount is new");
         };

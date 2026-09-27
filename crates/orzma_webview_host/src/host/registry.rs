@@ -76,15 +76,17 @@ pub(crate) struct Registry<P> {
     by_instance: HashMap<InstanceId, HandleId>,
 }
 
-impl<P: PaneKey> Registry<P> {
+impl<P> Default for Registry<P> {
     /// An empty registry.
-    pub fn new() -> Self {
+    fn default() -> Self {
         Self {
             by_handle: HashMap::new(),
             by_instance: HashMap::new(),
         }
     }
+}
 
+impl<P: PaneKey> Registry<P> {
     /// The registration of `handle`, if live.
     pub fn get(&self, handle: &HandleId) -> Option<&Registration<P>> {
         self.by_handle.get(handle)
@@ -220,7 +222,7 @@ mod tests {
     /// unregisters.
     #[test]
     fn instances_resolve_while_their_registration_lives() {
-        let mut registry = Registry::new();
+        let mut registry = Registry::default();
         let handle = HandleId::from("h");
         registry
             .insert(handle.clone(), registration(1, 7, 1))
@@ -246,7 +248,7 @@ mod tests {
     /// Case: a broken random source repeats itself.
     #[test]
     fn duplicates_and_unknown_handles_are_refused() {
-        let mut registry = Registry::new();
+        let mut registry = Registry::default();
         let handle = HandleId::from("h");
         registry
             .insert(handle.clone(), registration(1, 7, 1))
@@ -276,7 +278,7 @@ mod tests {
     /// later a pane closes.
     #[test]
     fn removal_by_connection_or_pane_takes_only_theirs() {
-        let mut registry = Registry::new();
+        let mut registry = Registry::default();
         registry
             .insert(HandleId::from("a"), registration(1, 7, 1))
             .unwrap();

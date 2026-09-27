@@ -7,22 +7,15 @@ use std::collections::HashMap;
 
 /// Every forwarded page call awaiting its reply, by global reqId, and the
 /// counter that mints those ids.
+#[derive(Default)]
 pub(crate) struct InFlightCalls {
     calls: HashMap<String, PendingCall>,
     next_id: u64,
 }
 
 impl InFlightCalls {
-    /// No call in flight; the first minted id is `"0"`.
-    pub fn new() -> Self {
-        Self {
-            calls: HashMap::new(),
-            next_id: 0,
-        }
-    }
-
-    /// Mints the next global reqId: a decimal counter, shared by every
-    /// connection and therefore guessable.
+    /// Mints the next global reqId: a decimal counter starting at `"0"`,
+    /// shared by every connection and therefore guessable.
     pub fn mint(&mut self) -> String {
         let id = self.next_id.to_string();
         self.next_id = self.next_id.wrapping_add(1);
@@ -95,7 +88,7 @@ mod tests {
     /// Case: two pages call their programs one after the other.
     #[test]
     fn minted_ids_count_up_from_zero() {
-        let mut calls = InFlightCalls::new();
+        let mut calls = InFlightCalls::default();
         assert_eq!(calls.mint(), "0");
         assert_eq!(calls.mint(), "1");
     }
@@ -107,7 +100,7 @@ mod tests {
     /// before the real reply arrives.
     #[test]
     fn only_the_owning_connection_takes_a_call() {
-        let mut calls = InFlightCalls::new();
+        let mut calls = InFlightCalls::default();
         calls.note(
             "0".into(),
             MountId::new(1),
@@ -129,7 +122,7 @@ mod tests {
     /// unmounted while both have calls in flight.
     #[test]
     fn draining_takes_only_the_named_calls() {
-        let mut calls = InFlightCalls::new();
+        let mut calls = InFlightCalls::default();
         calls.note(
             "0".into(),
             MountId::new(1),
