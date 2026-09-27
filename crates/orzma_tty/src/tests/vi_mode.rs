@@ -3,7 +3,6 @@
 //! scrollback.
 
 use super::*;
-use crate::input::{PointerButton, PointerInput, PointerKind};
 use orzma_vt::prelude::{DisplayOffset, OrzmaVt, SelectionKind, ViModeSwitch, ViMotion};
 
 /// A 10-column terminal `rows` tall over a real VT, plus the sink its PTY
@@ -17,22 +16,6 @@ fn real_term(rows: u16) -> (OrzmaTty<OrzmaVt>, CaptureSink) {
     )
     .expect("OrzmaTty::detached");
     (term, sink)
-}
-
-fn pointer(
-    kind: PointerKind,
-    button: Option<PointerButton>,
-    col: u32,
-    side: CellSide,
-) -> PointerInput {
-    PointerInput {
-        kind,
-        button,
-        cell: CellCoord { col, row: 1 },
-        side,
-        click_count: 1,
-        mods: ProtocolModifiers::default(),
-    }
 }
 
 /// Asserts that entering vi mode arms the coalescer, and that a repeated
@@ -79,22 +62,11 @@ fn a_drag_in_vi_mode_selects_while_the_app_tracks_the_mouse() {
     term.feed_bytes(b"hello\x1b[?1002h\x1b[?1006h")
         .expect("the VT interprets the bytes");
     term.switch_vi_mode(ViModeSwitch::Enter);
-    term.send_pointer(pointer(
-        PointerKind::Press,
-        Some(PointerButton::Left),
-        1,
-        CellSide::Left,
-    ))
-    .expect("send_pointer");
-    term.send_pointer(pointer(PointerKind::Motion, None, 5, CellSide::Left))
+    term.send_pointer(press(PointerButton::Left, 1, 1))
         .expect("send_pointer");
+    term.send_pointer(motion(5, 1)).expect("send_pointer");
     let copied = term
-        .send_pointer(pointer(
-            PointerKind::Release,
-            Some(PointerButton::Left),
-            5,
-            CellSide::Left,
-        ))
+        .send_pointer(release(PointerButton::Left, 5, 1))
         .expect("send_pointer");
     term.settle_writes();
     assert_eq!(copied.as_deref(), Some("hello"));
@@ -112,25 +84,15 @@ fn an_unmoved_double_click_in_vi_mode_copies_nothing() {
     term.feed_bytes(b"hello")
         .expect("the VT interprets the bytes");
     term.switch_vi_mode(ViModeSwitch::Enter);
-    let press = pointer(
-        PointerKind::Press,
-        Some(PointerButton::Left),
-        3,
-        CellSide::Left,
-    );
-    let release = pointer(
-        PointerKind::Release,
-        Some(PointerButton::Left),
-        3,
-        CellSide::Left,
-    );
     for click_count in [1, 2] {
         term.send_pointer(PointerInput {
             click_count,
-            ..press
+            ..press(PointerButton::Left, 3, 1)
         })
         .expect("send_pointer");
-        let copied = term.send_pointer(release).expect("send_pointer");
+        let copied = term
+            .send_pointer(release(PointerButton::Left, 3, 1))
+            .expect("send_pointer");
         assert_eq!(copied, None, "click {click_count}");
     }
     assert_eq!(term.vt.selection_text(), None);
@@ -171,21 +133,11 @@ fn a_release_after_entering_vi_mode_still_reaches_the_app() {
     let (mut term, sink) = real_term(3);
     term.feed_bytes(b"\x1b[?1000h\x1b[?1006h")
         .expect("the VT interprets the bytes");
-    term.send_pointer(pointer(
-        PointerKind::Press,
-        Some(PointerButton::Left),
-        1,
-        CellSide::Left,
-    ))
-    .expect("send_pointer");
+    term.send_pointer(press(PointerButton::Left, 1, 1))
+        .expect("send_pointer");
     term.switch_vi_mode(ViModeSwitch::Enter);
-    term.send_pointer(pointer(
-        PointerKind::Release,
-        Some(PointerButton::Left),
-        1,
-        CellSide::Left,
-    ))
-    .expect("send_pointer");
+    term.send_pointer(release(PointerButton::Left, 1, 1))
+        .expect("send_pointer");
     term.settle_writes();
     let written = sink.contents();
     assert_eq!(written.iter().filter(|&&byte| byte == 0x1b).count(), 2);
@@ -203,15 +155,9 @@ fn a_page_motion_during_a_held_drag_moves_the_vi_cursor() {
     term.feed_bytes(b"ab\r\ncd\r\nef\r\ngh")
         .expect("the VT interprets the bytes");
     term.switch_vi_mode(ViModeSwitch::Enter);
-    term.send_pointer(pointer(
-        PointerKind::Press,
-        Some(PointerButton::Left),
-        1,
-        CellSide::Left,
-    ))
-    .expect("send_pointer");
-    term.send_pointer(pointer(PointerKind::Motion, None, 2, CellSide::Left))
+    term.send_pointer(press(PointerButton::Left, 1, 1))
         .expect("send_pointer");
+    term.send_pointer(motion(2, 1)).expect("send_pointer");
     term.scroll(Scroll::HalfPageDown);
     assert_eq!(
         term.vt.vi_cursor().map(|cursor| cursor.point.line),

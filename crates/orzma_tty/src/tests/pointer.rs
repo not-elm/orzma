@@ -2,31 +2,7 @@
 //! and selection effects reach the VT at the display offset.
 
 use super::*;
-use crate::input::{PointerButton, PointerInput, PointerKind};
 use crate::test_support::SelectionOp;
-
-fn event(kind: PointerKind, button: Option<PointerButton>, col: u32, row: u32) -> PointerInput {
-    PointerInput {
-        kind,
-        button,
-        cell: CellCoord { col, row },
-        side: CellSide::Left,
-        click_count: 1,
-        mods: ProtocolModifiers::default(),
-    }
-}
-
-fn press(button: PointerButton, col: u32, row: u32) -> PointerInput {
-    event(PointerKind::Press, Some(button), col, row)
-}
-
-fn motion(col: u32, row: u32) -> PointerInput {
-    event(PointerKind::Motion, None, col, row)
-}
-
-fn release(button: PointerButton, col: u32, row: u32) -> PointerInput {
-    event(PointerKind::Release, Some(button), col, row)
-}
 
 /// Asserts that a forwarded press clears the selection and writes its
 /// report in the VT's SGR encoding, in one write.
