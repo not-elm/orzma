@@ -627,6 +627,10 @@ mod tests {
             case(800, FontSlant::Italic),
             bundled::BOLD_ITALIC
         ));
+        assert!(std::ptr::eq(
+            case(600, FontSlant::Italic),
+            bundled::BOLD_ITALIC
+        ));
         assert!(std::ptr::eq(case(500, FontSlant::Normal), bundled::REGULAR));
     }
 
