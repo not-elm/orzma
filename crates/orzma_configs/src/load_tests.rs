@@ -36,10 +36,10 @@ fn load_fixture(name: &str) -> OrzmaConfigsResult<OrzmaConfigs> {
 #[test]
 fn missing_file_yields_defaults() {
     let configs = load_fixture("does_not_exist.toml").expect("a missing file is not an error");
-    assert_eq!(
-        configs.shortcuts.bindings_iter().count(),
-        OrzmaConfigs::default().shortcuts.bindings_iter().count()
-    );
+    let defaults = OrzmaConfigs::default();
+    assert_eq!(configs.shortcuts, defaults.shortcuts);
+    assert_eq!(configs.vi_mode, defaults.vi_mode);
+    assert_eq!(configs.mouse, defaults.mouse);
 }
 
 /// Asserts that an empty file loads the default shortcuts.

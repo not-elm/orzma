@@ -64,7 +64,7 @@ impl SeparatorHit {
     /// the grab band's half-width in logical px, floored at half a cell. A
     /// cursor on the line's own axis but past its painted end returns
     /// `None`.
-    pub(crate) fn resolve<'a>(
+    pub fn resolve<'a>(
         cursor_phys: Vec2,
         scale: f32,
         cell_px: (f32, f32),
@@ -122,7 +122,7 @@ impl SeparatorHit {
     /// The divider whose grab band contains `cursor_phys`, in window
     /// physical px, measured against the cell pitch and scale factor
     /// `geometry` records.
-    pub(in crate::input) fn at<'a>(
+    pub fn at<'a>(
         cursor_phys: Vec2,
         geometry: &PaneGeometry,
         half_band_logical: f32,

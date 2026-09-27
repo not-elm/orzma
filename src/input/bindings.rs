@@ -43,7 +43,7 @@ pub(crate) struct OrzmaMouseConfig {
 
 impl OrzmaMouseConfig {
     /// The policy the resolved `[mouse]` block selects.
-    pub(crate) fn from_config(mc: &MouseConfig) -> Self {
+    pub fn from_config(mc: &MouseConfig) -> Self {
         Self {
             cells_per_notch: mc.cells_per_notch,
             axis_lock_ratio: mc.axis_lock_ratio,
@@ -62,14 +62,7 @@ impl OrzmaMouseConfig {
 
 impl Default for OrzmaMouseConfig {
     fn default() -> Self {
-        Self {
-            cells_per_notch: 0.5,
-            axis_lock_ratio: 0.9,
-            double_click_timeout: Duration::from_millis(400),
-            click_drift_px: 8.0,
-            fine_modifier: FineModifier::Alt,
-            divider_grab_tolerance_px: 4.0,
-        }
+        Self::from_config(&MouseConfig::default())
     }
 }
 

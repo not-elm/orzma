@@ -94,6 +94,9 @@ impl Default for MouseConfig {
 mod tests {
     use super::*;
 
+    /// Asserts that every `[mouse]` key defaults to its documented value.
+    ///
+    /// Case: a user whose config.toml has no `[mouse]` section starts orzma.
     #[test]
     fn defaults_match_expected_values() {
         let cfg = MouseConfig::default();

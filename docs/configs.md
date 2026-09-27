@@ -17,7 +17,11 @@ orzma prints a warning and starts with every setting at its default, ignoring
 the rest of the file too. This includes the window actions and `zoom-pane`
 that older versions accepted under `[shortcuts]`; delete those lines when
 upgrading. Unknown keys in `[mouse]` and `[inactive_pane]` are silently
-ignored. Most invalid values are startup errors; the few that are silently
+ignored. A value orzma cannot read (a malformed chord, an unknown word, or the
+wrong type) fails the whole file the same way. Conflicting bindings (including
+a leader chord that is also a direct binding), a leader key orzma cannot map,
+and an invalid `[font]` size or style stop orzma at startup instead, and so
+does a `[font]` family that is not installed. The few values that are silently
 clamped or reverted are noted inline below.
 
 ## Example config
@@ -39,7 +43,7 @@ shell_integration = true
 
 [cursor]
 # Unlike the other enum-valued keys, an unrecognized `style` word silently
-# reverts to the default instead of being a startup error.
+# reverts to the default instead of failing the whole file.
 style = "block"           # block | underline | bar
 blink_interval = 750      # milliseconds; 0 keeps the caret steady whatever a program asks for. Any other value below 10 is silently raised to 10.
 blink_timeout = 5         # seconds; 0 blinks indefinitely. Silently raised to twice blink_interval (one full on/off cycle) when shorter.
@@ -135,7 +139,7 @@ repeat-time-ms = 500
 # never collide.
 
 # --- existing actions ---
-paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for a leader binding.
+paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>v" for a leader binding.
 copy                  = "Cmd+C"        # Copy the focused terminal's selection to the system clipboard.
 release-webview-focus = "<Leader>u"
 quit                  = "Cmd+Q"        # Unbound by default off macOS, where the window manager closes the window.
@@ -228,8 +232,8 @@ A chord is zero or more modifiers followed by exactly one key, joined with `+`.
 Examples: `Cmd+Shift+Q`, `Ctrl+Alt+ArrowLeft`, `Cmd+Plus`.
 
 Invalid chords — an empty token (`Cmd+`), an unknown named key (`Cmd+F12`), a
-duplicated modifier (`Cmd+Meta+S`), or more than one key (`Cmd+S+T`) — fail at
-startup.
+duplicated modifier (`Cmd+Meta+S`), or more than one key (`Cmd+S+T`) — make the
+whole file fail to parse, as described under "File location".
 
 ## Repeatable bindings (`<Leader:r>`)
 

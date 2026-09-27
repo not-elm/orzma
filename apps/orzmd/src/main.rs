@@ -26,6 +26,7 @@ use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui_orzma::{Orzma, OrzmaBackend, OrzmaError, RpcError, Webview, WebviewHandle};
+use std::borrow::Cow;
 use std::ffi::OsStr;
 use std::io::{self, stdout};
 use std::path::{Path, PathBuf};
@@ -227,25 +228,36 @@ fn allowed_external_url(url: &str) -> bool {
 // orzmd is for viewing trusted local documents and does not sandbox link
 // targets.
 /// Opens `target` (a URL or absolute path) with the platform's default
-/// handler. No shell is involved, so `target` is not interpreted.
+/// handler. No command interpreter parses `target`, but on Windows the shell
+/// substitutes a URL into the command line its scheme's handler registers.
 ///
 /// # Errors
 ///
-/// Returns the opener's error when the handler cannot be launched.
+/// Returns the opener's error when the opener cannot be started. On macOS and
+/// Linux the opener runs detached, so a handler that fails after it starts is
+/// not reported.
 fn spawn_open(target: impl AsRef<OsStr>) -> io::Result<()> {
     open::that_detached(target)
 }
 
-/// Strips a `\\?\` verbatim prefix from `path` on Windows so the opener
-/// receives a path Explorer accepts; returns `path` unchanged elsewhere.
+/// `path` in a form the Windows shell accepts: a `\\?\C:\` verbatim prefix is
+/// stripped when `dunce` judges it safe, and a `\\?\UNC\server\share` prefix
+/// becomes `\\server\share`. Returns `path` unchanged elsewhere.
 #[cfg(windows)]
-fn display_path(path: &Path) -> &Path {
-    dunce::simplified(path)
+fn shell_path(path: &Path) -> Cow<'_, Path> {
+    let simplified = dunce::simplified(path);
+    match simplified
+        .to_str()
+        .and_then(|s| s.strip_prefix(r"\\?\UNC\"))
+    {
+        Some(share) => Cow::Owned(PathBuf::from(format!(r"\\{share}"))),
+        None => Cow::Borrowed(simplified),
+    }
 }
 
 #[cfg(not(windows))]
-fn display_path(path: &Path) -> &Path {
-    path
+fn shell_path(path: &Path) -> Cow<'_, Path> {
+    Cow::Borrowed(path)
 }
 
 fn main() {
@@ -370,7 +382,7 @@ fn event_loop(
             let base = session.base_dir();
             let opened = document::resolve_link(base, &op.path)
                 .ok()
-                .is_some_and(|target| spawn_open(display_path(&target)).is_ok());
+                .is_some_and(|target| spawn_open(shell_path(&target).as_os_str()).is_ok());
             if !opened {
                 session.flash = Some(format!("cannot open {}", op.path));
             }
@@ -458,6 +470,24 @@ fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Asserts that a verbatim disk path loses its prefix and a verbatim UNC
+    /// path becomes a plain `\\server\share` path.
+    ///
+    /// Case: a user clicks a link in a document on the local disk, and
+    /// another in a document on a mapped network drive.
+    #[cfg(windows)]
+    #[test]
+    fn shell_path_strips_verbatim_prefixes() {
+        assert_eq!(
+            &*shell_path(Path::new(r"\\?\C:\docs\spec.pdf")),
+            Path::new(r"C:\docs\spec.pdf")
+        );
+        assert_eq!(
+            &*shell_path(Path::new(r"\\?\UNC\srv\team\docs\spec.pdf")),
+            Path::new(r"\\srv\team\docs\spec.pdf")
+        );
+    }
 
     #[test]
     fn allowed_external_url_accepts_web_schemes_only() {

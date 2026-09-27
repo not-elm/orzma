@@ -238,8 +238,8 @@ mod validate_tests {
     /// Asserts that a leader chord equal to a bound direct chord fails
     /// validation, naming the shadowed action.
     ///
-    /// Case: a user picks a leader chord they had already bound to quit, so
-    /// quit could never fire again.
+    /// Case: a user picks as the leader the same chord they had already bound
+    /// to quit.
     #[test]
     fn validate_rejects_leader_shadowing_direct_binding() {
         let toml_str = "[shortcuts]\nquit = \"Ctrl+Alt+Q\"\nleader = \"Ctrl+Alt+Q\"\nkill-pane = \"<Leader>d\"\n";
@@ -252,6 +252,11 @@ mod validate_tests {
         }
     }
 
+    /// Asserts that two actions bound to the same leader-scoped chord fail
+    /// validation with `DuplicatePrefixChords`.
+    ///
+    /// Case: under a `Ctrl+A` leader, a user binds both kill-pane and vi mode
+    /// to `<Leader>d`.
     #[test]
     fn validate_rejects_leader_table_internal_dupe() {
         let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nkill-pane = \"<Leader>d\"\nenter-vi-mode = \"<Leader>d\"\n";
@@ -259,6 +264,10 @@ mod validate_tests {
         assert!(matches!(err, OrzmaConfigsError::DuplicatePrefixChords(_)));
     }
 
+    /// Asserts that a direct chord and a leader-scoped chord on the same key
+    /// do not conflict.
+    ///
+    /// Case: a user binds vi mode to a bare `s` and kill-pane to `<Leader>s`.
     #[test]
     fn validate_allows_cross_keyspace_same_key() {
         let toml_str =
@@ -269,6 +278,11 @@ mod validate_tests {
         );
     }
 
+    /// Asserts that a chord leader with a leader-scoped binding passes
+    /// validation.
+    ///
+    /// Case: a user sets the leader to `Ctrl+A` and moves kill-pane to
+    /// `<Leader>d`.
     #[test]
     fn validate_allows_leader_with_bindings() {
         let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nkill-pane = \"<Leader>d\"\n";
@@ -292,6 +306,11 @@ mod validate_tests {
         assert!(parse_validated(toml_str).is_ok());
     }
 
+    /// Asserts that a bare-modifier tap leader with a leader-scoped binding
+    /// passes validation.
+    ///
+    /// Case: a user makes a tap of `Cmd` the leader and moves kill-pane to
+    /// `<Leader>d`.
     #[test]
     fn validate_accepts_bare_modifier_tap_leader() {
         let toml_str = "[shortcuts]\nleader = \"Cmd\"\nkill-pane = \"<Leader>d\"\n";

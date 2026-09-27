@@ -1274,10 +1274,13 @@ mod tests {
         }
     }
 
+    /// Asserts that `bindings_iter` lists one entry for each of the 19
+    /// actions.
+    ///
+    /// Case: orzma starts and turns the configured actions into its shortcut
+    /// table.
     #[test]
     fn bindings_iter_count_is_pinned_to_field_count() {
-        // NOTE: drift guard — adding a Shortcuts field without its
-        // bindings_iter() entry silently unbinds the action.
         assert_eq!(Shortcuts::default().bindings_iter().count(), 19);
     }
 
@@ -1300,6 +1303,11 @@ mod tests {
         );
     }
 
+    /// Asserts that the stock pane actions sit on non-repeatable leader
+    /// chords.
+    ///
+    /// Case: a user with no config file splits, selects, and kills panes
+    /// through the leader.
     #[test]
     fn default_multiplexer_actions_are_leader_bound() {
         let s = Shortcuts::default();
@@ -1333,6 +1341,11 @@ mod tests {
         );
     }
 
+    /// Asserts that a pane action accepts a leader chord, an empty string that
+    /// unbinds it, and a direct chord.
+    ///
+    /// Case: a user moves the vertical split to `<Leader>g`, turns off
+    /// kill-pane, and puts the horizontal split on `Cmd+T`.
     #[test]
     fn multiplexer_actions_parse_from_flat_toml() {
         let toml = r#"
@@ -1362,6 +1375,11 @@ split-horizontal-pane = "Cmd+T"
         assert!(s.validate_no_leader_conflicts().is_ok());
     }
 
+    /// Asserts that a chord leader and leader-scoped bindings parse from flat
+    /// keys while the other actions keep their defaults.
+    ///
+    /// Case: a user sets a `Ctrl+A` leader and moves vi mode and kill-pane to
+    /// new leader chords.
     #[test]
     fn shortcuts_parses_flat_leader_and_bindings() {
         let toml = r#"
@@ -1414,6 +1432,10 @@ kill-pane = "<Leader>d"
         assert!(err[0].actions.contains(&"quit"));
     }
 
+    /// Asserts that two leader-scoped bindings sharing one chord are reported
+    /// as a single conflict naming both actions.
+    ///
+    /// Case: a user binds vi mode and kill-pane to `<Leader>d`.
     #[test]
     fn leader_conflict_detected() {
         let s = Shortcuts {
@@ -1433,6 +1455,11 @@ kill-pane = "<Leader>d"
         assert!(err[0].actions.contains(&"kill-pane"));
     }
 
+    /// Asserts that a repeatable and a non-repeatable leader binding on the
+    /// same chord still conflict.
+    ///
+    /// Case: a user binds vi mode to `<Leader:r>d` and kill-pane to
+    /// `<Leader>d`.
     #[test]
     fn leader_conflict_detected_across_repeat_flag() {
         let s = Shortcuts {
@@ -1455,8 +1482,7 @@ kill-pane = "<Leader>d"
     /// Asserts that the macOS default table round-trips to its exact JSON
     /// form, pinning every one of the 22 fields at once.
     ///
-    /// Case: a macOS user's config is serialized back out, so a stock binding
-    /// that silently changes shape is caught here.
+    /// Case: a macOS user's config is serialized back out.
     #[cfg(target_os = "macos")]
     #[test]
     fn default_shortcuts_json_snapshot() {
@@ -1469,8 +1495,7 @@ kill-pane = "<Leader>d"
     /// form, pinning every one of the 22 fields at once, with the unbound
     /// `quit` emitted as an empty string.
     ///
-    /// Case: a Windows user's config is serialized back out, so a stock
-    /// binding that silently changes shape is caught here.
+    /// Case: a Windows user's config is serialized back out.
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn default_shortcuts_json_snapshot() {
@@ -1479,6 +1504,11 @@ kill-pane = "<Leader>d"
         assert_eq!(json, expected);
     }
 
+    /// Asserts that a chord leader serializes as its chord string and a
+    /// leader-scoped binding with the `<Leader>` token.
+    ///
+    /// Case: a user with a `Ctrl+A` leader and kill-pane on `<Leader>d` has
+    /// their config serialized back out.
     #[test]
     fn serialize_leader_binding_emits_leader_token() {
         let s = Shortcuts {
@@ -1537,6 +1567,10 @@ kill-pane = "<Leader>d"
         assert!(parse_leader("Shift").is_err());
     }
 
+    /// Asserts that a bare-modifier leader parses as a tap leader and keeps
+    /// the configured tap timeout.
+    ///
+    /// Case: a user makes a tap of `Cmd` the leader with a 250 ms tap window.
     #[test]
     fn shortcuts_parses_bare_modifier_leader_and_timeout() {
         let toml = "leader = \"Cmd\"\nleader-tap-timeout-ms = 250\nkill-pane = \"<Leader>d\"\n";
@@ -1603,6 +1637,11 @@ kill-pane = "<Leader>d"
         assert!(parse_binding("<Leader:r>").is_err());
     }
 
+    /// Asserts that a repeatable leader binding serializes with the
+    /// `<Leader:r>` token.
+    ///
+    /// Case: a user with kill-pane on `<Leader:r>d` has their config
+    /// serialized back out.
     #[test]
     fn serialize_repeat_leader_binding_emits_repeat_token() {
         let s = Shortcuts {
@@ -1619,6 +1658,11 @@ kill-pane = "<Leader>d"
         );
     }
 
+    /// Asserts that `leader_chords` reports each leader binding's repeat
+    /// flag.
+    ///
+    /// Case: a user makes vi mode repeatable on `<Leader:r>s` and leaves
+    /// kill-pane non-repeatable on `<Leader>d`.
     #[test]
     fn leader_chords_carries_repeat_flag() {
         let s = Shortcuts {
