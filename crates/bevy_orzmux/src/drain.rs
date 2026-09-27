@@ -170,6 +170,7 @@ mod tests {
             rows: vec![],
             cursor: Cursor::default(),
             display_offset: DisplayOffset(0),
+            history_len: 0,
             vi_cursor: None,
             selection: None,
             placements: None,

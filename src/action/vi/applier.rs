@@ -1,6 +1,6 @@
 //! Local VI applier: forwards each shared VI action event to the matching
 //! `bevy_orzmux` request `EntityEvent`, and to the vi-mode exit event
-//! `mode.rs` owns for selection toggling, yank, and exit.
+//! `mode.rs` owns for yank and exit.
 
 use crate::action::vi::mode::ExitViMode;
 use crate::action::vi::{
@@ -8,9 +8,8 @@ use crate::action::vi::{
 };
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{
-    OrzmuxPane, RequestTtyCopySelection, RequestTtyScroll, RequestTtySelectionClear,
-    RequestTtySelectionKindChange, RequestTtySelectionStartAtViCursor, RequestTtyViMotion,
-    SelectionKind,
+    OrzmuxPane, RequestTtyCopySelection, RequestTtyScroll, RequestTtyViMotion,
+    RequestTtyViSelectionToggle,
 };
 use orzma_configs::vi_mode::ViModeScroll;
 use orzma_vt::prelude::Scroll;
@@ -44,28 +43,13 @@ fn on_vi_scroll(ev: On<ViScrollRequest>, mut commands: Commands) {
     });
 }
 
-/// Resolves a selection toggle against the current selection and requests
-/// the matching operation.
+/// Forwards a `ViSelectionToggleRequest` as a `RequestTtyViSelectionToggle`,
+/// which the terminal resolves against its own selection.
 fn on_vi_selection_toggle(ev: On<ViSelectionToggleRequest>, mut commands: Commands) {
-    match SelectionOp::resolve(selection_type(), ev.ty) {
-        SelectionOp::Start(kind) => {
-            commands.trigger(RequestTtySelectionStartAtViCursor {
-                terminal: ev.entity,
-                kind,
-            });
-        }
-        SelectionOp::Change(kind) => {
-            commands.trigger(RequestTtySelectionKindChange {
-                terminal: ev.entity,
-                kind,
-            });
-        }
-        SelectionOp::Clear => {
-            commands.trigger(RequestTtySelectionClear {
-                terminal: ev.entity,
-            });
-        }
-    }
+    commands.trigger(RequestTtyViSelectionToggle {
+        terminal: ev.entity,
+        kind: ev.ty,
+    });
 }
 
 /// Requests the selection's text, answered later as a clipboard write, and
@@ -103,56 +87,11 @@ fn scroll_for(kind: ViModeScroll) -> Scroll {
     }
 }
 
-/// A resolved selection-toggle operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SelectionOp {
-    Start(SelectionKind),
-    Change(SelectionKind),
-    Clear,
-}
-
-impl SelectionOp {
-    /// Resolves a selection toggle against the current selection: same kind
-    /// clears, a different kind switches, none starts.
-    fn resolve(current: Option<SelectionKind>, requested: SelectionKind) -> Self {
-        match current {
-            Some(c) if c == requested => Self::Clear,
-            Some(_) => Self::Change(requested),
-            None => Self::Start(requested),
-        }
-    }
-}
-
-// TODO: Read the live selection kind from the VT once vi mode lands there;
-// until then every toggle resolves to `SelectionOp::Start`.
-fn selection_type() -> Option<SelectionKind> {
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy_orzmux::prelude::SelectionKind;
     use bevy_orzmux::prelude::ViMotion;
-
-    /// Asserts that a toggle starts a selection when none exists, clears
-    /// one of the same kind, and switches one of a different kind.
-    ///
-    /// Case: the user presses `v`, then `v` again, then `V` in vi mode.
-    #[test]
-    fn selection_toggle_resolution() {
-        assert_eq!(
-            SelectionOp::resolve(None, SelectionKind::Simple),
-            SelectionOp::Start(SelectionKind::Simple)
-        );
-        assert_eq!(
-            SelectionOp::resolve(Some(SelectionKind::Simple), SelectionKind::Simple),
-            SelectionOp::Clear
-        );
-        assert_eq!(
-            SelectionOp::resolve(Some(SelectionKind::Simple), SelectionKind::Lines),
-            SelectionOp::Change(SelectionKind::Lines)
-        );
-    }
 
     /// Asserts that every `ViModeScroll` maps to the intended `Scroll`
     /// motion, with line scrolls as one-line deltas.
@@ -236,18 +175,17 @@ mod tests {
     }
 
     #[derive(Resource, Default)]
-    struct SeenStarts(Vec<(Entity, SelectionKind)>);
+    struct SeenToggles(Vec<(Entity, SelectionKind)>);
 
-    /// Asserts that a selection toggle — always resolving to `Start` while
-    /// `selection_type` is stubbed to `None` — triggers
-    /// `RequestTtySelectionStartAtViCursor` with the requested kind.
+    /// Asserts that a selection toggle is forwarded as a
+    /// `RequestTtyViSelectionToggle` carrying the same entity and kind.
     ///
-    /// Case: the user presses `v` in vi mode with no selection active.
+    /// Case: the user presses `V` in vi mode.
     #[test]
-    fn vi_selection_toggle_starts_at_the_vi_cursor() {
+    fn vi_selection_toggle_triggers_the_matching_request() {
         let mut app = app_with_applier();
-        app.init_resource::<SeenStarts>().add_observer(
-            |ev: On<RequestTtySelectionStartAtViCursor>, mut seen: ResMut<SeenStarts>| {
+        app.init_resource::<SeenToggles>().add_observer(
+            |ev: On<RequestTtyViSelectionToggle>, mut seen: ResMut<SeenToggles>| {
                 seen.0.push((ev.terminal, ev.kind));
             },
         );
@@ -260,7 +198,7 @@ mod tests {
         app.update();
 
         assert_eq!(
-            app.world().resource::<SeenStarts>().0,
+            app.world().resource::<SeenToggles>().0,
             vec![(entity, SelectionKind::Lines)]
         );
     }

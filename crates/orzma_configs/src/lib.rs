@@ -10,6 +10,7 @@ use crate::inactive_pane::InactivePaneConfig;
 use crate::keyboard::KeyboardConfig;
 use crate::mouse::MouseConfig;
 use crate::orzma::OrzmaConfig;
+use crate::selection::SelectionConfig;
 use crate::shortcuts::Shortcuts;
 use crate::{font::FontConfig, vi_mode::ViModeConfig};
 pub use error::{OrzmaConfigsError, OrzmaConfigsResult};
@@ -24,6 +25,7 @@ pub mod keyboard;
 pub mod mouse;
 pub mod orzma;
 pub mod path;
+pub mod selection;
 pub mod shortcuts;
 pub mod vi_mode;
 
@@ -57,6 +59,9 @@ pub struct OrzmaConfigs {
     pub orzma: OrzmaConfig,
     /// Cursor appearance and blink policy.
     pub cursor: CursorConfig,
+    /// `[selection]` table: the word separators of the semantic vi-mode
+    /// motions.
+    pub selection: SelectionConfig,
 }
 
 impl OrzmaConfigs {

@@ -94,9 +94,7 @@ fn attach_indicator_to_surface_host(
 }
 
 /// Updates each visible chip's `Text` and `IndicatorCache` from the
-/// host's live scroll offset.
-// TODO: `total` is stubbed to 0 until `bevy_orzmux` exposes a
-// history-size read; only the live scroll offset is real.
+/// terminal's scroll offset and history length.
 fn refresh_indicator(
     hosts: Query<(&TerminalView, &Children), With<ViModeState>>,
     mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<ViModeIndicator>>,
@@ -108,7 +106,7 @@ fn refresh_indicator(
         let Ok((mut text, mut node, mut cache)) = chips.get_mut(chip) else {
             continue;
         };
-        let (offset, total) = (view.display_offset, 0);
+        let (offset, total) = (view.display_offset, view.history_len);
         let new_cache = IndicatorCache { offset, total };
         // NOTE: the first-show path (Display::None → Flex) must always
         // write the text even when the cache already matches the snapshot,
@@ -349,5 +347,29 @@ mod tests {
             Display::None,
             "chip hides as soon as ViModeState is removed"
         );
+    }
+
+    /// Asserts that the chip shows the terminal's history length as its
+    /// total.
+    ///
+    /// Case: the user enters vi mode on a terminal holding 40 rows of
+    /// scrollback.
+    #[test]
+    fn refresh_shows_the_history_length_as_total() {
+        let mut app = make_app_with_plugin();
+        let host = spawn_terminal_entity(&mut app);
+        app.update();
+        app.world_mut()
+            .entity_mut(host)
+            .get_mut::<TerminalView>()
+            .expect("TerminalView on host")
+            .history_len = 40;
+        app.world_mut()
+            .entity_mut(host)
+            .insert(crate::action::vi::mode::ViModeState);
+        app.update();
+        let chip = find_indicator_child(&app, host).expect("chip");
+        let text = app.world().get::<Text>(chip).expect("Text");
+        assert_eq!(text.0, "[0/40]");
     }
 }

@@ -31,8 +31,7 @@ pub use paste::{RequestActivePaste, RequestTtyPaste};
 pub use pointer::RequestTtyPointer;
 pub use scroll::RequestTtyScroll;
 pub use selection::{
-    CellSide, GridPoint, RequestTtySelectionClear, RequestTtySelectionKindChange,
-    RequestTtySelectionStartAtViCursor, SelectionKind,
+    CellSide, GridPoint, RequestTtySelectionClear, RequestTtyViSelectionToggle, SelectionKind,
 };
 pub use split_resize::RequestSplitResize;
 pub use vi_mode::{RequestTtyViMode, ViModeSwitch};
@@ -210,6 +209,18 @@ mod tests {
         world.trigger(RequestSplitResize {
             split: SplitId(1),
             position: 10,
+        });
+        world.trigger(RequestTtyViMode {
+            terminal: pane,
+            switch: ViModeSwitch::Enter,
+        });
+        world.trigger(RequestTtyViMotion {
+            terminal: pane,
+            motion: ViMotion::Down,
+        });
+        world.trigger(RequestTtyViSelectionToggle {
+            terminal: pane,
+            kind: SelectionKind::Simple,
         });
         app.update();
     }

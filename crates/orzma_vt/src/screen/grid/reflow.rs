@@ -1705,7 +1705,7 @@ mod tests {
     use super::*;
     use crate::device::color::Color;
     use crate::screen::cell::{BodyWidth, GlyphClass};
-    use crate::screen::grid::tests::scroll_up_whole_screen;
+    use crate::screen::grid::tests::{scroll_up_whole_screen, write};
     use proptest::prelude::*;
     use proptest::sample::Index;
     use std::collections::HashSet;
@@ -1972,23 +1972,6 @@ mod tests {
 
     fn grid(cols: u16, rows: u16, max_history: usize) -> Grid {
         Grid::new(GridSize { cols, rows }, max_history)
-    }
-
-    /// Writes `text` from column zero of `line`, spilling onto the rows
-    /// below and recording each wrap as autowrap would.
-    fn write(grid: &mut Grid, line: u16, text: &str) {
-        let cols = usize::from(grid.size().cols);
-        let chars: Vec<char> = text.chars().collect();
-        let chunks: Vec<&[char]> = chars.chunks(cols.max(1)).collect();
-        for (k, chunk) in chunks.iter().enumerate() {
-            let row = line + u16::try_from(k).expect("a small test");
-            for (column, c) in (0u16..).zip(chunk.iter()) {
-                grid[ScreenLine(row)][column].c = *c;
-            }
-            if k + 1 < chunks.len() {
-                grid.set_wrap_at(GridLine::from(ScreenLine(row)), grid.size().cols);
-            }
-        }
     }
 
     fn cursor_at(line: i32, boundary: u16) -> TrackedPoint {

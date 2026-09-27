@@ -12,7 +12,7 @@ orzma resolves the config path in this order:
 3. `~/.config/orzma/config.toml` — the default.
 
 Unknown sections are rejected at startup, as are unknown keys in `[cursor]`,
-`[orzma]`, `[keyboard]`, `[shortcuts]`, `[vi-mode]`, and `[font]`. Unknown keys in
+`[orzma]`, `[keyboard]`, `[shortcuts]`, `[vi-mode]`, `[selection]`, and `[font]`. Unknown keys in
 `[mouse]` and `[inactive_pane]` are silently ignored. Most invalid values are
 startup errors too; the few that are silently clamped or reverted are noted
 inline below.
@@ -44,6 +44,11 @@ thickness = 0.15          # f32 0..=1, fraction of the cell width. Out-of-range 
 unfocused_hollow = true
 # The caret starts blinking. DECSCUSR and DECSET 12 / DECRST 12 both
 # change it from there, and a DECSCUSR 0 or 7 restores the blink.
+
+[selection]
+# Characters that end a word for the vi-mode `w` / `b` / `e` motions,
+# besides whitespace. Read at startup. Omit the key to keep this default.
+semantic_escape_chars = ",│`|:\"' ()[]{}<>\t"
 
 [font]
 size = 11.25              # f32, logical px. Must be 0 < size <= 200, else startup error.
@@ -313,7 +318,7 @@ pane scrolled back into its history always selects in orzma too, whether
 or not Shift is held.
 
 Two stock `[vi-mode]` keys share a chord with these defaults. Inside vi mode
-`Ctrl+V` toggles a rectangular selection (the paste action is inert there
+`Ctrl+V` runs `toggle-rect-selection` (the paste action is inert there
 anyway), and `Ctrl+C` leaves vi mode whenever there is no selection to copy.
 
 Binding `paste` to `Ctrl+V` does take that key away from the program running in
@@ -533,7 +538,7 @@ binding still runs:
 | `scroll-down` | `Ctrl+E` | Scroll one line down. |
 | `toggle-selection` | `v`, `Space` | Toggle a character-wise selection. |
 | `toggle-line-selection` | `V` | Toggle a line-wise selection. |
-| `toggle-rect-selection` | `Ctrl+V` | Toggle a rectangular (block) selection. |
+| `toggle-rect-selection` | `Ctrl+V` | Toggle a rectangular (block) selection (currently toggles a line-wise selection). |
 | `yank` | `y`, `Enter` | Copy the selection to the clipboard and leave vi mode. |
 | `exit` | `q`, `Escape`, `Ctrl+C` | Leave vi mode. |
 | `search-forward` | `/` | Open the search-down prompt (currently has no effect). |
@@ -552,14 +557,26 @@ The 8 prompt/search actions (`search-forward`, `search-backward`,
 `jump-to-forward`, `jump-to-backward` — i.e. the stock `/ ? n N f F t T`
 keys) currently have no effect: the key press is swallowed (no prompt opens,
 nothing happens) while vi mode is active. Local vi-mode search is a future
-feature. Every other action works today, including `toggle-rect-selection`
-(`Ctrl+V`), which toggles a real rectangular selection.
+feature. `toggle-rect-selection` (`Ctrl+V`) currently toggles a line-wise
+selection, because rectangular selection is not implemented yet. Every other
+action works.
+
+The mouse keeps working in vi mode, even while a program such as nvim tracks
+the mouse: a click moves the vi cursor, and a drag selects text (and moves
+the vi cursor to where the drag ends). On the primary screen (the shell), the
+wheel scrolls the scrollback. On the alternate screen, where full-screen
+programs such as nvim and less run, the wheel sends arrow keys to the program
+(with alternate scroll on, the default), as it does outside vi mode for a
+program that does not track the mouse. A selection started with the mouse can
+be extended with the motion keys.
 
 ### Escape semantics
 
 By default, `Escape` is bound to the `exit` action, which leaves vi mode
-entirely. To deselect a selection in orzma without leaving vi mode, press `v`
-(toggle-selection is a toggle: with a selection active, it clears it).
+entirely. To deselect a selection in orzma without leaving vi mode, press the
+toggle key that matches its kind: `v` clears a character-wise selection and
+`V` a line-wise one. The other key switches the selection to that key's kind
+instead of clearing it.
 
 Keys not bound to any `[vi-mode]` action are swallowed while vi mode is
 active (they never reach the pane) — this includes stock `copy-mode-vi` keys

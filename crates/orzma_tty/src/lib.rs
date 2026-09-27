@@ -7,8 +7,8 @@ use crate::{
     coalescer::Coalescer,
     error::{OrzmaTtyError, OrzmaTtyResult},
     input::{
-        MouseReport, MouseReportKind, PointerAction, PointerInput, PointerState, PtyInput,
-        TerminalKey, TerminalModifiers, WheelConfig, WheelDecision, WheelInput,
+        MouseReport, MouseReportKind, PointerAction, PointerInput, PointerKind, PointerState,
+        PtyInput, TerminalKey, TerminalModifiers, WheelConfig, WheelDecision, WheelInput,
     },
     pty::{ChunkPoll, ExitPoll, Pty},
     signal::TtySignal,
@@ -287,15 +287,19 @@ impl<V: Vt> OrzmaTty<V> {
     }
 
     /// Scrolls the grid, arming the coalescer only when the viewport
-    /// actually moved; a clamped or zero motion reports no damage.
+    /// actually moved or, in vi mode, when the vi cursor or the selection
+    /// changed; outside vi mode a clamped or zero motion arms nothing.
     ///
     /// When the viewport moves under a held selection drag, the
     /// selection's moving end follows it onto the cell now under the
     /// pointer.
     pub fn scroll(&mut self, scroll: Scroll) {
+        let offset = self.vt.display_offset();
         if self.vt.scroll(scroll) {
             self.coalescer.arm_or_extend(Instant::now());
-            self.follow_drag_end();
+            if self.vt.display_offset() != offset {
+                self.follow_drag_end();
+            }
         }
     }
 
@@ -319,6 +323,30 @@ impl<V: Vt> OrzmaTty<V> {
     /// one.
     pub fn clear_selection(&mut self) {
         if self.vt.clear_selection() {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+    }
+
+    /// Enters or leaves vi mode, arming the coalescer only when the VT's
+    /// state changed.
+    pub fn switch_vi_mode(&mut self, switch: ViModeSwitch) {
+        if self.vt.switch_vi_mode(switch) {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+    }
+
+    /// Moves the vi cursor, arming the coalescer only when something
+    /// changed.
+    pub fn vi_motion(&mut self, motion: ViMotion) {
+        if self.vt.vi_motion(motion) {
+            self.coalescer.arm_or_extend(Instant::now());
+        }
+    }
+
+    /// Toggles a vi-mode selection, arming the coalescer only when the
+    /// selection changed.
+    pub fn toggle_vi_selection(&mut self, kind: SelectionKind) {
+        if self.vt.toggle_vi_selection(kind) {
             self.coalescer.arm_or_extend(Instant::now());
         }
     }
@@ -411,13 +439,16 @@ impl<V: Vt> OrzmaTty<V> {
     /// one write. `Ok` means the bytes were queued, not that they reached
     /// the PTY.
     ///
+    /// While vi mode is on, the wheel is routed as though no mouse tracking
+    /// level were in force.
+    ///
     /// # Errors
     ///
     /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
     /// the frame's bytes (nothing is queued), `PtyWrite` once after the
     /// writer thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_wheel(&mut self, input: WheelInput, cfg: &WheelConfig) -> OrzmaTtyResult {
-        let modes = self.vt.modes();
+        let modes = self.routing_modes();
         let mut bytes = Vec::new();
         for decision in [
             WheelDecision::route(modes, input.up, input.mods, cfg),
@@ -446,6 +477,11 @@ impl<V: Vt> OrzmaTty<V> {
     /// selection is empty. `Ok` means the reports were queued, not that
     /// they reached the PTY.
     ///
+    /// While vi mode is on, a press or a motion is routed as though no
+    /// mouse tracking level were in force, so a press starts a selection
+    /// instead of a report; a release or a cancel still reports a press the
+    /// application received before vi mode began.
+    ///
     /// # Errors
     ///
     /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
@@ -455,7 +491,11 @@ impl<V: Vt> OrzmaTty<V> {
     pub fn send_pointer(&mut self, mut input: PointerInput) -> OrzmaTtyResult<Option<String>> {
         let size = self.vt.grid_size();
         input.cell = input.cell.clamped_to(size);
-        let modes = self.vt.modes();
+        let modes = if matches!(input.kind, PointerKind::Release | PointerKind::Cancel) {
+            self.vt.modes()
+        } else {
+            self.routing_modes()
+        };
         let offset = self.vt.display_offset();
         let at_live_tail = self.vt.is_at_live_tail();
         let mut bytes = Vec::new();
@@ -674,6 +714,16 @@ impl<V: Vt> OrzmaTty<V> {
         if !self.vt.is_at_live_tail() {
             self.scroll(Scroll::Bottom);
         }
+    }
+
+    /// The VT's modes as the mouse routers see them: while vi mode is on,
+    /// no mouse tracking level is in force.
+    fn routing_modes(&self) -> VtModes {
+        let mut modes = self.vt.modes();
+        if self.vt.is_vi_mode() {
+            modes.mouse_tracking = MouseTracking::Off;
+        }
+        modes
     }
 
     /// Moves a held selection drag's moving end onto the grid point its

@@ -13,8 +13,8 @@ use orzma_tty::prelude::{
 };
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{
-    Frame, GridColumn, GridSize, InstanceId, OrzmaVt, PlacementSize, ScreenLine, Scroll, Vt,
-    VtSignal,
+    Frame, GridColumn, GridSize, InstanceId, OrzmaVt, PlacementSize, ScreenLine, Scroll,
+    SelectionKind, ViModeSwitch, ViMotion, Vt, VtSignal,
 };
 use orzma_webview_host::prelude::{
     ControlEvent, HostOutput, MuxRequest, PlacementSignal, WebviewCommand, WebviewEvent,
@@ -534,6 +534,39 @@ impl Backend {
     /// carries `pane`.
     pub fn selection_clear(&mut self, pane: PaneId) -> OrzmuxResult {
         self.pane_mut(pane)?.tty.clear_selection();
+        Ok(())
+    }
+
+    /// Enters or leaves vi mode in `pane`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`.
+    pub fn vi_mode(&mut self, pane: PaneId, switch: ViModeSwitch) -> OrzmuxResult {
+        self.pane_mut(pane)?.tty.switch_vi_mode(switch);
+        Ok(())
+    }
+
+    /// Moves `pane`'s vi cursor by `motion`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`.
+    pub fn vi_motion(&mut self, pane: PaneId, motion: ViMotion) -> OrzmuxResult {
+        self.pane_mut(pane)?.tty.vi_motion(motion);
+        Ok(())
+    }
+
+    /// Toggles a vi-mode selection of `kind` at `pane`'s vi cursor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
+    /// carries `pane`.
+    pub fn vi_selection_toggle(&mut self, pane: PaneId, kind: SelectionKind) -> OrzmuxResult {
+        self.pane_mut(pane)?.tty.toggle_vi_selection(kind);
         Ok(())
     }
 

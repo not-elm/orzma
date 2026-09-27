@@ -11,7 +11,7 @@ use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::{Receiver, Select, TryRecvError};
 use orzma_tty::prelude::{PointerInput, TerminalKey, TerminalModifiers, WheelInput};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
-use orzma_vt::prelude::{GridSize, Scroll};
+use orzma_vt::prelude::{GridSize, Scroll, SelectionKind, ViModeSwitch, ViMotion};
 use orzma_webview_host::prelude::WebviewCommand;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -133,6 +133,27 @@ pub enum OrzmuxCommand {
         /// The pane to read the selection from.
         pane: PaneTarget,
     },
+    /// Enter or leave vi mode in a pane.
+    ViMode {
+        /// The pane to switch.
+        pane: PaneId,
+        /// Which direction to switch.
+        switch: ViModeSwitch,
+    },
+    /// Move a pane's vi cursor.
+    ViMotion {
+        /// The pane whose vi cursor moves.
+        pane: PaneId,
+        /// The motion to apply.
+        motion: ViMotion,
+    },
+    /// Start, re-kind, or clear a vi-mode selection at a pane's vi cursor.
+    ViSelectionToggle {
+        /// The pane whose selection toggles.
+        pane: PaneId,
+        /// The selection granularity the toggle names.
+        kind: SelectionKind,
+    },
     /// Move a split's divider.
     ResizeSplit {
         /// The split whose divider moves.
@@ -166,6 +187,11 @@ impl OrzmuxCommand {
             Self::Scroll { pane, .. } => ("Scroll", Some(PaneTarget::Id(*pane))),
             Self::SelectionClear { pane } => ("SelectionClear", Some(PaneTarget::Id(*pane))),
             Self::CopySelection { pane } => ("CopySelection", Some(*pane)),
+            Self::ViMode { pane, .. } => ("ViMode", Some(PaneTarget::Id(*pane))),
+            Self::ViMotion { pane, .. } => ("ViMotion", Some(PaneTarget::Id(*pane))),
+            Self::ViSelectionToggle { pane, .. } => {
+                ("ViSelectionToggle", Some(PaneTarget::Id(*pane)))
+            }
             Self::ResizeSplit { .. } => ("ResizeSplit", None),
             Self::Webview(_) => ("Webview", None),
         }
@@ -393,6 +419,11 @@ impl EventLoop {
             OrzmuxCommand::CopySelection { pane } => {
                 self.backend.copy_selection(pane);
                 Ok(())
+            }
+            OrzmuxCommand::ViMode { pane, switch } => self.backend.vi_mode(pane, switch),
+            OrzmuxCommand::ViMotion { pane, motion } => self.backend.vi_motion(pane, motion),
+            OrzmuxCommand::ViSelectionToggle { pane, kind } => {
+                self.backend.vi_selection_toggle(pane, kind)
             }
             OrzmuxCommand::Webview(command) => self.backend.webview_command(command),
         }
@@ -1597,6 +1628,55 @@ mod tests {
             .filter(|event| *event == OrzmuxEvent::SelectionText { text: None })
             .count();
         assert_eq!(answers, 2);
+    }
+
+    /// Asserts that vi-mode commands select a word from the vi cursor and
+    /// that a copy reads it back.
+    ///
+    /// Case: the shell printed a line, and the user enters vi mode, jumps to
+    /// the line start, presses `v`, moves to the end of the first word, and
+    /// yanks.
+    #[test]
+    fn vi_mode_commands_select_and_copy_a_word() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.print(b"hello world");
+        h.pump_pane(root);
+        h.drain();
+        for command in [
+            OrzmuxCommand::ViMode {
+                pane: root,
+                switch: ViModeSwitch::Enter,
+            },
+            OrzmuxCommand::ViMotion {
+                pane: root,
+                motion: ViMotion::First,
+            },
+            OrzmuxCommand::ViSelectionToggle {
+                pane: root,
+                kind: SelectionKind::Simple,
+            },
+            OrzmuxCommand::ViMotion {
+                pane: root,
+                motion: ViMotion::SemanticRightEnd,
+            },
+            OrzmuxCommand::CopySelection {
+                pane: PaneTarget::Id(root),
+            },
+        ] {
+            h.send(command);
+        }
+        let texts: Vec<OrzmuxEvent> = h
+            .drain()
+            .into_iter()
+            .filter(|event| matches!(event, OrzmuxEvent::SelectionText { .. }))
+            .collect();
+        assert_eq!(
+            texts,
+            vec![OrzmuxEvent::SelectionText {
+                text: Some("hello".to_string())
+            }]
+        );
     }
 
     /// Asserts that a split with no explicit directory starts in the

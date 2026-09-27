@@ -948,8 +948,8 @@ mod tests {
     /// Asserts that a pane carrying `TerminalMouseDisabled` gets neither a
     /// focus click nor a pointer event from a press.
     ///
-    /// Case: the user clicks a pane whose mouse input is disabled because it
-    /// is in vi mode.
+    /// Case: the user clicks a pane whose mouse input is disabled because an
+    /// IME composition is in progress.
     #[test]
     fn a_mouse_disabled_pane_gets_no_pointer_events() {
         let mut app = pointer_app();

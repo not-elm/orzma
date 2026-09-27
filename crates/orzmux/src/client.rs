@@ -6,7 +6,7 @@ use crate::error::{OrzmuxError, OrzmuxResult};
 use crate::event_loop::{EventLoop, GuiLink, OrzmuxCommand};
 use crossbeam_channel::{Receiver, Sender, TryRecvError, unbounded};
 use orzma_tty::prelude::WheelConfig;
-use orzma_vt::prelude::CursorPolicy;
+use orzma_vt::prelude::{CursorPolicy, SemanticEscapeChars};
 use orzma_webview_host::prelude::{ControlSocket, WebviewHost};
 use std::env;
 use std::process;
@@ -26,6 +26,9 @@ pub struct OrzmuxConfig {
     pub wheel: WheelConfig,
     /// The cursor policy every pane's terminal starts with.
     pub cursor: CursorPolicy,
+    /// The characters that end a word for every pane's semantic vi
+    /// motions, besides whitespace.
+    pub semantic_escape_chars: SemanticEscapeChars,
     /// Whether orzma may make a shell it recognizes report its working
     /// directory. Has no effect outside Windows.
     pub shell_integration: bool,
@@ -70,9 +73,16 @@ impl OrzmuxClient {
             scrollback_rows,
             wheel,
             cursor,
+            semantic_escape_chars,
             shell_integration,
         } = config;
-        let factory = ShellFactory::new(shell, scrollback_rows, cursor, shell_integration);
+        let factory = ShellFactory::new(
+            shell,
+            scrollback_rows,
+            cursor,
+            semantic_escape_chars,
+            shell_integration,
+        );
         let webview = open_webview_host();
         let thread = thread::Builder::new()
             .name("orzma-mux".to_string())
