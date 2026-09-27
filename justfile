@@ -120,6 +120,16 @@ setup-cef: setup-cef-export
     cargo install {{ bevy_cef_render_process }}@{{ bevy_cef_version }}
     Copy-Item "{{ cargo_bin_dir }}/{{ bevy_cef_render_process }}.exe" "{{ cef_dir }}/{{ bevy_cef_render_process }}.exe" -Force
 
+# bevy_cef_core's build.rs copies the CEF runtime and the render process from cef_dir
+# into the target profile dir on the next build.
+# install the CEF runtime + render process (Linux, one-time)
+[linux]
+setup-cef:
+    cargo install export-cef-dir@{{ cef_version }} --force
+    export-cef-dir --force "{{ cef_dir }}"
+    cargo install {{ bevy_cef_render_process }}@{{ bevy_cef_version }}
+    cp "{{ cargo_bin_dir }}/{{ bevy_cef_render_process }}" "{{ cef_dir }}/{{ bevy_cef_render_process }}"
+
 # regenerate the macOS app icon (build/macos/AppIcon.icns) from the master SVG
 [macos]
 icon *args:

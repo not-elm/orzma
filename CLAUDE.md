@@ -62,7 +62,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (crate
 | Run one crate's tests   | `cargo test -p orzma_configs` (e.g. `cargo test -p orzma_configs <name>`)          |
 | Lint + format (Rust)    | `cargo clippy --workspace --fix --allow-dirty --allow-staged && cargo fmt`         |
 | Fix everything          | `just fix-lint` (runs clippy fix, rustfmt, and `pnpm lint:fix`)                     |
-| Provision CEF (one-time) | `just setup-cef` (installs the CEF framework + render process; macOS and Windows) |
+| Provision CEF (one-time) | `just setup-cef` (installs the CEF framework + render process; macOS, Windows, and Linux) |
 
 Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 
