@@ -161,15 +161,25 @@ class CargoInvocation(unittest.TestCase):
         )
 
     def test_render_process_install_argv_pins_version_and_target(self):
-        argv = sw.render_process_install_argv("0.13.0", "x86_64-pc-windows-msvc", Path("/tmp/tools"))
+        argv = sw.render_process_install_argv(
+            "0.13.0", "x86_64-pc-windows-msvc", Path("/tmp/tools"), Path("/tmp/rp")
+        )
         self.assertIn("bevy_cef_render_process@0.13.0", argv)
         self.assertIn("--target", argv)
         self.assertEqual(argv[argv.index("--target") + 1], "x86_64-pc-windows-msvc")
         self.assertEqual(argv[argv.index("--root") + 1], str(Path("/tmp/tools")))
 
     def test_render_process_install_argv_is_idempotent(self):
-        argv = sw.render_process_install_argv("0.13.0", "x86_64-pc-windows-msvc", Path("/tmp/tools"))
+        argv = sw.render_process_install_argv(
+            "0.13.0", "x86_64-pc-windows-msvc", Path("/tmp/tools"), Path("/tmp/rp")
+        )
         self.assertIn("--force", argv)
+
+    def test_render_process_install_argv_builds_in_the_given_target_dir(self):
+        argv = sw.render_process_install_argv(
+            "0.13.0", "x86_64-pc-windows-msvc", Path("/tmp/tools"), Path("/tmp/rp")
+        )
+        self.assertEqual(argv[argv.index("--target-dir") + 1], str(Path("/tmp/rp")))
 
     def test_cargo_env_adds_crt_static(self):
         self.assertEqual(sw.cargo_env({})["RUSTFLAGS"], "-Ctarget-feature=+crt-static")
@@ -295,10 +305,16 @@ class StageConfigResolution(unittest.TestCase):
         self.assertFalse(cfg.skip_build)
         self.assertFalse(cfg.rebuild_render_process)
 
+    def test_the_render_process_builds_outside_the_checkout_by_default(self):
+        args = sw.build_arg_parser().parse_args(["--version", "1.2.3"])
+        cfg = sw.resolve_config(args)
+        self.assertEqual(cfg.render_process_target_dir, Path(tempfile.gettempdir()) / "orzrp")
+
     def test_overrides_are_expanded(self):
         args = sw.build_arg_parser().parse_args(
             ["--version", "1.2.3", "--out-dir", "/tmp/out", "--cef-dir", "/tmp/cef",
-             "--render-process-bin", "/tmp/rp.exe", "--skip-build", "--rebuild-render-process"]
+             "--render-process-bin", "/tmp/rp.exe", "--skip-build", "--rebuild-render-process",
+             "--render-process-target-dir", "/tmp/rp"]
         )
         cfg = sw.resolve_config(args)
         self.assertEqual(cfg.out_dir, Path("/tmp/out"))
@@ -306,6 +322,7 @@ class StageConfigResolution(unittest.TestCase):
         self.assertEqual(cfg.render_process_bin, Path("/tmp/rp.exe"))
         self.assertTrue(cfg.skip_build)
         self.assertTrue(cfg.rebuild_render_process)
+        self.assertEqual(cfg.render_process_target_dir, Path("/tmp/rp"))
 
 
 class StageCefTree(unittest.TestCase):

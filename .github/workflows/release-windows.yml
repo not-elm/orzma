@@ -125,10 +125,13 @@ jobs:
       # These three run through just so the release builds the MSI with exactly the
       # command a developer verifies locally. Duplicating the wix invocation here is
       # how local and CI builds drift apart.
+      # The render process builds under RUNNER_TEMP (D:\a\_temp) because the default
+      # under %TEMP% (C:\Users\runneradmin\AppData\Local\Temp) leaves little room
+      # below MAX_PATH for the CEF wrapper's object paths.
       - name: Stage the distribution tree
         env:
           VERSION: ${{ steps.ver.outputs.version }}
-        run: just stage --version $env:VERSION
+        run: just stage --version $env:VERSION --render-process-target-dir "$env:RUNNER_TEMP\orzrp"
 
       - name: Build the MSI
         env:
