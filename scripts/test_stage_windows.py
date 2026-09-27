@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -347,6 +348,87 @@ class StageCefTree(unittest.TestCase):
 
     def test_inventory_clean_passes_silently(self):
         self.assertIsNone(sw.assert_inventory_clean([], [], []))
+
+
+class CefLocales(unittest.TestCase):
+    LOCALES = ("en-US", "ja")
+
+    def test_a_kept_locale_matches_only_its_exact_pack(self):
+        self.assertTrue(sw.is_cef_locale_pak("en-US.pak", self.LOCALES))
+        self.assertTrue(sw.is_cef_locale_pak("ja.pak", self.LOCALES))
+        for name in ("fr.pak", "ja_FEMININE.pak", "en-GB.pak", "en-US", "en-US.pak.info"):
+            self.assertFalse(sw.is_cef_locale_pak(name, self.LOCALES), name)
+
+    def test_missing_cef_locales_lists_absent_packs_in_order(self):
+        self.assertEqual(sw.missing_cef_locales(["en-US.pak", "ja.pak", "fr.pak"], self.LOCALES), [])
+        self.assertEqual(
+            sw.missing_cef_locales(["ja.pak", "en-US_FEMININE.pak"], self.LOCALES), ["en-US"]
+        )
+        self.assertEqual(sw.missing_cef_locales([], self.LOCALES), ["en-US", "ja"])
+
+    def test_drop_unused_locales_keeps_non_locale_entries(self):
+        entries = [
+            "libcef.dll",
+            "locales/en-US.pak",
+            "locales/ja.pak",
+            "locales/ja_FEMININE.pak",
+            "resources.pak",
+        ]
+        self.assertEqual(
+            sw.drop_unused_locales(entries, ("en-US",)),
+            ["libcef.dll", "locales/en-US.pak", "resources.pak"],
+        )
+
+
+class StageCefLocales(unittest.TestCase):
+    def _cef_dir(self, root: Path, locale_packs: tuple[str, ...]) -> Path:
+        cef = root / "cef"
+        _write(cef / "libcef.dll", b"cef")
+        _write(cef / "resources.pak", b"res")
+        _write(cef / "swiftshader" / "vk.json", b"icd")
+        for name in locale_packs:
+            _write(cef / "locales" / name, name.encode())
+        _write(cef / "include" / "cef_app.h", b"header")
+        return cef
+
+    def _stage(self, root: Path, cef: Path) -> Path:
+        inventory_path = root / "cef-inventory.json"
+        inventory = sw.build_inventory(cef, "152.4.0+152.0.8", {"include"}, set())
+        inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+        cfg = sw.StageConfig(
+            version="0.0.0",
+            cef_dir=cef,
+            out_dir=root / "out",
+            render_process_bin=None,
+            render_process_target_dir=root / "rp",
+            skip_build=True,
+        )
+        with mock.patch.object(sw, "INVENTORY_PATH", inventory_path):
+            sw.stage_cef(cfg)
+        return cfg.stage_dir
+
+    def test_stage_ships_only_the_en_us_locale_pack(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cef = self._cef_dir(root, ("en-US.pak", "ja.pak", "fr.pak", "en-US_FEMININE.pak"))
+            stage = self._stage(root, cef)
+            self.assertEqual(sorted(p.name for p in (stage / "locales").iterdir()), ["en-US.pak"])
+            self.assertEqual((stage / "libcef.dll").read_bytes(), b"cef")
+            self.assertEqual((stage / "resources.pak").read_bytes(), b"res")
+            self.assertEqual((stage / "swiftshader" / "vk.json").read_bytes(), b"icd")
+
+    def test_stage_rejects_a_cef_without_the_en_us_pack_before_copying(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cef = self._cef_dir(root, ("ja.pak", "fr.pak"))
+            with (
+                mock.patch.object(sw, "digest_mismatches", side_effect=AssertionError("hashed")),
+                mock.patch.object(sw, "copy_cef_entries", side_effect=AssertionError("copied")),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                self._stage(root, cef)
+            self.assertIn("en-US", str(raised.exception))
+            self.assertFalse((root / "out" / "stage").exists())
 
 
 class OrzmdAssets(unittest.TestCase):

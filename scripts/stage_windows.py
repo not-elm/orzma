@@ -58,6 +58,8 @@ OPTIONAL_ENTRIES = {
     "vulkan-1.dll",
 }
 
+CEF_LOCALES = ("en-US",)
+
 
 def cargo_build_argv(triple: str, profile: str) -> list[str]:
     return ["cargo", "build", "--profile", profile, "--target", triple,
@@ -195,6 +197,22 @@ def classify_entries(
     missing = sorted(set(required) - present)
     unclassified = sorted(present - known)
     return staged, missing, unclassified
+
+
+def is_cef_locale_pak(name: str, locales: tuple[str, ...]) -> bool:
+    return any(name == f"{locale}.pak" for locale in locales)
+
+
+def missing_cef_locales(names: list[str], locales: tuple[str, ...]) -> list[str]:
+    present = set(names)
+    return [locale for locale in locales if f"{locale}.pak" not in present]
+
+
+def drop_unused_locales(entries: list[str], locales: tuple[str, ...]) -> list[str]:
+    return [
+        rel for rel in entries
+        if not rel.startswith("locales/") or is_cef_locale_pak(rel.removeprefix("locales/"), locales)
+    ]
 
 
 def digest_mismatches(cef_dir: Path, staged: list[str], digests: dict[str, str]) -> list[str]:
@@ -465,6 +483,11 @@ def stage_cef(cfg: StageConfig) -> None:
     # Hashing the staged tree reads ~380MB, so settle the cheap checks first: a missing
     # or unclassified entry already fails the run, and the digests would be thrown away.
     assert_inventory_clean(missing, unclassified, [])
+    locale_packs = [rel.removeprefix("locales/") for rel in entries if rel.startswith("locales/")]
+    absent = missing_cef_locales(locale_packs, CEF_LOCALES)
+    if absent:
+        raise SystemExit(f"missing CEF locale packs in {cfg.cef_dir / 'locales'}: {', '.join(absent)}")
+    staged = drop_unused_locales(staged, CEF_LOCALES)
     digests = {**required, **optional}
     assert_inventory_clean([], [], digest_mismatches(cfg.cef_dir, staged, digests))
     copy_cef_entries(cfg.cef_dir, cfg.stage_dir, staged)

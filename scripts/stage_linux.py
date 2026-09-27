@@ -14,7 +14,14 @@ import tarfile
 from pathlib import Path
 
 from build_linux_icons import ICON_SIZES, icon_path
-from stage_windows import cargo_version, locked_version, sha256_file, verify_orzmd_web_assets
+from stage_windows import (
+    cargo_version,
+    is_cef_locale_pak,
+    locked_version,
+    missing_cef_locales,
+    sha256_file,
+    verify_orzmd_web_assets,
+)
 
 APP_NAME = "orzma"
 BIN_NAME = "orzma"
@@ -48,6 +55,9 @@ CEF_REQUIRED_ENTRIES = (
     "v8_context_snapshot.bin",
     "locales",
 )
+
+CEF_LOCALES = ("en-US", "ja")
+
 ARCHIVE_NAME_RE = re.compile(r"^cef_binary_([^+]+)\+.*_linux64_minimal\.tar\.bz2$")
 DYNAMIC_PATH_RE = re.compile(r"\((?:RUNPATH|RPATH)\)\s+Library (?:runpath|rpath): \[(.*)\]")
 
@@ -109,13 +119,23 @@ def copy_cef_runtime(cef_dir: Path, tree: Path) -> list[str]:
     missing = [name for name in CEF_REQUIRED_ENTRIES if name not in names]
     if missing:
         raise SystemExit(f"missing required CEF entries in {cef_dir}: {', '.join(missing)}")
+    locales_dir = cef_dir / "locales"
+    absent = missing_cef_locales([p.name for p in locales_dir.iterdir()], CEF_LOCALES)
+    if absent:
+        raise SystemExit(f"missing CEF locale packs in {locales_dir}: {', '.join(absent)}")
     for entry in entries:
         dest = tree / entry.name
-        if entry.is_dir():
+        if entry.name == "locales":
+            shutil.copytree(entry, dest, ignore=_unused_locale_packs)
+        elif entry.is_dir():
             shutil.copytree(entry, dest)
         else:
             shutil.copy2(entry, dest)
     return names
+
+
+def _unused_locale_packs(directory: str, names: list[str]) -> list[str]:
+    return [name for name in names if not is_cef_locale_pak(name, CEF_LOCALES)]
 
 
 def stage_cef(cef_path: Path, tree: Path) -> None:
