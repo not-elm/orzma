@@ -611,21 +611,66 @@ mod tests {
         assert_eq!(s, bevy::text::FontStyle::Italic);
     }
 
+    /// Asserts that a requested weight and slant select the nearest of the
+    /// four bundled faces, rounding intermediate weights to Regular or Bold.
+    ///
+    /// Case: the config names no family for the UI face, so the UI text uses
+    /// the bundled face closest to the configured style, such as SemiBold
+    /// Italic.
     #[test]
     fn bundled_face_bytes_selects_by_weight_and_slant() {
-        // NOTE: compare by content (`==`), not `std::ptr::eq`. `bundled::REGULAR`
-        // et al. are `pub const`, not `static` (see `bundled.rs`'s module doc);
-        // without LTO, each `include_bytes!` reference across the
-        // bevy_orzma_tty_renderer -> orzma crate boundary gets its own embedded copy,
-        // so two textually distinct usage sites hold equal bytes at different
-        // addresses. `std::ptr::eq` would spuriously fail here in a plain `cargo
-        // test` build (no LTO), even though the selection logic is correct.
         let case = |weight, slant| bundled_face_bytes(FontStyleSpec { weight, slant });
-        assert_eq!(case(400, FontSlant::Normal), bundled::REGULAR);
-        assert_eq!(case(700, FontSlant::Normal), bundled::BOLD);
-        assert_eq!(case(400, FontSlant::Italic), bundled::ITALIC);
-        assert_eq!(case(800, FontSlant::Italic), bundled::BOLD_ITALIC);
-        assert_eq!(case(500, FontSlant::Normal), bundled::REGULAR);
+        assert!(std::ptr::eq(case(400, FontSlant::Normal), bundled::REGULAR));
+        assert!(std::ptr::eq(case(700, FontSlant::Normal), bundled::BOLD));
+        assert!(std::ptr::eq(case(400, FontSlant::Italic), bundled::ITALIC));
+        assert!(std::ptr::eq(
+            case(800, FontSlant::Italic),
+            bundled::BOLD_ITALIC
+        ));
+        assert!(std::ptr::eq(case(500, FontSlant::Normal), bundled::REGULAR));
+    }
+
+    /// Asserts that every face of the renderer's default fonts reads the same
+    /// bundled bytes the `bundled` statics expose, not a second embedded copy.
+    ///
+    /// Case: orzma starts with no font configured, so the grid draws with the
+    /// renderer's default faces while the font bridge hands the same bundled
+    /// faces to the UI text.
+    #[test]
+    fn default_terminal_fonts_share_the_bundled_bytes() {
+        let fonts = TerminalFonts::default();
+        for (name, face, bytes) in [
+            ("regular", &fonts.regular, bundled::REGULAR),
+            ("bold", &fonts.bold, bundled::BOLD),
+            ("italic", &fonts.italic, bundled::ITALIC),
+            ("bold_italic", &fonts.bold_italic, bundled::BOLD_ITALIC),
+            (
+                "fallback_regular",
+                &fonts.fallback_regular,
+                bundled::FALLBACK_REGULAR,
+            ),
+            (
+                "fallback_bold",
+                &fonts.fallback_bold,
+                bundled::FALLBACK_BOLD,
+            ),
+            (
+                "fallback_italic",
+                &fonts.fallback_italic,
+                bundled::FALLBACK_ITALIC,
+            ),
+            (
+                "fallback_bold_italic",
+                &fonts.fallback_bold_italic,
+                bundled::FALLBACK_BOLD_ITALIC,
+            ),
+            ("symbol", &fonts.symbol, bundled::SYMBOL_REGULAR),
+        ] {
+            assert!(
+                std::ptr::eq(face.font_data(), bytes),
+                "{name} reads a second copy of its bundled bytes"
+            );
+        }
     }
 
     #[test]
