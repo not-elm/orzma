@@ -88,9 +88,8 @@ fn step_strategy() -> impl Strategy<Value = Step> {
 /// the current grid.
 fn visible_point(vt: &OrzmaVt, column: u16, row: u16) -> GridPoint {
     let size = vt.grid_size();
-    let offset = i32::try_from(vt.display_offset().0).expect("an offset fits an i32");
     GridPoint {
-        line: GridLine(i32::from(row % size.rows) - offset),
+        line: ViewportLine(row % size.rows).to_grid(vt.display_offset()),
         column: GridColumn(column % size.cols),
     }
 }
@@ -126,13 +125,12 @@ fn check_vi_cursor(vt: &OrzmaVt) -> Result<ViCursor, TestCaseError> {
         return Err(TestCaseError::fail("vi mode ended"));
     };
     let size = vt.grid_size();
-    let offset = i32::try_from(vt.display_offset().0).expect("an offset fits an i32");
-    let line = cursor.point.line.0;
+    let offset = vt.display_offset();
     prop_assert!(
-        (-offset..i32::from(size.rows) - offset).contains(&line),
+        cursor.point.line.to_viewport(offset, size.rows).is_some(),
         "line {} outside the viewport at offset {}",
-        line,
-        offset
+        cursor.point.line.0,
+        offset.0
     );
     prop_assert!(
         cursor.point.column.0 < size.cols,

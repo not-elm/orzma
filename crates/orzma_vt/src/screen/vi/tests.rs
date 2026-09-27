@@ -1,40 +1,14 @@
 //! Unit tests for the vi mode of [`Screen`].
 
 use super::*;
-use crate::screen::PrintOptions;
-use crate::screen::cell::ClassifiedGlyph;
-use crate::screen::character_sets::GraphicChar;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::reflow::ScrollbackOnGrow;
 use crate::screen::selection::{CellSide, SelectionKind};
+use crate::screen::tests::{point, print_text};
 use crate::screen::viewport::DisplayOffset;
 
 fn screen(cols: u16, rows: u16, max_history: usize) -> Screen {
     Screen::new(GridSize { cols, rows }, max_history)
-}
-
-fn point(line: i32, column: u16) -> GridPoint {
-    GridPoint {
-        line: GridLine(line),
-        column: GridColumn(column),
-    }
-}
-
-/// Prints `text` through the screen's own print path; a `'\n'` is a
-/// carriage return followed by a line feed.
-fn print_text(screen: &mut Screen, text: &str) {
-    for c in text.chars() {
-        if c == '\n' {
-            screen.carriage_return();
-            screen.line_feed();
-        } else {
-            let glyph =
-                ClassifiedGlyph::classify(GraphicChar(c)).expect("a character with a width");
-            screen
-                .print(glyph, PrintOptions::default())
-                .expect("a printable glyph");
-        }
-    }
 }
 
 fn vi_point(screen: &Screen) -> Option<GridPoint> {

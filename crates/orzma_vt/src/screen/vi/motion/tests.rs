@@ -3,17 +3,12 @@
 use super::*;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::ScreenLine;
+use crate::screen::grid::tests::{scroll_up_whole_screen, write};
+use crate::screen::tests::point;
 
 /// A blank 20×20 grid with room for 100 history rows.
 fn grid() -> Grid {
     Grid::new(GridSize { cols: 20, rows: 20 }, 100)
-}
-
-fn point(line: i32, column: u16) -> GridPoint {
-    GridPoint {
-        line: GridLine(line),
-        column: GridColumn(column),
-    }
 }
 
 fn put(grid: &mut Grid, line: u16, column: u16, c: char) {
@@ -27,14 +22,6 @@ fn put_wide(grid: &mut Grid, line: u16, column: u16, c: char) {
     grid[ScreenLine(line)][column].width = CellWidth::Wide;
     grid[ScreenLine(line)][column + 1].c = ' ';
     grid[ScreenLine(line)][column + 1].width = CellWidth::Spacer;
-}
-
-/// Scrolls `count` blank rows off the top into history.
-fn push_history(grid: &mut Grid, count: usize) {
-    let bottom = ScreenLine(grid.size().rows - 1);
-    for _ in 0..count {
-        grid.scroll_up_one(ScreenLine(0), bottom, Cell::default());
-    }
 }
 
 /// The first and the last lines of `grid`'s viewport at the live tail.
@@ -68,9 +55,7 @@ fn walk_with(
 /// The row of the semantic-motion fixture: `x xx  : x:x  : x`.
 fn semantic_grid() -> Grid {
     let mut grid = grid();
-    for (column, c) in "x xx  : x:x  : x".chars().enumerate() {
-        put(&mut grid, 0, u16::try_from(column).expect("a short row"), c);
-    }
+    write(&mut grid, 0, "x xx  : x:x  : x");
     grid
 }
 
@@ -272,7 +257,9 @@ fn semantic_left_end_stops_at_each_word_end() {
 #[test]
 fn a_semantic_motion_crosses_into_history() {
     let mut grid = grid();
-    push_history(&mut grid, 5);
+    for _ in 0..5 {
+        scroll_up_whole_screen(&mut grid, Cell::default());
+    }
     let steps = [
         ViMotion::SemanticLeft,
         ViMotion::SemanticRight,
@@ -350,9 +337,7 @@ fn a_wide_separator_ends_a_semantic_word() {
 #[test]
 fn whitespace_ends_a_semantic_word_outside_the_configured_separators() {
     let mut grid = grid();
-    for (column, c) in "ab cd-ef".chars().enumerate() {
-        put(&mut grid, 0, u16::try_from(column).expect("a short row"), c);
-    }
+    write(&mut grid, 0, "ab cd-ef");
     let chars = SemanticEscapeChars::new("-");
     assert_eq!(
         walk_with(&grid, &chars, point(0, 0), &[ViMotion::SemanticRight]),
@@ -368,9 +353,7 @@ fn whitespace_ends_a_semantic_word_outside_the_configured_separators() {
 #[test]
 fn word_motions_split_only_at_whitespace() {
     let mut grid = grid();
-    for (column, c) in "a;  a;".chars().enumerate() {
-        put(&mut grid, 0, u16::try_from(column).expect("a short row"), c);
-    }
+    write(&mut grid, 0, "a;  a;");
     let steps = [
         ViMotion::WordRightEnd,
         ViMotion::WordRightEnd,
@@ -393,7 +376,9 @@ fn word_motions_split_only_at_whitespace() {
 #[test]
 fn a_word_motion_crosses_into_history() {
     let mut grid = grid();
-    push_history(&mut grid, 5);
+    for _ in 0..5 {
+        scroll_up_whole_screen(&mut grid, Cell::default());
+    }
     let steps = [
         ViMotion::WordLeft,
         ViMotion::WordRight,
@@ -434,7 +419,9 @@ fn a_word_motion_steps_over_a_wide_glyph() {
 #[test]
 fn page_targets_stop_at_the_grid_edges() {
     let mut grid = grid();
-    push_history(&mut grid, 40);
+    for _ in 0..40 {
+        scroll_up_whole_screen(&mut grid, Cell::default());
+    }
     let chars = SemanticEscapeChars::default();
     let motion_grid = MotionGrid::new(&grid, live_viewport(&grid), &chars);
     let mut at = point(19, 0);
@@ -467,7 +454,7 @@ fn page_targets_stop_at_the_grid_edges() {
 #[test]
 fn up_and_down_stop_at_the_grid_edges() {
     let mut grid = grid();
-    push_history(&mut grid, 1);
+    scroll_up_whole_screen(&mut grid, Cell::default());
     assert_eq!(
         walk(&grid, point(-1, 0), &[ViMotion::Up]),
         vec![point(-1, 0)]

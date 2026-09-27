@@ -679,7 +679,7 @@ impl IndexMut<ScreenLine> for Grid {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::screen) mod tests {
     use super::*;
     use crate::device::color::Color;
 
@@ -707,6 +707,23 @@ mod tests {
     pub(crate) fn scroll_up_whole_screen(grid: &mut Grid, fill: Cell) {
         let bottom = ScreenLine(grid.size().rows - 1);
         grid.scroll_up_one(ScreenLine(0), bottom, fill);
+    }
+
+    /// Writes `text` from column zero of `line`, spilling onto the rows
+    /// below and recording each wrap as autowrap would.
+    pub(crate) fn write(grid: &mut Grid, line: u16, text: &str) {
+        let cols = usize::from(grid.size().cols);
+        let chars: Vec<char> = text.chars().collect();
+        let chunks: Vec<&[char]> = chars.chunks(cols.max(1)).collect();
+        for (k, chunk) in chunks.iter().enumerate() {
+            let row = line + u16::try_from(k).expect("a small test");
+            for (column, c) in (0u16..).zip(chunk.iter()) {
+                grid[ScreenLine(row)][column].c = *c;
+            }
+            if k + 1 < chunks.len() {
+                grid.set_wrap_at(GridLine::from(ScreenLine(row)), grid.size().cols);
+            }
+        }
     }
 
     /// Asserts that a screen line and a history line both resolve to an
