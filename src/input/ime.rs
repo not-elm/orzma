@@ -298,8 +298,8 @@ fn read_ime_events(
         };
         // NOTE: gate on `FocusedWebview` itself, NOT on "is the focused webview a
         // child of `surface`". A focused webview consumes the winit Ime events via
-        // bevy_cef, and `sync_focused_webview` deliberately keeps focus on an
-        // inline webview even when its pane is no longer the active surface — a
+        // bevy_cef, and focus can still sit on a webview of a pane that is no
+        // longer the active surface until the host's release reaches the GUI — a
         // surface-relative check would miss it and inject the commit into the
         // newly-active pane's shell.
         if focused_webview.0.is_some() {
@@ -341,7 +341,7 @@ fn webview_ime_position(
     child: Entity,
 ) -> Option<Vec2> {
     let terminal = webview_parents.get(child).ok()?.parent();
-    let slot = webview_slots.get(child).ok()?.slot;
+    let slot = webview_slots.get(child).ok()?.slot();
     let (node, ui_xform, _) = anchors.get(terminal).ok()?;
     let rect = *overlays.get(terminal).ok()?.rects.get(usize::from(slot))?;
     if rect.z == 0 {
@@ -383,6 +383,7 @@ mod tests {
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_orzma_tty_renderer::prelude::CellMetrics;
     use orzma_vt::prelude::{Cursor, InstanceId};
+    use orzma_webview_host::prelude::MountId;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {
@@ -702,13 +703,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(terminal),
-                Webview {
-                    handle: "webview".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
@@ -749,13 +744,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(terminal_entity),
-                Webview {
-                    handle: "webview".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
+                Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
             ))
             .id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);

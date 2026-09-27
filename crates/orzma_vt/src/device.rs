@@ -20,6 +20,8 @@ use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::grid::reflow::ScrollbackOnGrow;
 use crate::screen::grid::{GridSize, MIN_COLUMNS};
 use crate::screen::margins::OriginMode;
+use crate::screen::selection::SelectionKind;
+use crate::screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion, ViewChange};
 use crate::screen::viewport::{DisplayOffset, Scroll};
 use crate::screen::{PrintOptions, Screen};
 use std::collections::VecDeque;
@@ -36,6 +38,7 @@ pub(crate) struct DeviceState {
     preceding_graphic: Option<ClassifiedGlyph>,
     cursor_policy: CursorPolicy,
     scrollback_on_grow: ScrollbackOnGrow,
+    semantic_escape_chars: SemanticEscapeChars,
 }
 
 impl DeviceState {
@@ -58,23 +61,18 @@ impl DeviceState {
             preceding_graphic: None,
             cursor_policy: CursorPolicy::default(),
             scrollback_on_grow: ScrollbackOnGrow::default(),
+            semantic_escape_chars: SemanticEscapeChars::default(),
         }
     }
 
     /// The screen the device currently reads and writes.
     pub fn active_screen(&self) -> &Screen {
-        match self.modes.active_screen {
-            ScreenKind::Primary => &self.screens.primary,
-            ScreenKind::Alternate => &self.screens.alternate,
-        }
+        self.screens.get(self.modes.active_screen)
     }
 
     /// The screen the device currently reads and writes.
     pub fn active_screen_mut(&mut self) -> &mut Screen {
-        match self.modes.active_screen {
-            ScreenKind::Primary => &mut self.screens.primary,
-            ScreenKind::Alternate => &mut self.screens.alternate,
-        }
+        self.screens.get_mut(self.modes.active_screen)
     }
 
     /// Resizes the screens to `size`; `None` when the dimensions of the
@@ -117,13 +115,74 @@ impl DeviceState {
         }
     }
 
-    /// Moves the active viewport; `None` for a clamped or zero motion.
+    /// Enters or leaves vi mode on the screen on show; returns what the
+    /// next frame owes for it, [`ViewChange::Unchanged`] when that mode was
+    /// already in force.
     ///
-    /// # Invariants
+    /// Entering drops the selection of both screens and seats the vi cursor
+    /// on the write cursor, or on the viewport's top-left cell when the
+    /// viewport is scrolled back past the write cursor. Leaving drops the vi
+    /// cursor and the selection of both screens and returns the viewport to
+    /// the live tail.
+    pub fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> ViewChange {
+        let change = match switch {
+            ViModeSwitch::Enter => {
+                ViewChange::classify(self.active_screen_mut().enter_vi_mode(), None)
+            }
+            ViModeSwitch::Exit => self.active_screen_mut().exit_vi_mode(),
+        };
+        if change.is_changed() {
+            let _ = self
+                .screens
+                .other_mut(self.modes.active_screen)
+                .clear_selection();
+        }
+        change
+    }
+
+    /// Whether vi mode is on.
+    pub fn is_vi_mode(&self) -> bool {
+        self.active_screen().is_vi_mode()
+    }
+
+    /// The vi cursor of the screen on show; `None` outside vi mode.
+    pub fn vi_cursor(&self) -> Option<ViCursor> {
+        self.active_screen().vi_cursor()
+    }
+
+    /// Moves the vi cursor of the screen on show by `motion`, against the
+    /// device's word separators, and scrolls the viewport just far enough
+    /// to show it; returns what the next frame owes for it,
+    /// [`ViewChange::Unchanged`] outside vi mode.
     ///
-    /// A motion that moves the viewport reports [`DamageSpan::Full`].
-    pub fn scroll(&mut self, scroll: Scroll) -> Option<DamageSpan> {
-        self.active_screen_mut().scroll(scroll)
+    /// A selection that covers a cell then moves its moving end onto the vi
+    /// cursor's cell, covering both of its end cells.
+    pub fn vi_motion(&mut self, motion: ViMotion) -> ViewChange {
+        let screen = self.screens.get_mut(self.modes.active_screen);
+        screen.vi_motion(motion, &self.semantic_escape_chars)
+    }
+
+    /// Applies a viewport motion to the screen on show; returns what the
+    /// next frame owes for it, [`ViewChange::Repainted`] exactly when the
+    /// viewport moved.
+    ///
+    /// In vi mode the vi cursor moves with the viewport, and a selection
+    /// that covers a cell then moves its moving end onto the vi cursor's
+    /// cell, covering both of its end cells.
+    pub fn scroll(&mut self, scroll: Scroll) -> ViewChange {
+        let screen = self.screens.get_mut(self.modes.active_screen);
+        screen.vi_scroll(scroll, &self.semantic_escape_chars)
+    }
+
+    /// Starts, re-kinds, or clears a selection of `kind` at the vi cursor
+    /// of the screen on show; returns whether the selection changed, and
+    /// `false` outside vi mode.
+    ///
+    /// A selection of the same kind that covers a cell is cleared, and one
+    /// of another kind switches to `kind`. Otherwise a new selection starts
+    /// on the vi cursor's cell.
+    pub fn toggle_vi_selection(&mut self, kind: SelectionKind) -> bool {
+        self.active_screen_mut().toggle_vi_selection(kind)
     }
 
     /// Prints one character at the cursor of the screen on show, shaped by
@@ -226,11 +285,15 @@ impl DeviceState {
     ///
     /// The primary screen comes back at the size the alternate screen has.
     ///
+    /// Vi mode stays on, with the vi cursor seated on the primary screen's
+    /// home position.
+    ///
     /// # Control Functions
     ///
     /// - `RIS` (`ESC c`)
     pub fn reset(&mut self) -> Option<DamageSpan> {
         self.preceding_graphic = None;
+        let vi_mode = self.is_vi_mode();
         let was_showing_alternate = matches!(self.modes.active_screen, ScreenKind::Alternate);
         let primary = self.screens.primary.reset();
         let _ = self
@@ -247,6 +310,9 @@ impl DeviceState {
         // instead.
         self.modes = VtModes::default();
         self.apply_initial_cursor_style();
+        if vi_mode {
+            self.screens.primary.seat_vi_cursor();
+        }
         self.title = TitleState::default();
         self.active_hyperlink = None;
         // NOTE: `hyperlinks` is deliberately not reset. Ids must never be
@@ -575,6 +641,12 @@ impl DeviceState {
         self.scrollback_on_grow = policy;
     }
 
+    /// Replaces the characters that end a word for the semantic vi
+    /// motions.
+    pub fn set_semantic_escape_chars(&mut self, chars: SemanticEscapeChars) {
+        self.semantic_escape_chars = chars;
+    }
+
     /// Switches the active screen without a flip's side effects.
     #[cfg(test)]
     pub(crate) fn set_active_screen_for_test(&mut self, kind: ScreenKind) {
@@ -688,13 +760,26 @@ impl DeviceState {
     /// shown. The placements that reflow strands are not named here: their
     /// anchors stop resolving, and the next [`Self::evict_lost_anchors`]
     /// names them.
+    ///
+    /// Vi mode stays on across the flip: the vi cursor leaves the screen
+    /// that was shown and is seated on the screen now shown, on its write
+    /// cursor, or on its viewport's top-left cell when that screen is
+    /// scrolled back past the write cursor.
     pub fn switch_screen(&mut self, to: ScreenKind) -> Vec<InstanceId> {
+        let vi_mode = self.active_screen_mut().drop_vi_cursor();
         self.modes.active_screen = to;
         // NOTE: Dropping this clear lets a link a killed program left open
         // cover every cell the next program prints after the flip. It runs
         // only on a real flip, so a repeated set on the screen already
         // shown leaves such a link open.
         self.active_hyperlink = None;
+        // NOTE: The vi cursor must be seated before the primary screen's
+        // deferred reflow below. Seated after it, the reflow lands a vi-mode
+        // selection by the rules outside vi mode, and a selection end set from
+        // the right side of a cell can come to name the next cell.
+        if vi_mode {
+            self.active_screen_mut().seat_vi_cursor();
+        }
         match to {
             ScreenKind::Alternate => Vec::new(),
             ScreenKind::Primary => {
@@ -724,6 +809,32 @@ struct Screens {
     alternate: Screen,
 }
 
+impl Screens {
+    /// The screen `kind` names.
+    fn get(&self, kind: ScreenKind) -> &Screen {
+        match kind {
+            ScreenKind::Primary => &self.primary,
+            ScreenKind::Alternate => &self.alternate,
+        }
+    }
+
+    /// The screen `kind` names.
+    fn get_mut(&mut self, kind: ScreenKind) -> &mut Screen {
+        match kind {
+            ScreenKind::Primary => &mut self.primary,
+            ScreenKind::Alternate => &mut self.alternate,
+        }
+    }
+
+    /// The screen `kind` does not name.
+    fn other_mut(&mut self, kind: ScreenKind) -> &mut Screen {
+        match kind {
+            ScreenKind::Primary => &mut self.alternate,
+            ScreenKind::Alternate => &mut self.primary,
+        }
+    }
+}
+
 /// The current window title and the stack `CSI 22 t` saves it on.
 #[derive(Default)]
 struct TitleState {
@@ -748,8 +859,9 @@ mod tests {
     use crate::hyperlink::HyperlinkUri;
     use crate::screen::cell::Cell;
     use crate::screen::character_sets::{CharacterSet, GCode};
-    use crate::screen::grid::coords::{GridColumn, GridLine};
+    use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint};
     use crate::screen::grid::reflow::ScrollbackOnGrow;
+    use crate::screen::vi::ViModeSwitch;
     use crate::screen::viewport::ViewportLine;
     use std::iter::from_fn;
 
@@ -832,7 +944,7 @@ mod tests {
             device.active_screen_mut().move_cursor_to(Some(3), None);
             device.active_screen_mut().line_feed();
         }
-        assert_eq!(device.scroll(Scroll::Top), Some(DamageSpan::Full));
+        assert_eq!(device.scroll(Scroll::Top), ViewChange::Repainted);
         assert_eq!(device.display_offset(), DisplayOffset(5));
         device.switch_screen(ScreenKind::Alternate);
         assert_eq!(device.display_offset(), DisplayOffset(0));
@@ -846,8 +958,8 @@ mod tests {
     fn a_scroll_on_the_alternate_screen_reports_nothing() {
         let mut device = DeviceState::new(GridSize { cols: 4, rows: 3 }, 10);
         device.switch_screen(ScreenKind::Alternate);
-        assert_eq!(device.scroll(Scroll::Top), None);
-        assert_eq!(device.scroll(Scroll::PageUp), None);
+        assert_eq!(device.scroll(Scroll::Top), ViewChange::Unchanged);
+        assert_eq!(device.scroll(Scroll::PageUp), ViewChange::Unchanged);
         assert_eq!(device.display_offset(), DisplayOffset(0));
     }
 
@@ -1649,5 +1761,46 @@ mod tests {
         let hidden = &device.active_screen().viewport_row(ViewportLine(0))[0];
         assert_eq!(hidden.c, '─');
         assert_eq!(hidden.fg, Color::Indexed(1));
+    }
+
+    /// Asserts that flipping to the alternate screen keeps vi mode on and
+    /// seats the vi cursor on the alternate screen's write cursor.
+    ///
+    /// Case: a program opens the alternate screen while the user is in vi
+    /// mode.
+    #[test]
+    fn a_flip_to_the_alternate_screen_keeps_vi_mode() {
+        let mut device = device();
+        device.print('a').expect("a printable glyph");
+        let _ = device.switch_vi_mode(ViModeSwitch::Enter);
+        let _ = device.switch_screen(ScreenKind::Alternate);
+        assert!(device.is_vi_mode());
+        assert!(!device.screens.primary.is_vi_mode());
+        assert_eq!(
+            device.vi_cursor().map(|cursor| cursor.point),
+            Some(GridPoint {
+                line: GridLine(0),
+                column: GridColumn(0)
+            })
+        );
+    }
+
+    /// Asserts that a reset keeps vi mode on with the vi cursor at the
+    /// home position.
+    ///
+    /// Case: a program sends `RIS` while the user is in vi mode.
+    #[test]
+    fn a_reset_keeps_vi_mode_with_the_vi_cursor_home() {
+        let mut device = device();
+        device.print('a').expect("a printable glyph");
+        let _ = device.switch_vi_mode(ViModeSwitch::Enter);
+        let _ = device.reset();
+        assert_eq!(
+            device.vi_cursor().map(|cursor| cursor.point),
+            Some(GridPoint {
+                line: GridLine(0),
+                column: GridColumn(0)
+            })
+        );
     }
 }

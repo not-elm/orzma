@@ -136,7 +136,7 @@ fn cell_at_local(
 
 /// A terminal-surface query matching every mouse-enabled `OrzmaTerminal`
 /// surface.
-type TerminalSurfaces<'w, 's> = Query<
+pub(in crate::input) type TerminalSurfaces<'w, 's> = Query<
     'w,
     's,
     (

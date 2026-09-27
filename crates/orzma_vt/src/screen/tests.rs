@@ -69,7 +69,7 @@ fn classified(c: char) -> ClassifiedGlyph {
 }
 
 /// A grid point on `line` at `column`.
-fn point(line: i32, column: u16) -> GridPoint {
+pub(super) fn point(line: i32, column: u16) -> GridPoint {
     GridPoint {
         line: GridLine(line),
         column: GridColumn(column),
@@ -78,7 +78,7 @@ fn point(line: i32, column: u16) -> GridPoint {
 
 /// Prints `text` through the screen's own print path; a `'\n'` is a
 /// carriage return followed by a line feed.
-fn print_text(screen: &mut Screen, text: &str) {
+pub(super) fn print_text(screen: &mut Screen, text: &str) {
     for c in text.chars() {
         if c == '\n' {
             screen.carriage_return();

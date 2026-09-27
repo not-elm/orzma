@@ -1,6 +1,5 @@
 //! Focus and input suppression: gates which pane receives keyboard and
-//! mouse input, and keeps `bevy_cef`'s webview focus in step with the
-//! active pane.
+//! mouse input, and moves keyboard focus with the active pane.
 
 use crate::action::vi::mode::ViModeState;
 use crate::configs::OrzmaConfigsResource;
@@ -12,11 +11,11 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
-use bevy_cef::prelude::{FocusedWebview, WebviewSource};
+use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_tty_renderer::prelude::{
     PaneInactiveStyle, TerminalCellMetricsResource, TerminalOverlays,
 };
-use bevy_orzma_webview::{NonInteractive, Webview, webview_hit_at};
+use bevy_orzma_webview::{NonInteractive, RequestWebviewFocus, Webview, webview_hit_at};
 use bevy_orzmux::prelude::{OrzmuxActivePaneChanged, OrzmuxPane, PaneAction, RequestPaneAction};
 use orzma_configs::inactive_pane::InactivePaneConfig;
 
@@ -37,8 +36,8 @@ pub(crate) struct KeyboardFocused;
 /// When present on an `OrzmaTerminal` entity, the host's mouse dispatchers and
 /// hover-cursor system drop it from their hit-test candidate set, so the
 /// pointer falls through to the next terminal below it. The host marks a
-/// terminal `TerminalMouseDisabled` for vi mode, IME composition, or an
-/// unfocused window.
+/// terminal `TerminalMouseDisabled` for IME composition or an unfocused
+/// window.
 #[derive(Component)]
 pub(crate) struct TerminalMouseDisabled;
 
@@ -54,7 +53,7 @@ pub(crate) struct WebviewMouseDisabled;
 /// interactive inline webview rects. The host's mouse dispatchers and
 /// hover-cursor system skip it for a new press and for hover, though a
 /// gesture already held in it keeps reaching it, and the webview router
-/// still acts on it.
+/// still acts on it. It is never set while the terminal is in vi mode.
 #[derive(Component)]
 pub(crate) struct MouseClaimedByWebview;
 
@@ -66,25 +65,14 @@ pub(crate) struct PaneClicked {
 }
 
 /// Keeps focus and input gating in sync with the active pane and
-/// click-to-focus requests, and makes the pane of a newly focused inline
-/// webview the active pane.
+/// click-to-focus requests.
 pub(super) struct FocusSyncPlugin;
 
 impl Plugin for FocusSyncPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                maintain_input_gates.before(InputPhase::Hover),
-                select_pane_of_focused_webview
-                    .run_if(resource_exists_and_changed::<FocusedWebview>)
-                    .after(InputPhase::Dispatch)
-                    .before(InputPhase::FocusedKey),
-                sync_focused_webview.after(InputPhase::FocusedKey),
-            ),
-        )
-        .add_observer(on_active_pane_changed)
-        .add_observer(on_pane_clicked);
+        app.add_systems(Update, maintain_input_gates.before(InputPhase::Hover))
+            .add_observer(on_active_pane_changed)
+            .add_observer(on_pane_clicked);
     }
 }
 
@@ -146,7 +134,7 @@ pub(in crate::input) fn maintain_input_gates(
     // conditional folds below are safe only because neither can be live while an
     // inline webview still holds focus: `webview_modal` adds the composing case
     // only while the composition has no owner, and `handle_enter_vi_mode_request`
-    // releases the focused webview before `in_vi_mode` suppresses either gate.
+    // releases the focused webview before `in_vi_mode` suppresses the webview gate.
     let mouse_modal = ime.is_composing() || !focused;
     let webview_modal = !focused || (ime.is_composing() && focused_webview.0.is_none());
     let claimed = window.and_then(|w| cursor_claims_webview(w, &claim));
@@ -163,7 +151,7 @@ pub(in crate::input) fn maintain_input_gates(
             &mut commands,
             entity,
             TerminalMouseDisabled,
-            mouse_modal || in_vi_mode,
+            mouse_modal,
             has_terminal,
         );
         set_marker(
@@ -177,7 +165,7 @@ pub(in crate::input) fn maintain_input_gates(
             &mut commands,
             entity,
             MouseClaimedByWebview,
-            Some(entity) == claimed,
+            Some(entity) == claimed && !in_vi_mode,
             has_claim,
         );
     }
@@ -185,17 +173,14 @@ pub(in crate::input) fn maintain_input_gates(
 
 /// Applies an applied active-pane change, whether accepted from a
 /// `Layout` or taken optimistically from a pane selection: moves
-/// `KeyboardFocused`, releases a focused webview that is not an inline
-/// child of the new active pane, and swaps `PaneInactiveStyle` between
-/// the previous and current panes. `previous` may already be despawned
-/// by a `PaneClosed` in the same drain.
+/// `KeyboardFocused` and swaps `PaneInactiveStyle` between the previous and
+/// current panes. `previous` may already be despawned by a `PaneClosed` in
+/// the same drain.
 fn on_active_pane_changed(
     ev: On<OrzmuxActivePaneChanged>,
     mut commands: Commands,
-    mut focused_webview: ResMut<FocusedWebview>,
     configs: Res<OrzmaConfigsResource>,
     focused: Query<Entity, With<KeyboardFocused>>,
-    webview_parents: Query<&ChildOf>,
 ) {
     for entity in focused.iter() {
         if Some(entity) != ev.current {
@@ -213,57 +198,32 @@ fn on_active_pane_changed(
         current.try_insert(KeyboardFocused);
         current.remove::<PaneInactiveStyle>();
     }
-    let stays_focused = focused_webview.0.is_some_and(|child| {
-        ev.current.is_some_and(|current| {
-            webview_parents
-                .get(child)
-                .is_ok_and(|p| p.parent() == current)
-        })
-    });
-    if !stays_focused && focused_webview.0.is_some() {
-        focused_webview.0 = None;
-    }
 }
 
-/// Click-to-focus: asks the bridge to select the clicked pane. The
-/// bridge applies it as active at once and reports the change through
+/// Click-to-focus: asks the bridge to select the clicked pane, and asks for
+/// the release of a webview focus held in any other pane. The bridge
+/// applies the selection as active at once and reports the change through
 /// `OrzmuxActivePaneChanged`, so this frame's keys already go to the
 /// clicked pane; the confirming `Layout` reconciles.
 fn on_pane_clicked(
     ev: On<PaneClicked>,
     mut commands: Commands,
+    focused_webview: Res<FocusedWebview>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
     panes: Query<(), With<OrzmuxPane>>,
 ) {
     if panes.get(ev.entity).is_err() {
         return;
     }
-    commands.trigger(RequestPaneAction {
-        action: PaneAction::Select(ev.entity),
-    });
-}
-
-/// Asks for the pane that owns the focused inline webview to become the
-/// active pane when it is not already `KeyboardFocused`. A cleared focus,
-/// or a focus on an entity that is not a live inline `Webview` child, asks
-/// for nothing.
-fn select_pane_of_focused_webview(
-    mut commands: Commands,
-    focused: Res<FocusedWebview>,
-    webview_parents: Query<&ChildOf, With<Webview>>,
-    active_panes: Query<(), With<KeyboardFocused>>,
-) {
-    let Some(child) = focused.0 else {
-        return;
-    };
-    let Ok(parent) = webview_parents.get(child) else {
-        return;
-    };
-    let pane = parent.parent();
-    if active_panes.contains(pane) {
-        return;
+    let focused_elsewhere = focused_webview
+        .0
+        .and_then(|webview| webview_parents.get(webview).ok())
+        .is_some_and(|parent| parent.parent() != ev.entity);
+    if focused_elsewhere {
+        commands.trigger(RequestWebviewFocus::new(None));
     }
     commands.trigger(RequestPaneAction {
-        action: PaneAction::Select(pane),
+        action: PaneAction::Select(ev.entity),
     });
 }
 
@@ -279,47 +239,6 @@ fn inactive_style(config: &InactivePaneConfig) -> PaneInactiveStyle {
         tint: Vec4::new(rgb.red, rgb.green, rgb.blue, config.tint),
         overlay_dim: config.webview_dim,
         overlay_desaturate: config.webview_desaturate,
-    }
-}
-
-/// Keeps `bevy_cef`'s `FocusedWebview` in step with orzma's active pane.
-///
-/// Driving `FocusedWebview` from the active pane keeps keyboard input
-/// following the focused pane, and lets CEF blur the webview once it loses
-/// focus.
-///
-/// One case is preserved instead of driven: when `FocusedWebview` holds a
-/// webview child (`Webview`) whose `ChildOf` parent is a live
-/// `OrzmaTerminal` surface, that inline focus stands as the single focus
-/// source. This covers click-granted focus and the app-declared focus set
-/// via the control-plane `SetFocus` op. This sync does not clear that focus
-/// when the active pane changes elsewhere; it clears it only once the
-/// child despawns or focus moves off it.
-fn sync_focused_webview(
-    mut focused: ResMut<FocusedWebview>,
-    active_pane: Query<Entity, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
-    webviews: Query<(), With<WebviewSource>>,
-    non_interactive: Query<(), With<NonInteractive>>,
-    webview_parents: Query<&ChildOf, With<Webview>>,
-    surfaces: Query<(), With<OrzmaTerminal>>,
-) {
-    // NOTE: a despawned inline child fails `webview_parents.get` here and so
-    // falls through to the clear path below, which resolves to `None` and
-    // clears it — that fall-through is the GC for surface inline focus; a
-    // later edit that short-circuits this arm before the despawn check would
-    // leak focus.
-    if let Some(child) = focused.0
-        && let Ok(parent) = webview_parents.get(child)
-        && surfaces.contains(parent.parent())
-    {
-        return;
-    }
-
-    let active_surface = active_pane.iter().next();
-    let active = active_surface
-        .filter(|surface| webviews.contains(*surface) && !non_interactive.contains(*surface));
-    if focused.0 != active {
-        focused.0 = active;
     }
 }
 
@@ -372,192 +291,17 @@ fn set_marker<C: Component>(
 mod tests {
     use super::*;
     use orzma_vt::prelude::InstanceId;
+    use orzma_webview_host::prelude::MountId;
     use orzmux::prelude::PaneId;
 
-    #[test]
-    fn focused_webview_follows_active_pane() {
-        // Regression: moving focus to a terminal pane must clear FocusedWebview,
-        // so bevy_cef blurs the webview (releasing its DOM text area
-        // and stopping keyboard from routing to it). When the webview pane is
-        // active, its webview must be focused.
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<FocusedWebview>();
-        app.add_systems(Update, sync_focused_webview);
-
-        // The active OrzmaTerminal IS the active surface. The webview pane carries a
-        // WebviewSource; the terminal pane does not.
-        let terminal_pane = app.world_mut().spawn(OrzmaTerminal).id();
-        let ext_pane = app
-            .world_mut()
-            .spawn((OrzmaTerminal, WebviewSource::new("orzma://memo/index.html")))
-            .id();
-
-        let set_active = move |app: &mut App, active: Entity, inactive: Entity| {
-            app.world_mut().entity_mut(active).insert(KeyboardFocused);
-            app.world_mut()
-                .entity_mut(inactive)
-                .remove::<KeyboardFocused>();
-            app.update();
-        };
-
-        set_active(&mut app, ext_pane, terminal_pane);
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            Some(ext_pane),
-            "active webview pane must focus its webview"
-        );
-
-        set_active(&mut app, terminal_pane, ext_pane);
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "moving focus to the terminal pane must clear the focused webview",
-        );
-    }
-
-    #[test]
-    fn non_interactive_webview_surface_never_takes_keyboard_focus() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<FocusedWebview>();
-        app.add_systems(Update, sync_focused_webview);
-
-        // The active OrzmaTerminal carries a NonInteractive WebviewSource: it must
-        // never be focused.
-        app.world_mut().spawn((
-            OrzmaTerminal,
-            KeyboardFocused,
-            WebviewSource::new("orzma://memo/index.html"),
-            NonInteractive,
-        ));
-
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "NonInteractive webview surface must never become FocusedWebview"
-        );
-    }
-
-    #[test]
-    fn terminal_inline_focus_is_preserved() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<FocusedWebview>();
-        app.add_systems(Update, sync_focused_webview);
-
-        let pane = app.world_mut().spawn(OrzmaTerminal).id();
-        let child = app
-            .world_mut()
-            .spawn((
-                ChildOf(pane),
-                Webview {
-                    handle: "v".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
-            ))
-            .id();
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            Some(child),
-            "an inline child of a live OrzmaTerminal must keep FocusedWebview across the per-frame sync",
-        );
-    }
-
-    #[test]
-    fn terminal_inline_focus_is_gc_on_despawn() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<FocusedWebview>();
-        app.add_systems(Update, sync_focused_webview);
-
-        let pane = app.world_mut().spawn(OrzmaTerminal).id();
-        let child = app
-            .world_mut()
-            .spawn((
-                ChildOf(pane),
-                Webview {
-                    handle: "v".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
-            ))
-            .id();
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-        app.world_mut().entity_mut(child).despawn();
-
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "a despawned inline child must be GC'd out of FocusedWebview",
-        );
-    }
-
-    #[test]
-    fn sync_preserves_app_declared_inline_focus() {
-        // NOTE: bevy_orzma_webview's apply_control_events and its supporting resource types
-        // (OrzmaRegistry, ControlEvents, etc.) are pub(crate) and unreachable from the
-        // binary. Setting FocusedWebview directly produces the same world state that
-        // apply_control_events(SetFocus) would — the sync behavior under test is
-        // identical regardless of how FocusedWebview was last written.
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<FocusedWebview>()
-            .add_systems(Update, sync_focused_webview);
-
-        let surface = app.world_mut().spawn(OrzmaTerminal).id();
-        let child = app
-            .world_mut()
-            .spawn((
-                ChildOf(surface),
-                Webview {
-                    handle: "h1".into(),
-                    instance: InstanceId(1),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
-            ))
-            .id();
-
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-
-        app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            Some(child),
-            "app-declared inline focus must survive the per-frame sync_focused_webview"
-        );
-
-        app.world_mut().entity_mut(child).despawn();
-        app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "app-declared focus must clear once its inline child despawns"
-        );
-    }
-
     /// Asserts that an accepted active change moves `KeyboardFocused`,
-    /// tints the previous pane, and tolerates a despawned previous.
+    /// tints the previous pane, leaves `FocusedWebview` on the webview it
+    /// names, and tolerates a despawned previous.
     ///
-    /// Case: the backend confirms select-right; later the previously
-    /// active pane is already gone when its inactive style would apply.
+    /// Case: the user switches to the right pane with a leader-key shortcut
+    /// while a page in the left pane holds keyboard focus, and the backend
+    /// confirms the switch. Later, the previously active pane is already
+    /// gone when its inactive style would apply.
     #[test]
     fn active_pane_change_moves_focus_and_inactive_style() {
         let mut app = App::new();
@@ -573,6 +317,14 @@ mod tests {
             .world_mut()
             .spawn((OrzmaTerminal, OrzmuxPane(PaneId(2))))
             .id();
+        let page = app
+            .world_mut()
+            .spawn((
+                ChildOf(a),
+                Webview::new("w".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
         app.world_mut().trigger(OrzmuxActivePaneChanged {
             previous: Some(a),
             current: Some(b),
@@ -582,6 +334,7 @@ mod tests {
         assert!(app.world().get::<KeyboardFocused>(b).is_some());
         assert!(app.world().get::<PaneInactiveStyle>(a).is_some());
         assert!(app.world().get::<PaneInactiveStyle>(b).is_none());
+        assert_eq!(app.world().resource::<FocusedWebview>().0, Some(page));
 
         app.world_mut().entity_mut(b).despawn();
         app.world_mut().trigger(OrzmuxActivePaneChanged {
@@ -604,6 +357,7 @@ mod tests {
     fn a_click_requests_the_selection_of_a_pane_only() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
             .init_resource::<SelectRequests>()
             .add_observer(on_pane_clicked)
             .add_observer(record_select_request);
@@ -618,6 +372,55 @@ mod tests {
         assert_eq!(
             app.world().resource::<SelectRequests>().0,
             vec![PaneAction::Select(pane)]
+        );
+    }
+
+    /// Asserts that a click on a pane other than the one holding the focused
+    /// webview asks for that focus to be released, while a click on the
+    /// webview's own pane does not, and that both select their pane.
+    ///
+    /// Case: a page in the left pane holds the keyboard, and the user
+    /// right-clicks the shell text in the left pane and then in the right
+    /// pane.
+    #[test]
+    fn a_click_on_another_pane_releases_a_focused_webview() {
+        #[derive(Resource, Default)]
+        struct FocusRequests(Vec<Option<Entity>>);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<FocusedWebview>()
+            .init_resource::<SelectRequests>()
+            .init_resource::<FocusRequests>()
+            .add_observer(on_pane_clicked)
+            .add_observer(record_select_request)
+            .add_observer(
+                |ev: On<RequestWebviewFocus>, mut requests: ResMut<FocusRequests>| {
+                    requests.0.push(ev.target());
+                },
+            );
+        let left = app
+            .world_mut()
+            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(1))))
+            .id();
+        let right = app
+            .world_mut()
+            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(2))))
+            .id();
+        let page = app
+            .world_mut()
+            .spawn((
+                ChildOf(left),
+                Webview::new("w".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
+        app.world_mut().trigger(PaneClicked { entity: left });
+        app.world_mut().trigger(PaneClicked { entity: right });
+        app.update();
+        assert_eq!(app.world().resource::<FocusRequests>().0, vec![None]);
+        assert_eq!(
+            app.world().resource::<SelectRequests>().0,
+            vec![PaneAction::Select(left), PaneAction::Select(right)]
         );
     }
 
@@ -682,13 +485,7 @@ mod tests {
             .id();
         app.world_mut().spawn((
             ChildOf(shell),
-            Webview {
-                handle: "w".into(),
-                instance: InstanceId(1),
-                slot: 0,
-                rows: 10,
-                cols: 40,
-            },
+            Webview::new("w".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
         ));
         app.world_mut().spawn((
             Window {
@@ -842,21 +639,22 @@ mod tests {
         );
     }
 
-    /// Asserts that vi mode sets both gates.
+    /// Asserts that vi mode sets the webview gate but leaves the terminal's
+    /// own mouse input enabled.
     ///
-    /// Case: the user enters vi mode to scroll back through output in a pane
+    /// Case: the user enters vi mode to select text with the mouse in a pane
     /// that has a page mounted in it.
     #[test]
-    fn vi_mode_sets_both_gates() {
+    fn vi_mode_sets_only_the_webview_gate() {
         let (mut app, shell) = make_gate_app();
         app.world_mut().entity_mut(shell).insert(ViModeState);
         set_gate_cursor(&mut app, Vec2::new(400.0, 400.0));
         app.update();
         assert!(
-            app.world()
+            !app.world()
                 .entity(shell)
                 .contains::<TerminalMouseDisabled>(),
-            "vi mode suppresses terminal mouse input"
+            "vi mode keeps terminal mouse selection and the wheel working"
         );
         assert!(
             app.world().entity(shell).contains::<WebviewMouseDisabled>(),
@@ -864,59 +662,22 @@ mod tests {
         );
     }
 
-    /// Spawns an `OrzmaTerminal` pane carrying `OrzmuxPane(PaneId(id))` with
-    /// one inline `Webview` child, and returns `(pane, child)`.
-    fn spawn_pane_with_webview(app: &mut App, id: u32) -> (Entity, Entity) {
-        let pane = app
-            .world_mut()
-            .spawn((OrzmaTerminal, OrzmuxPane(PaneId(id))))
-            .id();
-        let child = app
-            .world_mut()
-            .spawn((
-                ChildOf(pane),
-                Webview {
-                    handle: format!("h{id}").into(),
-                    instance: InstanceId(u128::from(id)),
-                    slot: 0,
-                    rows: 10,
-                    cols: 40,
-                },
-            ))
-            .id();
-        (pane, child)
-    }
-
-    /// Asserts that an active-pane change keeps a focused webview that
-    /// belongs to the new active pane and clears one that does not.
+    /// Asserts that a webview rect under the cursor does not claim the
+    /// pointer while the terminal is in vi mode.
     ///
-    /// Case: a selection lands on the pane whose webview holds focus, and
-    /// the user later moves back to the other pane with a directional
-    /// shortcut.
+    /// Case: in vi mode the user starts a drag over a mounted page to select
+    /// the terminal text around it.
     #[test]
-    fn an_active_change_keeps_focus_on_a_webview_of_the_new_pane() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<FocusedWebview>()
-            .insert_resource(OrzmaConfigsResource::default())
-            .add_observer(on_active_pane_changed);
-        let (a, _) = spawn_pane_with_webview(&mut app, 1);
-        let (b, child) = spawn_pane_with_webview(&mut app, 2);
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-
-        app.world_mut().trigger(OrzmuxActivePaneChanged {
-            previous: Some(a),
-            current: Some(b),
-        });
+    fn vi_mode_keeps_a_webview_rect_from_claiming_the_pointer() {
+        let (mut app, shell) = make_gate_app();
+        app.world_mut().entity_mut(shell).insert(ViModeState);
+        set_gate_cursor(&mut app, Vec2::new(40.0, 48.0));
         app.update();
-        assert_eq!(app.world().resource::<FocusedWebview>().0, Some(child));
-
-        app.world_mut().trigger(OrzmuxActivePaneChanged {
-            previous: Some(b),
-            current: Some(a),
-        });
-        app.update();
-        assert_eq!(app.world().resource::<FocusedWebview>().0, None);
+        assert!(
+            !app.world()
+                .entity(shell)
+                .contains::<MouseClaimedByWebview>()
+        );
     }
 
     #[derive(Resource, Default)]
@@ -924,158 +685,6 @@ mod tests {
 
     fn record_select_request(ev: On<RequestPaneAction>, mut seen: ResMut<SelectRequests>) {
         seen.0.push(ev.action);
-    }
-
-    /// An app running `select_pane_of_focused_webview` that records every
-    /// `RequestPaneAction` it triggers. It has already updated once, so the
-    /// initial addition of `FocusedWebview` is consumed.
-    fn select_app() -> App {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<FocusedWebview>()
-            .init_resource::<SelectRequests>()
-            .add_systems(
-                Update,
-                select_pane_of_focused_webview
-                    .run_if(resource_exists_and_changed::<FocusedWebview>),
-            )
-            .add_observer(record_select_request);
-        app.update();
-        app
-    }
-
-    /// Asserts that focusing an inline webview whose pane is not the
-    /// keyboard-focused pane asks for that pane to be selected.
-    ///
-    /// Case: the user clicks a webview mounted in the inactive right-hand
-    /// pane while the left-hand pane holds keyboard focus.
-    #[test]
-    fn a_webview_focused_in_an_inactive_pane_selects_that_pane() {
-        let mut app = select_app();
-        let (active, _) = spawn_pane_with_webview(&mut app, 1);
-        app.world_mut().entity_mut(active).insert(KeyboardFocused);
-        let (inactive, child) = spawn_pane_with_webview(&mut app, 2);
-
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<SelectRequests>().0,
-            vec![PaneAction::Select(inactive)]
-        );
-    }
-
-    /// Asserts that a focus on a webview of the keyboard-focused pane, or a
-    /// cleared focus, asks for no pane selection.
-    ///
-    /// Case: the user clicks a webview in the pane they are already typing
-    /// in, then hands the keyboard back to the shell with the release
-    /// shortcut.
-    #[test]
-    fn a_focus_in_the_active_pane_or_a_cleared_focus_selects_nothing() {
-        let mut app = select_app();
-        let (active, child) = spawn_pane_with_webview(&mut app, 1);
-        app.world_mut().entity_mut(active).insert(KeyboardFocused);
-
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-        app.update();
-        app.world_mut().resource_mut::<FocusedWebview>().0 = None;
-        app.update();
-
-        assert!(app.world().resource::<SelectRequests>().0.is_empty());
-    }
-
-    #[derive(Resource, Default)]
-    struct KeyboardFocusAtKeys(Vec<Entity>);
-
-    /// The stand-in for the webview router in this test: the test sets
-    /// this instead of `FocusedWebview` directly, and a system in
-    /// `InputPhase::Dispatch` moves it into `FocusedWebview`.
-    #[derive(Resource, Default)]
-    struct PendingWebviewFocus(Option<Entity>);
-
-    /// Asserts that a webview focused in an inactive pane keeps its focus
-    /// once that pane becomes active, that keyboard dispatch in the same
-    /// frame already sees that pane as keyboard-focused, and that the
-    /// selection is asked for only once.
-    ///
-    /// Case: the user clicks a webview in the inactive pane and starts
-    /// typing into it right away, and the page's program then declares
-    /// focus on that same webview again.
-    #[test]
-    fn a_focused_webview_keeps_focus_once_its_pane_becomes_active() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, FocusSyncPlugin))
-            .init_resource::<FocusedWebview>()
-            .init_resource::<ImeState>()
-            .init_resource::<SelectRequests>()
-            .init_resource::<KeyboardFocusAtKeys>()
-            .init_resource::<PendingWebviewFocus>()
-            .insert_resource(OrzmaConfigsResource::default())
-            .configure_sets(
-                Update,
-                (
-                    InputPhase::Hover,
-                    InputPhase::Dispatch,
-                    InputPhase::FocusedKey,
-                )
-                    .chain(),
-            )
-            .add_systems(
-                Update,
-                (|mut pending: ResMut<PendingWebviewFocus>,
-                  mut focused: ResMut<FocusedWebview>| {
-                    if let Some(child) = pending.0.take() {
-                        focused.0 = Some(child);
-                    }
-                })
-                .in_set(InputPhase::Dispatch),
-            )
-            .add_systems(
-                Update,
-                (|mut seen: ResMut<KeyboardFocusAtKeys>,
-                  focused: Query<Entity, With<KeyboardFocused>>| {
-                    seen.0.extend(focused.iter());
-                })
-                .in_set(InputPhase::FocusedKey),
-            )
-            .add_observer(record_select_request)
-            .add_observer(
-                |ev: On<RequestPaneAction>,
-                 mut commands: Commands,
-                 active: Query<Entity, With<KeyboardFocused>>| {
-                    let PaneAction::Select(target) = ev.action else {
-                        return;
-                    };
-                    commands.trigger(OrzmuxActivePaneChanged {
-                        previous: active.iter().next(),
-                        current: Some(target),
-                    });
-                },
-            );
-        let (a, _) = spawn_pane_with_webview(&mut app, 1);
-        app.world_mut().entity_mut(a).insert(KeyboardFocused);
-        let (b, child) = spawn_pane_with_webview(&mut app, 2);
-        app.update();
-        app.world_mut()
-            .resource_mut::<KeyboardFocusAtKeys>()
-            .0
-            .clear();
-
-        app.world_mut().resource_mut::<PendingWebviewFocus>().0 = Some(child);
-        app.update();
-
-        assert_eq!(app.world().resource::<KeyboardFocusAtKeys>().0, vec![b]);
-        assert_eq!(app.world().resource::<FocusedWebview>().0, Some(child));
-        assert!(app.world().get::<KeyboardFocused>(a).is_none());
-        assert!(app.world().get::<PaneInactiveStyle>(a).is_some());
-
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-        app.update();
-        assert_eq!(
-            app.world().resource::<SelectRequests>().0,
-            vec![PaneAction::Select(b)]
-        );
     }
 
     /// Asserts that the rect-claim `maintain_input_gates` writes is visible

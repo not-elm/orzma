@@ -56,6 +56,7 @@ impl Interpreter {
     ) {
         let cursor_before = device.cursor();
         let cursor_color_before = device.palette().cursor;
+        let vi_cursor_before = device.vi_cursor();
         let mut executor = Executor {
             output,
             device,
@@ -82,7 +83,8 @@ impl Interpreter {
         executor.output.consumed = consumed;
         executor.sweep_evictions();
         executor.output.damaged |= cursor_before != executor.device.cursor()
-            || cursor_color_before != executor.device.palette().cursor;
+            || cursor_color_before != executor.device.palette().cursor
+            || vi_cursor_before != executor.device.vi_cursor();
     }
 }
 

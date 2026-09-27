@@ -22,6 +22,10 @@ notify-debouncer-full = "0.3"
 rust-embed = { version = "8", features = ["deterministic-timestamps"] }
 tempfile = { workspace = true }
 blake3 = "1"
+open = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+dunce = "1"
 
 [lints]
 workspace = true

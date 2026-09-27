@@ -5,8 +5,8 @@
 use crate::CellPixels;
 use orzma_vt::prelude::{
     CellSide, DisplayOffset, Frame, GridColumn, GridPoint, GridSize, InstanceId, InterpretOutput,
-    PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, SynchronizedOutput, Vt,
-    VtModes,
+    PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, SynchronizedOutput, ViCursor,
+    ViModeSwitch, ViMotion, Vt, VtModes,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -122,14 +122,17 @@ pub enum SelectionOp {
 /// scripted `evictions` entry when it did.
 ///
 /// `scroll` records the motion: `Scroll::Bottom` snaps `display_offset`
-/// to zero, and every other motion returns the scripted `scroll_moves`.
+/// to zero, and every other motion returns the scripted `scroll_moves`; a
+/// `Scroll::Delta` that `scroll_moves` lets through also moves
+/// `display_offset` by its delta.
 /// The selection operations record themselves in `selections` and return
 /// the scripted `selection_changes`, and `selection_text` returns the
 /// scripted `selected_text`.
 pub struct FakeVt {
     /// Grid size reported and updated by `resize`.
     pub grid_size: GridSize,
-    /// Offset reported by `display_offset`; `Scroll::Bottom` zeroes it.
+    /// Offset reported by `display_offset`; `Scroll::Bottom` zeroes it, and
+    /// a moving `Scroll::Delta` shifts it.
     pub display_offset: DisplayOffset,
     /// Device-wide terminal modes the host reads back.
     ///
@@ -240,14 +243,19 @@ impl Vt for FakeVt {
     }
 
     fn scroll(&mut self, scroll: Scroll) -> bool {
-        let snaps_to_bottom = matches!(scroll, Scroll::Bottom);
         self.scrolls.push(scroll);
-        if snaps_to_bottom {
-            let moved = self.display_offset != DisplayOffset(0);
-            self.display_offset = DisplayOffset(0);
-            moved
-        } else {
-            self.scroll_moves
+        match scroll {
+            Scroll::Bottom => {
+                let moved = self.display_offset != DisplayOffset(0);
+                self.display_offset = DisplayOffset(0);
+                moved
+            }
+            Scroll::Delta(delta) if self.scroll_moves => {
+                self.display_offset =
+                    DisplayOffset(self.display_offset.0.saturating_add_signed(delta));
+                true
+            }
+            _ => self.scroll_moves,
         }
     }
 
@@ -280,6 +288,22 @@ impl Vt for FakeVt {
 
     fn modes(&self) -> VtModes {
         self.modes
+    }
+
+    fn switch_vi_mode(&mut self, _switch: ViModeSwitch) -> bool {
+        false
+    }
+
+    fn vi_motion(&mut self, _motion: ViMotion) -> bool {
+        false
+    }
+
+    fn toggle_vi_selection(&mut self, _kind: SelectionKind) -> bool {
+        false
+    }
+
+    fn vi_cursor(&self) -> Option<ViCursor> {
+        None
     }
 }
 

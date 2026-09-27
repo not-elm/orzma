@@ -1593,13 +1593,13 @@ mod tests {
         app.world().resource::<Shortcuts>().clone()
     }
 
+    /// Asserts that the default tap leader stays inert when no action is bound
+    /// to a leader chord.
+    ///
+    /// Case: a user unbinds every leader-scoped action and keeps only direct
+    /// chords.
     #[test]
     fn build_shortcuts_leaves_default_tap_leader_inert_without_leader_bindings() {
-        // NOTE: `ConfigShortcuts::default()` ships 29 leader-scoped actions
-        // (alongside the direct chords), so `OrzmaConfigs::default()` alone no
-        // longer exercises the inert-leader path; every leader binding is
-        // explicitly unbound here to reproduce a config with no leader
-        // bindings at all.
         let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
                 paste: None,
@@ -1612,26 +1612,10 @@ mod tests {
                 split_vertical_pane: None,
                 split_horizontal_pane: None,
                 kill_pane: None,
-                zoom_pane: None,
                 resize_left_pane: None,
                 resize_down_pane: None,
                 resize_up_pane: None,
                 resize_right_pane: None,
-                new_window: None,
-                kill_window: None,
-                next_window: None,
-                previous_window: None,
-                select_window_0: None,
-                select_window_1: None,
-                select_window_2: None,
-                select_window_3: None,
-                select_window_4: None,
-                select_window_5: None,
-                select_window_6: None,
-                select_window_7: None,
-                select_window_8: None,
-                select_window_9: None,
-                rename_window: None,
                 ..Default::default()
             },
             ..Default::default()

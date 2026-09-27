@@ -1307,32 +1307,16 @@ dependencies = [
  "bevy_cef",
  "bevy_cef_core",
  "bevy_orzma_tty_renderer",
- "bevy_orzma_webview_host",
  "bevy_orzmux",
  "crossbeam-channel",
- "data-encoding",
- "getrandom 0.2.17",
- "libc",
- "log",
  "orzma_vt",
+ "orzma_webview_host",
  "orzmux",
  "serde",
  "serde_json",
  "tempfile",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "bevy_orzma_webview_host"
-version = "0.2.0-dev"
-dependencies = [
- "bevy",
- "bevy_cef_core",
- "tempfile",
  "thiserror 2.0.18",
- "uds_windows",
- "windows-sys 0.61.2",
+ "tracing",
 ]
 
 [[package]]
@@ -1343,6 +1327,7 @@ dependencies = [
  "crossbeam-channel",
  "orzma_tty",
  "orzma_vt",
+ "orzma_webview_host",
  "orzmux",
  "tracing",
 ]
@@ -2914,6 +2899,12 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+
+[[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "either"
@@ -5006,6 +4997,7 @@ version = "5.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fbaa89d2ddc8473c78a3adf69eea8cffa28c483b8e02a971ef31527cd0fc92c"
 dependencies = [
+ "dunce",
  "is-wsl",
  "libc",
  "pathdiff",
@@ -5059,7 +5051,6 @@ dependencies = [
  "bevy_cef_core",
  "bevy_orzma_tty_renderer",
  "bevy_orzma_webview",
- "bevy_orzma_webview_host",
  "bevy_orzmux",
  "crossbeam-channel",
  "data-encoding",
@@ -5071,6 +5062,7 @@ dependencies = [
  "orzma_configs",
  "orzma_tty",
  "orzma_vt",
+ "orzma_webview_host",
  "orzmux",
  "serde",
  "serde_json",
@@ -5122,12 +5114,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "orzma_webview_host"
+version = "0.2.0-dev"
+dependencies = [
+ "crossbeam-channel",
+ "data-encoding",
+ "getrandom 0.2.17",
+ "libc",
+ "orzma_vt",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uds_windows",
+ "url",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "orzmd"
 version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "blake3",
+ "dunce",
  "notify-debouncer-full",
+ "open",
  "pulldown-cmark",
  "ratatui",
  "ratatui_orzma",
@@ -5145,6 +5158,8 @@ dependencies = [
  "crossbeam-channel",
  "orzma_tty",
  "orzma_vt",
+ "orzma_webview_host",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",

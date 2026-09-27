@@ -62,8 +62,10 @@ The control socket is a local Unix-domain **stream** socket speaking **NDJSON**
 (on Windows, an AF_UNIX socket, available since Windows 10 1809; the endpoint
 is a filesystem path on every platform):
 exactly one JSON object per line, terminated by `\n` (a trailing `\r` is
-tolerated). Each line travels in one direction. The connection is long-lived —
-it stays open for as long as the program wants its registrations to live.
+tolerated). Each line travels in one direction. The host closes a connection
+when its first line is longer than 4 KiB or any later line is longer than
+32 MiB. The connection is long-lived — it stays open for as long as the
+program wants its registrations to live.
 
 ### Discovery
 
@@ -73,7 +75,8 @@ them from its own environment:
 - `$ORZMA_SOCK` — the absolute path to the control socket. Connect to this path
   verbatim; do not reconstruct it.
 - `$ORZMA_TOKEN` — the per-pane handshake token. Treat it as opaque (it is
-  currently of the form `orzma:<bits>`, but do not parse it).
+  currently `orzma:` followed by 26 lowercase base32 characters, but do not
+  parse it).
 
 If either variable is absent, the program is not running inside an orzma pane
 and cannot use the protocol.
@@ -91,7 +94,7 @@ Either way, only processes running as the same user can reach the handshake.
 The **first** line a program sends MUST be a `hello` carrying `$ORZMA_TOKEN`:
 
 ```json
-{"op":"hello","token":"orzma:4294967306"}
+{"op":"hello","token":"orzma:mzxw6ytboi3tmnrqgq2tgmzvgm"}
 ```
 
 The token binds the connection to the pane it was issued for. If the first line
@@ -251,7 +254,7 @@ of either kind replies `{"ok":false,"error":"<code>"}`:
 | `unsupported_scheme` | `url.url` is not `http`/`https`. |
 | `unknown_handle` | `new_instance.handle` names no live registration. |
 | `not_owner` | `new_instance.handle` is registered, but by another connection. |
-| `owner_gone` | The `register`/`new_instance` request's owner surface has already despawned. |
+| `owner_gone` | The register request's pane has already closed. |
 | `internal` | The host failed to process the request. |
 
 ### Handle semantics
@@ -284,7 +287,7 @@ that handle's registered content, and each one mounts independently.
 Program-to-host lines are marked `C→S`, host-to-program lines `S→C`:
 
 ```json
-C→S {"op":"hello","token":"orzma:4294967306"}
+C→S {"op":"hello","token":"orzma:mzxw6ytboi3tmnrqgq2tgmzvgm"}
 C→S {"op":"register","kind":"inline","html":"<!doctype html><body>hi</body>"}
 S→C {"ok":true,"handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","instance":"3f5a9c02d1e84b7690ab3cde12f45678"}
 S→C {"op":"call","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","instance":"3f5a9c02d1e84b7690ab3cde12f45678","reqId":"0","method":"save","params":{"text":"hi"}}
@@ -472,8 +475,8 @@ if (isOrzmaAvailable()) {
 - **Scoped to one pane.** A connection's token binds it to the pane that issued
   `$ORZMA_TOKEN`; a program may only mount, focus, navigate, and emit to
   registrations it made itself.
-- **Unguessable, isolated identifiers.** Handles and instances are both 128-bit
-  CSPRNG values, and each handle is its own `orzma://` origin.
+- **Unguessable, isolated identifiers.** Tokens, handles, and instances are all
+  128-bit CSPRNG values, and each handle is its own `orzma://` origin.
 - **Authorized replies.** Back-channel `reqId`s are a shared, monotonic counter
   and therefore guessable, so the host authorizes a `reply` by its originating
   connection: a program replaying another connection's `reqId` can neither

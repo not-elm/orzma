@@ -11,6 +11,7 @@ use orzma_tty::prelude::{OrzmaTty, OrzmaTtyError, WheelConfig};
 use orzma_tty::test_support::{BlockingSink, CaptureSink, FailingSink};
 use orzma_tty::{CellPixels, EnvKey, EnvValue};
 use orzma_vt::prelude::{GridSize, OrzmaVt};
+use orzma_webview_host::prelude::{ControlEvent, ControlSocket, WebviewHost};
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::PathBuf;
@@ -23,6 +24,9 @@ const CELL_PX: CellPixels = CellPixels {
     width: 8,
     height: 16,
 };
+
+/// The socket path a harness with control advertises to its panes.
+pub(crate) const CONTROL_SOCK: &str = "/tmp/orzma-harness/control.sock";
 
 /// The test's ends of one spawned pane's streams.
 pub(crate) struct FakePane {
@@ -68,6 +72,7 @@ pub(crate) struct FactoryLog {
     spawn_output: Mutex<Option<Vec<u8>>>,
     sizes: Mutex<Vec<GridSize>>,
     cwds: Mutex<Vec<Option<PathBuf>>>,
+    envs: Mutex<Vec<Vec<(EnvKey, EnvValue)>>>,
 }
 
 /// Spawns PTY-less terminals and hands the test their input ends.
@@ -90,8 +95,9 @@ impl PaneFactory for FakeFactory {
         size: GridSize,
         _cell_px: CellPixels,
         cwd: Option<PathBuf>,
-        _env: Vec<(EnvKey, EnvValue)>,
+        env: Vec<(EnvKey, EnvValue)>,
     ) -> OrzmuxResult<OrzmaTty<OrzmaVt>> {
+        self.log.envs.lock().unwrap().push(env);
         self.log.sizes.lock().unwrap().push(size);
         self.log.cwds.lock().unwrap().push(cwd);
         if self.log.fail_next.swap(false, Ordering::AcqRel) {
@@ -165,24 +171,19 @@ impl Harness {
         Self::with_wheel(WheelConfig::default())
     }
 
-    /// A harness whose backend routes the wheel by `wheel`.
+    /// A harness whose backend routes the wheel by `wheel`, with a webview
+    /// host that has no control socket.
     pub fn with_wheel(wheel: WheelConfig) -> Self {
-        let (spawned_tx, spawned_rx) = unbounded();
-        let (command_tx, command_rx) = unbounded();
-        let log = Arc::new(FactoryLog::default());
-        let factory = FakeFactory::new(spawned_tx, Arc::clone(&log));
-        let backend = Backend::new(Box::new(factory), wheel);
-        let wakes = Arc::new(WakeCount::default());
-        let (gui, event_rx) = GuiLink::channel(Waker::from(Arc::clone(&wakes)));
-        Self {
-            event_loop: EventLoop::new(backend, command_rx, gui),
-            events: event_rx,
-            panes: spawned_rx,
-            log,
-            wakes,
-            seq: 0,
-            commands: command_tx,
-        }
+        Self::build(wheel, WebviewHost::without_socket())
+    }
+
+    /// A harness whose webview host serves an injected control socket at
+    /// `CONTROL_SOCK`, returning the sender tests feed control events
+    /// through.
+    pub fn with_control() -> (Self, Sender<ControlEvent>) {
+        let (socket, control) = ControlSocket::injected(CONTROL_SOCK);
+        let harness = Self::build(WheelConfig::default(), WebviewHost::with_socket(socket));
+        (harness, control)
     }
 
     /// Sends one command and runs the loop's command and flush phases,
@@ -270,6 +271,26 @@ impl Harness {
         self.log.cwds.lock().unwrap().last().cloned().flatten()
     }
 
+    /// The value of `key` in the environment of the latest spawn request, or
+    /// `None` when there was no spawn or it carried no such variable. When
+    /// `key` appears more than once, its last entry wins, as it does for the
+    /// spawned shell.
+    pub fn last_spawn_env_var(&self, key: &str) -> Option<String> {
+        let envs = self.log.envs.lock().unwrap();
+        envs.last()?
+            .iter()
+            .rev()
+            .find(|(k, _)| k.0 == key)
+            .map(|(_, v)| v.0.clone())
+    }
+
+    /// Applies up to `CONTROL_BATCH` queued control events, then flushes the
+    /// events the backend generated onto the event channel.
+    pub fn drain_control(&mut self) {
+        self.event_loop.drain_control();
+        self.event_loop.flush_events();
+    }
+
     /// The number of wakes the loop has sent the GUI.
     pub fn wake_count(&self) -> usize {
         self.wakes.get()
@@ -322,5 +343,24 @@ impl Harness {
             panic!("expected PaneOpened, got {events:?}");
         };
         (*pane, self.panes.try_recv().expect("one spawned pane"))
+    }
+
+    fn build(wheel: WheelConfig, webview: WebviewHost<PaneId>) -> Self {
+        let (spawned_tx, spawned_rx) = unbounded();
+        let (command_tx, command_rx) = unbounded();
+        let log = Arc::new(FactoryLog::default());
+        let factory = FakeFactory::new(spawned_tx, Arc::clone(&log));
+        let backend = Backend::new(Box::new(factory), wheel, webview);
+        let wakes = Arc::new(WakeCount::default());
+        let (gui, event_rx) = GuiLink::channel(Waker::from(Arc::clone(&wakes)));
+        Self {
+            event_loop: EventLoop::new(backend, command_rx, gui),
+            events: event_rx,
+            panes: spawned_rx,
+            log,
+            wakes,
+            seq: 0,
+            commands: command_tx,
+        }
     }
 }

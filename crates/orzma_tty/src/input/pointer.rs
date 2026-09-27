@@ -114,8 +114,8 @@ struct LocalDrag {
 /// Whether a selection gesture has left the cell it was pressed on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DragPhase {
-    /// A single click is held on the cell it was pressed on; its
-    /// selection is still empty.
+    /// A single or double click is held on the cell it was pressed on;
+    /// its selection is still empty.
     Armed,
     /// The selection follows the pointer.
     Started,
@@ -246,9 +246,11 @@ impl PointerState {
         } else {
             match click_count {
                 1 => (SelectionKind::Simple, DragPhase::Armed),
-                // TODO: switch to a word-snapped kind once `orzma_vt` gains
-                // one; a double-click rounds down to `Simple` until then.
-                2 => (SelectionKind::Simple, DragPhase::Started),
+                // TODO: switch to a word-snapped kind, started at once like a
+                // triple click, once `orzma_vt` gains one; until then a
+                // double-click rounds down to `Simple` and arms like a single
+                // click.
+                2 => (SelectionKind::Simple, DragPhase::Armed),
                 _ => (SelectionKind::Lines, DragPhase::Started),
             }
         };
@@ -807,29 +809,37 @@ mod tests {
     }
 
     /// Asserts that local presses after a forwarded one count their clicks
-    /// from it, whatever the host counted: the first is a single click,
-    /// which copies nothing, and the next a double click, which copies.
+    /// from it, whatever the host counted: the first two count as a single
+    /// and a double click, which select plainly and copy nothing, and the
+    /// third as a triple click, which selects lines and copies.
     ///
-    /// Case: the user clicks in nvim and, a moment later, Shift-double-clicks
-    /// the same word.
+    /// Case: the user clicks in nvim and, in the same run of quick clicks,
+    /// Shift-triple-clicks the same line.
     #[test]
     fn local_presses_after_a_forwarded_one_count_their_own_clicks() {
         let mut state = PointerState::default();
         let m = modes(MouseTracking::Drag);
         state.route(press(PointerButton::Left, 2, 2), m, LIVE);
         state.route(release(PointerButton::Left, 2, 2), m, LIVE);
-        for (host_clicks, copies) in [(2, false), (3, true)] {
+        for (step, (host_clicks, kind, copies)) in [
+            (2, SelectionKind::Simple, false),
+            (3, SelectionKind::Simple, false),
+            (3, SelectionKind::Lines, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let local = with_shift(with_clicks(press(PointerButton::Left, 2, 2), host_clicks));
             assert_eq!(
                 state.route(local, m, LIVE),
-                vec![start(2, 2, SelectionKind::Simple)],
-                "host count {host_clicks}"
+                vec![start(2, 2, kind)],
+                "local press {step}"
             );
             let released = state.route(release(PointerButton::Left, 2, 2), m, LIVE);
             assert_eq!(
                 released.contains(&PointerAction::Copy),
                 copies,
-                "host count {host_clicks}: {released:?}"
+                "local press {step}: {released:?}"
             );
         }
     }
@@ -926,47 +936,64 @@ mod tests {
         assert_eq!(state.drag_end(), None);
     }
 
-    /// Asserts that a double click selects plainly at once, a triple click
-    /// or an Alt click selects lines at once, each copying on release, and
-    /// that a zero click count is a single click.
+    /// Asserts that a triple click, a higher click count, or an Alt click
+    /// selects lines at once and copies on release.
     ///
-    /// Case: the user double-clicks a word, triple-clicks a line, and
-    /// Alt-clicks another line at a shell prompt.
+    /// Case: the user triple-clicks a line and Alt-clicks another line at a
+    /// shell prompt.
     #[test]
-    fn multi_clicks_and_alt_select_at_once() {
+    fn triple_and_alt_clicks_select_lines_at_once() {
         let off = modes(MouseTracking::Off);
-        for (input, kind) in [
-            (
-                with_clicks(press(PointerButton::Left, 2, 2), 2),
-                SelectionKind::Simple,
-            ),
-            (
-                with_clicks(press(PointerButton::Left, 2, 2), 3),
-                SelectionKind::Lines,
-            ),
-            (
-                with_clicks(press(PointerButton::Left, 2, 2), 7),
-                SelectionKind::Lines,
-            ),
-            (
-                with_alt(press(PointerButton::Left, 2, 2)),
-                SelectionKind::Lines,
-            ),
+        for input in [
+            with_clicks(press(PointerButton::Left, 2, 2), 3),
+            with_clicks(press(PointerButton::Left, 2, 2), 7),
+            with_alt(press(PointerButton::Left, 2, 2)),
         ] {
             let mut state = PointerState::default();
-            assert_eq!(state.route(input, off, LIVE), vec![start(2, 2, kind)]);
+            assert_eq!(
+                state.route(input, off, LIVE),
+                vec![start(2, 2, SelectionKind::Lines)]
+            );
             assert_eq!(
                 state.route(release(PointerButton::Left, 2, 2), off, LIVE),
                 vec![extend(2, 2), PointerAction::Copy]
             );
         }
-        let mut state = PointerState::default();
-        state.route(with_clicks(press(PointerButton::Left, 2, 2), 0), off, LIVE);
-        assert!(
-            state
-                .route(release(PointerButton::Left, 2, 2), off, LIVE)
-                .is_empty()
-        );
+    }
+
+    /// Asserts that a double click or a zero click count arms like a single
+    /// click: a bare release copies nothing, and a drag extends the
+    /// selection from its first cell change on and copies on release.
+    ///
+    /// Case: the user double-clicks a word at a shell prompt, then
+    /// double-clicks again and drags across the next word; a host that
+    /// counts no clicks sends the same presses with a zero count.
+    #[test]
+    fn a_double_click_arms_like_a_single_click() {
+        let off = modes(MouseTracking::Off);
+        for click_count in [2, 0] {
+            let mut state = PointerState::default();
+            let input = with_clicks(press(PointerButton::Left, 2, 2), click_count);
+            assert_eq!(
+                state.route(input, off, LIVE),
+                vec![start(2, 2, SelectionKind::Simple)],
+                "click count {click_count}"
+            );
+            assert!(
+                state
+                    .route(release(PointerButton::Left, 2, 2), off, LIVE)
+                    .is_empty(),
+                "click count {click_count}"
+            );
+            state.route(input, off, LIVE);
+            assert!(state.route(motion(2, 2), off, LIVE).is_empty());
+            assert_eq!(state.route(motion(4, 2), off, LIVE), vec![extend(4, 2)]);
+            assert_eq!(
+                state.route(release(PointerButton::Left, 4, 2), off, LIVE),
+                vec![extend(4, 2), PointerAction::Copy],
+                "click count {click_count}"
+            );
+        }
     }
 
     /// Asserts that a middle or right button that is not forwarded does
