@@ -4,15 +4,14 @@
     <meta charset="utf-8" />
     <link rel="stylesheet" href="bundle.css" />
     <style>
-      :root { color-scheme: dark; }
-      body { margin: 0; padding: 24px; background: #0d1117; color: #c9d1d9;
+      :root { color-scheme: dark; --outline-w: min(260px, 40vw); }
+      body { margin: 0; padding: calc(var(--rail-h) + 24px) 24px 24px; background: #0d1117; color: #c9d1d9;
              font: 16px/1.6 -apple-system, system-ui, sans-serif; }
       img { max-width: 100%; height: auto; }
       pre { background: #161b22; padding: 12px; border-radius: 6px; overflow: auto; }
       code { font-family: ui-monospace, monospace; }
-      mark.orzmd-match { background: #ffd33d55; color: inherit; }
-      mark.orzmd-current { background: #ffd33d; color: #000; }
-      .orzmd-anchor { display: inline; scroll-margin-top: 8px; }
+      ::highlight(orzmd-match) { background-color: #ffd33d55; }
+      ::highlight(orzmd-current) { background-color: #ffd33d; color: #000; }
       table { border-collapse: collapse; }
       th, td { border: 1px solid #30363d; padding: 6px 12px; }
       .markdown-alert { border-left: 4px solid var(--alert-accent);
@@ -28,10 +27,89 @@
       .markdown-alert-important { --alert-accent: #a371f7; }
       .markdown-alert-warning { --alert-accent: #d29922; }
       .markdown-alert-caution { --alert-accent: #f85149; }
+      html { scroll-padding-top: var(--scroll-offset); }
+      #rail { position: fixed; top: 0; left: 0; right: 0; z-index: 10; box-sizing: border-box;
+              height: var(--rail-h); display: flex; align-items: center; gap: 8px; padding: 0 14px;
+              background: #0d1117; border-bottom: 1px solid #21262d; color: #9198a1;
+              font: 12.5px/1 -apple-system, system-ui, sans-serif; white-space: nowrap; }
+      #rail .rail-file { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis;
+              color: #f0f6fc; font-weight: 600; }
+      #rail .rail-crumbs { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+      #rail .rail-sep { margin: 0 6px; color: #484f58; }
+      #rail .rail-key { font: 11.5px ui-monospace, monospace; color: #f0f6fc; border: 1px solid #30363d;
+              border-bottom-width: 2px; border-radius: 4px; padding: 2px 6px; }
+      #rail .rail-missing { color: #ff7b72; font-weight: 600; border: 1px solid #f8514966;
+              border-radius: 999px; padding: 3px 8px; }
+      #toast, #find { position: fixed; z-index: 10; align-items: center; gap: 8px;
+              background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+              box-shadow: 0 10px 28px rgba(1, 4, 9, .6); color: #e6edf3; }
+      #toast:not([hidden]), #find:not([hidden]) { display: flex; }
+      #toast { left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 80vw; padding: 8px 12px;
+               font: 12.5px/1.4 -apple-system, system-ui, sans-serif; }
+      #toast.toast-error { border-color: #f8514966; }
+      #toast.toast-info { color: #9198a1; }
+      #toast .toast-icon { flex: none; width: 14px; height: 14px; color: #ff7b72; }
+      #toast.toast-info .toast-icon { display: none; }
+      #find { top: var(--find-top); right: 16px; box-sizing: border-box;
+              width: min(320px, 100vw - 32px); height: var(--find-h); padding: 0 6px 0 10px;
+              font: 12.5px/1 -apple-system, system-ui, sans-serif; }
+      #find.no-results { border-color: #f85149aa; }
+      #find .find-icon { flex: none; width: 14px; height: 14px; color: #9198a1; }
+      #find .find-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
+              color: inherit; font: inherit; padding: 0; }
+      #find .find-case { flex: none; font-size: 11px; color: #6e7681; padding: 1px 4px;
+              border: 1px solid transparent; border-radius: 4px; }
+      #find .find-case.on { color: #f0f6fc; border-color: #30363d; }
+      #find .find-count { flex: none; color: #9198a1; font-variant-numeric: tabular-nums; }
+      #find.no-results .find-count { color: #ff7b72; }
+      #find .find-wrap { color: #e3b341; margin-right: 6px; }
+      #find .find-sep { flex: none; width: 1px; height: 16px; background: #30363d; }
+      #find button { flex: none; width: 22px; height: 22px; display: grid; place-items: center;
+              padding: 0; border: 0; border-radius: 5px; background: transparent; color: #c9d1d9; }
+      #find button:disabled { color: #484f58; }
+      #find button svg { width: 14px; height: 14px; }
+      body.outline-open { padding-left: calc(var(--outline-w) + 24px); }
+      #outline { position: fixed; top: var(--rail-h); left: 0; bottom: 0; z-index: 5;
+                 box-sizing: border-box; width: var(--outline-w); overflow-y: auto;
+                 overscroll-behavior: contain; padding: 8px 0;
+                 background: #0d1117; border-right: 1px solid #21262d;
+                 font: 13px/1.5 -apple-system, system-ui, sans-serif; }
+      .outline-list { list-style: none; margin: 0; padding: 0; }
+      .outline-list li { position: relative; padding-top: 3px; padding-bottom: 3px; padding-right: 12px;
+                 color: #c9d1d9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                 cursor: pointer; }
+      .outline-list li.current { color: #f0f6fc; }
+      .outline-list li.current::before { content: ''; position: absolute; left: 4px; top: 50%;
+                 width: 4px; height: 4px; margin-top: -2px; border-radius: 50%; background: #4493f8; }
+      .outline-list li.selected { background: #1f6feb40; color: #f0f6fc; }
+      .outline-list li.outline-empty { color: #9198a1; cursor: default; padding-left: 12px; }
     </style>
   </head>
   <body>
+    <header id="rail">
+      <span class="rail-file"></span>
+      <span class="rail-crumbs"></span>
+      <kbd class="rail-key" hidden></kbd>
+      <span class="rail-missing" hidden>File deleted</span>
+    </header>
+    <div id="find" hidden>
+      <svg class="find-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <input class="find-input" type="text" placeholder="Find" autocomplete="off" spellcheck="false" aria-label="Find in document" />
+      <span class="find-case" title="Match case (automatic)">Aa</span>
+      <span class="find-count"><span class="find-wrap" hidden>↻</span><span class="find-num"></span></span>
+      <span class="find-sep"></span>
+      <button type="button" data-act="prev" aria-label="Previous match"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button type="button" data-act="next" aria-label="Next match"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button type="button" data-act="close" aria-label="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+    </div>
+    <nav id="outline" aria-label="Outline" hidden>
+      <ol class="outline-list"></ol>
+    </nav>
     <div id="content"></div>
+    <div id="toast" role="status" hidden>
+      <svg class="toast-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.8v3.8M8 10.9v.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span class="toast-text"></span>
+    </div>
     <script type="module" src="bundle.js"></script>
   </body>
 </html>

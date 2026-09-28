@@ -158,6 +158,21 @@ Three consequences of the stock `<Leader>` defaults worth knowing:
   rebind the actions you need to direct chords, e.g.
   `split-vertical-pane = "Ctrl+Shift+I"`.
 
+## Shortcuts while a webview has focus
+
+Once you click into a webview, keys go to the page, but orzma's own shortcuts
+still come first:
+
+- `<Leader>` bindings and `release-webview-focus` always run.
+- Other direct chords, such as `Cmd+Plus` or a pane action bound to a chord,
+  run while `direct-chords-over-webview` is `true`, the default. Set it to
+  `false` to let the page have them.
+- `copy` and `paste` bound to direct chords never run while a webview has
+  focus, so `Cmd+C` and `Cmd+V` copy and paste inside the page.
+
+A chord that runs an orzma shortcut never reaches the page, and it runs even
+when the page's program lists it as a forward key.
+
 ## The `+` and `-` keys
 
 `Ctrl++` is not a valid value: a chord is split on `+`, so write `Ctrl+Plus`.
@@ -195,6 +210,11 @@ leader-tap-timeout-ms = 300
 # without the leader. Each fire re-arms the window. Default 500; 0 disables
 # repeat entirely.
 repeat-time-ms = 500
+# Direct chords ("Cmd+Plus", ...) run even while a webview has keyboard focus.
+# "<Leader>..." bindings and release-webview-focus always do, and direct copy
+# and paste chords never do. Set false to hand the other direct chords to the
+# page.
+direct-chords-over-webview = true
 
 # Each action takes ONE value: a direct chord ("Cmd+V"), a leader-scoped
 # chord ("<Leader>s" = leader then s), a repeatable leader-scoped chord

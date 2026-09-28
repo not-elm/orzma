@@ -527,6 +527,12 @@ pub struct Shortcuts {
     ///
     /// 0 disables repeat entirely and is not normalized away.
     pub repeat_time_ms: u64,
+    /// Whether direct-chord bindings fire while a webview holds keyboard
+    /// focus, instead of reaching the page. Default `true`.
+    ///
+    /// Direct `copy` and `paste` chords never fire while a webview has focus,
+    /// and `<Leader>` bindings and `release-webview-focus` always do.
+    pub direct_chords_over_webview: bool,
 }
 
 impl Default for Shortcuts {
@@ -569,6 +575,7 @@ impl Default for Shortcuts {
             rename_workspace: Some(parse_default_binding("<Leader>r")),
             leader_tap_timeout_ms: 300,
             repeat_time_ms: 500,
+            direct_chords_over_webview: true,
         }
     }
 }
@@ -1685,19 +1692,19 @@ kill-pane = "<Leader>d"
     }
 
     /// Asserts that the macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 36 fields at once.
+    /// form, pinning every one of the 37 fields at once.
     ///
     /// Case: a macOS user's config is serialized back out.
     #[cfg(target_os = "macos")]
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"Cmd+Plus","decrease-font-size":"Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-workspace":"<Leader>C","close-workspace":"<Leader>Shift+X","next-workspace":"<Leader>]","previous-workspace":"<Leader>[","select-workspace-1":"<Leader>1","select-workspace-2":"<Leader>2","select-workspace-3":"<Leader>3","select-workspace-4":"<Leader>4","select-workspace-5":"<Leader>5","select-workspace-6":"<Leader>6","select-workspace-7":"<Leader>7","select-workspace-8":"<Leader>8","select-workspace-9":"<Leader>9","rename-workspace":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"Cmd+Plus","decrease-font-size":"Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-workspace":"<Leader>C","close-workspace":"<Leader>Shift+X","next-workspace":"<Leader>]","previous-workspace":"<Leader>[","select-workspace-1":"<Leader>1","select-workspace-2":"<Leader>2","select-workspace-3":"<Leader>3","select-workspace-4":"<Leader>4","select-workspace-5":"<Leader>5","select-workspace-6":"<Leader>6","select-workspace-7":"<Leader>7","select-workspace-8":"<Leader>8","select-workspace-9":"<Leader>9","rename-workspace":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
         assert_eq!(json, expected);
     }
 
     /// Asserts that the non-macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 36 fields at once, with the unbound
+    /// form, pinning every one of the 37 fields at once, with the unbound
     /// `quit` emitted as an empty string.
     ///
     /// Case: a Windows user's config is serialized back out.
@@ -1705,7 +1712,7 @@ kill-pane = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"Ctrl+Plus","decrease-font-size":"Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-workspace":"<Leader>C","close-workspace":"<Leader>Shift+X","next-workspace":"<Leader>]","previous-workspace":"<Leader>[","select-workspace-1":"<Leader>1","select-workspace-2":"<Leader>2","select-workspace-3":"<Leader>3","select-workspace-4":"<Leader>4","select-workspace-5":"<Leader>5","select-workspace-6":"<Leader>6","select-workspace-7":"<Leader>7","select-workspace-8":"<Leader>8","select-workspace-9":"<Leader>9","rename-workspace":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"Ctrl+Plus","decrease-font-size":"Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-workspace":"<Leader>C","close-workspace":"<Leader>Shift+X","next-workspace":"<Leader>]","previous-workspace":"<Leader>[","select-workspace-1":"<Leader>1","select-workspace-2":"<Leader>2","select-workspace-3":"<Leader>3","select-workspace-4":"<Leader>4","select-workspace-5":"<Leader>5","select-workspace-6":"<Leader>6","select-workspace-7":"<Leader>7","select-workspace-8":"<Leader>8","select-workspace-9":"<Leader>9","rename-workspace":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
         assert_eq!(json, expected);
     }
 
@@ -1899,6 +1906,27 @@ kill-pane = "<Leader>d"
     fn shortcuts_parses_repeat_time_ms() {
         let s: Shortcuts = toml::from_str("repeat-time-ms = 250\n").unwrap();
         assert_eq!(s.repeat_time_ms, 250);
+    }
+
+    /// Asserts that direct chords take priority over a focused webview by
+    /// default.
+    ///
+    /// Case: a user with no `[shortcuts]` table clicks into a webview and
+    /// presses `Cmd+Plus` to zoom the terminal font.
+    #[test]
+    fn shortcuts_default_direct_chords_over_webview_is_true() {
+        assert!(Shortcuts::default().direct_chords_over_webview);
+    }
+
+    /// Asserts that `direct-chords-over-webview = false` turns the priority
+    /// off.
+    ///
+    /// Case: a user whose page handles `Cmd+Plus` itself sets the key to
+    /// `false` so the page keeps that chord while focused.
+    #[test]
+    fn shortcuts_parses_direct_chords_over_webview() {
+        let s: Shortcuts = toml::from_str("direct-chords-over-webview = false\n").unwrap();
+        assert!(!s.direct_chords_over_webview);
     }
 
     #[test]

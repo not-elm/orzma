@@ -2,37 +2,42 @@
 
 mod app;
 mod assets;
+mod chrome;
 mod document;
 mod keymap;
 mod local_assets;
-mod outline;
 mod protocol;
-mod ui;
 mod watcher;
 
 use crate::app::{App, Cmd};
+use crate::chrome::{Chrome, Toast};
 use crate::document::Document;
+use crate::keymap::{Action, KeySet};
 use crate::protocol::{
-    Content, NavigateRequest, OpenExternal, OpenPath, Scroll, ScrollState, ScrollTo, Search,
-    SearchCount, SearchNav, StageAssetsRequest, StageAssetsResponse,
+    Content, NavigateRequest, OpenExternal, OpenPath, PageEvent, Scroll, ScrollTo, SearchNav,
+    SearchType, StageAssetsRequest, StageAssetsResponse,
 };
-use crate::ui::LiveStatus;
 use crate::watcher::FileWatcher;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui_orzma::{Orzma, OrzmaBackend, OrzmaError, RpcError, Webview, WebviewHandle};
+use ratatui_orzma::{
+    Orzma, OrzmaBackend, OrzmaError, RpcError, Webview, WebviewHandle, WebviewWidget,
+};
 use std::borrow::Cow;
+use std::collections::VecDeque;
 use std::ffi::OsStr;
 use std::io::{self, stdout};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct HistoryEntry {
     path: PathBuf,
@@ -46,10 +51,10 @@ struct Session {
     current_watcher: FileWatcher,
     file_name: String,
     last_fp: Option<document::Fingerprint>,
-    live: LiveStatus,
+    missing: bool,
     latest_ratio: f64,
-    flash: Option<String>,
-    search_status: Option<SearchCount>,
+    toast: Option<Toast>,
+    last_chrome: Option<Chrome>,
 }
 
 impl Session {
@@ -63,15 +68,11 @@ impl Session {
             current_watcher,
             file_name,
             last_fp,
-            live: LiveStatus::Watching,
+            missing: false,
             latest_ratio: 0.0,
-            flash: None,
-            search_status: None,
+            toast: None,
+            last_chrome: None,
         }
-    }
-
-    fn scroll_percent(&self) -> u16 {
-        (self.latest_ratio * 100.0).round() as u16
     }
 
     fn base_dir(&self) -> &Path {
@@ -84,7 +85,7 @@ impl Session {
         shared: &Arc<Mutex<Document>>,
         view: &WebviewHandle,
         reload_tx: &mpsc::Sender<()>,
-    ) {
+    ) -> Vec<Cmd> {
         let base = self.base_dir();
         match document::resolve_link(base, &request.path) {
             Ok(target) if document::is_markdown(&target) => {
@@ -95,11 +96,17 @@ impl Session {
                 let scroll = request
                     .fragment
                     .map_or(ScrollTo::Top, |slug| ScrollTo::Slug { slug });
-                if self.load_and_show(&target, scroll, shared, view, reload_tx) {
-                    self.history.push(previous);
-                }
+                let Some(cmds) = self.load_and_show(&target, scroll, shared, view, reload_tx)
+                else {
+                    return vec![];
+                };
+                self.history.push(previous);
+                cmds
             }
-            _ => self.flash = Some(format!("cannot open {}", request.path)),
+            _ => {
+                self.show_error(format!("cannot open {}", request.path));
+                vec![]
+            }
         }
     }
 
@@ -108,23 +115,23 @@ impl Session {
         shared: &Arc<Mutex<Document>>,
         view: &WebviewHandle,
         reload_tx: &mpsc::Sender<()>,
-    ) {
-        match self.history.pop() {
-            Some(entry) => {
-                if !self.load_and_show(
-                    &entry.path,
-                    ScrollTo::Ratio { ratio: entry.ratio },
-                    shared,
-                    view,
-                    reload_tx,
-                ) {
-                    self.history.push(entry);
-                }
+    ) -> Vec<Cmd> {
+        let Some(entry) = self.history.pop() else {
+            self.toast = Some(Toast::info("no previous page", Instant::now()));
+            return vec![];
+        };
+        let scroll = ScrollTo::Ratio { ratio: entry.ratio };
+        match self.load_and_show(&entry.path, scroll, shared, view, reload_tx) {
+            Some(cmds) => cmds,
+            None => {
+                self.history.push(entry);
+                vec![]
             }
-            None => self.flash = Some("no previous page".to_owned()),
         }
     }
 
+    /// Loads and shows `target`; the commands the search reset needs on
+    /// success, or `None` when the file cannot be read or watched.
     fn load_and_show(
         &mut self,
         target: &Path,
@@ -132,42 +139,39 @@ impl Session {
         shared: &Arc<Mutex<Document>>,
         view: &WebviewHandle,
         reload_tx: &mpsc::Sender<()>,
-    ) -> bool {
-        let doc = match document::load(target) {
-            Ok(d) => d,
-            Err(_) => {
-                self.flash = Some(format!("cannot open {}", target.display()));
-                return false;
-            }
+    ) -> Option<Vec<Cmd>> {
+        let Ok(doc) = document::load(target) else {
+            self.show_error(format!("cannot open {}", target.display()));
+            return None;
         };
         match watcher::watch(target, reload_tx.clone()) {
             Ok(w) => self.current_watcher = w,
             Err(_) => {
-                self.flash = Some("watch failed".to_owned());
-                return false;
+                self.show_error("watch failed");
+                return None;
             }
         }
         self.current_path = target.to_path_buf();
         self.file_name = file_name_of(target);
         self.last_fp = document::fingerprint(target).ok();
-        self.live = LiveStatus::Watching;
-        self.flash = None;
-        self.search_status = None;
-        self.state.clear_search_state();
-        self.state.set_outline(doc.outline.clone());
+        self.missing = false;
+        self.toast = None;
+        let cmds = self.state.clear_search_state();
+        self.state.set_heading_count(0);
+        self.state.set_current_heading_index(None);
         let content = content_for(&doc, scroll_to);
         if let Ok(mut guard) = shared.lock() {
             *guard = doc;
         }
         let _ = view.emit("content", &content);
-        true
+        Some(cmds)
     }
 
     fn reload(&mut self, shared: &Arc<Mutex<Document>>, view: &WebviewHandle) {
         let fp = match document::fingerprint(&self.current_path) {
             Ok(fp) => fp,
             Err(_) => {
-                self.live = LiveStatus::Missing;
+                self.missing = true;
                 return;
             }
         };
@@ -177,7 +181,7 @@ impl Session {
         let doc = match document::load(&self.current_path) {
             Ok(d) => d,
             Err(_) => {
-                self.live = LiveStatus::Missing;
+                self.missing = true;
                 return;
             }
         };
@@ -185,9 +189,8 @@ impl Session {
         // before would let a transient read failure poison the skip-check and
         // permanently suppress a later reload with the same fingerprint.
         self.last_fp = Some(fp);
-        self.live = LiveStatus::Watching;
-        self.flash = None;
-        self.state.set_outline(doc.outline.clone());
+        self.missing = false;
+        self.toast = None;
         let content = content_for(&doc, ScrollTo::Preserve);
         if let Ok(mut guard) = shared.lock() {
             *guard = doc;
@@ -195,12 +198,130 @@ impl Session {
         let _ = view.emit("content", &content);
     }
 
-    /// Applies the focus changes the host reported since the last call.
-    fn apply_focus_changes(&mut self, view: &WebviewHandle) {
-        for change in view.read_focus_changes() {
-            self.state.on_focus_change(change.focused);
+    /// Applies a page report, returning the commands it produces.
+    fn on_page_event(&mut self, event: PageEvent) -> Vec<Cmd> {
+        let action = match event {
+            PageEvent::ScrollState(state) => {
+                self.latest_ratio = state.ratio.clamp(0.0, 1.0);
+                self.state.set_heading_count(state.heading_count);
+                self.state
+                    .set_current_heading_index(state.current_heading_index);
+                return vec![];
+            }
+            PageEvent::SearchSubmit { cause } => Action::PageSearchSubmit(cause),
+            PageEvent::SearchEscape { cause } => Action::PageSearchEscape(cause),
+            PageEvent::SearchClose => Action::PageSearchClose,
+            PageEvent::OutlineJump { index } => Action::OutlineJump(index),
+        };
+        self.state.on_action(action)
+    }
+
+    /// Applies the focus changes the host reported since the last call,
+    /// returning the commands they produce.
+    fn apply_focus_changes(&mut self, view: &WebviewHandle) -> Vec<Cmd> {
+        view.read_focus_changes()
+            .into_iter()
+            .flat_map(|change| self.state.on_focus_change(change.focused))
+            .collect()
+    }
+
+    /// Sends the page the chrome when it differs from the last one sent, or
+    /// unconditionally once the page has asked for its content again.
+    fn sync_chrome(&mut self, view: &WebviewHandle, stale: &AtomicBool) {
+        if stale.swap(false, Ordering::AcqRel) {
+            self.last_chrome = None;
+        }
+        let chrome = Chrome::build(
+            &self.state,
+            &self.file_name,
+            self.missing,
+            self.toast.as_ref(),
+        );
+        if self.last_chrome.as_ref() == Some(&chrome) {
+            return;
+        }
+        if view.emit("chrome", &chrome).is_ok() {
+            self.last_chrome = Some(chrome);
         }
     }
+
+    /// Shows `text` as an error toast.
+    fn show_error(&mut self, text: impl Into<String>) {
+        self.toast = Some(Toast::error(text, Instant::now()));
+    }
+
+    /// Drops the toast once it has been on screen for its whole lifetime.
+    fn expire_toast(&mut self, now: Instant) {
+        if self
+            .toast
+            .as_ref()
+            .is_some_and(|toast| toast.is_expired(now))
+        {
+            self.toast = None;
+        }
+    }
+}
+
+/// The handles a command needs besides the session.
+struct Ctx<'a> {
+    orzma: &'a Orzma,
+    view: &'a WebviewHandle,
+    shared: &'a Arc<Mutex<Document>>,
+    reload_tx: &'a mpsc::Sender<()>,
+}
+
+/// Performs `cmds` in order, including the ones they produce; `Break` when
+/// one of them quits the app.
+fn run_cmds(session: &mut Session, cmds: Vec<Cmd>, ctx: &Ctx<'_>) -> ControlFlow<()> {
+    let mut queue = VecDeque::from(cmds);
+    while let Some(cmd) = queue.pop_front() {
+        match cmd {
+            Cmd::Quit => return ControlFlow::Break(()),
+            Cmd::Reload => session.reload(ctx.shared, ctx.view),
+            Cmd::Back => queue.extend(session.back(ctx.shared, ctx.view, ctx.reload_tx)),
+            Cmd::Scroll(action) => {
+                let _ = ctx.view.emit("scroll", &Scroll { action });
+            }
+            Cmd::ScrollToHeading(index) => {
+                let _ = ctx
+                    .view
+                    .emit("scrollToHeading", &serde_json::json!({ "index": index }));
+            }
+            Cmd::SearchNav(dir) => {
+                let _ = ctx.view.emit("searchNav", &SearchNav { dir });
+            }
+            Cmd::SearchType(c) => {
+                let _ = ctx.view.emit(
+                    "searchType",
+                    &SearchType {
+                        text: c.to_string(),
+                    },
+                );
+            }
+            Cmd::SearchBackspace => {
+                let _ = ctx.view.emit("searchBackspace", &());
+            }
+            Cmd::SearchEnter => {
+                let _ = ctx.view.emit("searchEnter", &());
+            }
+            Cmd::SearchResolve => {
+                let _ = ctx.view.emit("searchResolve", &());
+            }
+            Cmd::SearchCancel => {
+                let _ = ctx.view.emit("searchCancel", &());
+            }
+            Cmd::SetForwardKeys(set) => {
+                let _ = ctx.view.set_forward_keys(keymap::forward_chords(set));
+            }
+            Cmd::Focus => {
+                let _ = ctx.view.focus();
+            }
+            Cmd::Blur => {
+                let _ = ctx.orzma.blur();
+            }
+        }
+    }
+    ControlFlow::Continue(())
 }
 
 fn file_name_of(path: &Path) -> String {
@@ -284,7 +405,13 @@ fn run() -> anyhow::Result<()> {
 
     let asset_dir = assets::materialize()?;
 
-    let view = register_view(&orzma, &asset_dir, Arc::clone(&shared))?;
+    let chrome_stale = Arc::new(AtomicBool::new(false));
+    let view = register_view(
+        &orzma,
+        &asset_dir,
+        Arc::clone(&shared),
+        Arc::clone(&chrome_stale),
+    )?;
 
     let (reload_tx, reload_rx) = mpsc::channel::<()>();
     let watcher = watcher::watch(&path, reload_tx.clone())?;
@@ -296,7 +423,13 @@ fn run() -> anyhow::Result<()> {
     }
     install_panic_hook();
 
-    let result = event_loop(watcher, &orzma, &view, &shared, path, reload_tx, &reload_rx);
+    let ctx = Ctx {
+        orzma: &orzma,
+        view: &view,
+        shared: &shared,
+        reload_tx: &reload_tx,
+    };
+    let result = event_loop(watcher, path, &ctx, &reload_rx, &chrome_stale);
 
     let _ = disable_raw_mode();
     let _ = execute!(stdout(), LeaveAlternateScreen);
@@ -307,6 +440,7 @@ fn register_view(
     orzma: &Orzma,
     asset_dir: &tempfile::TempDir,
     shared: Arc<Mutex<Document>>,
+    chrome_stale: Arc<AtomicBool>,
 ) -> anyhow::Result<WebviewHandle> {
     let ready_doc = Arc::clone(&shared);
     let stage_doc = Arc::clone(&shared);
@@ -314,8 +448,9 @@ fn register_view(
     let view = orzma.register(
         Webview::dir(asset_dir.path(), "index.html")
             .interactive(true)
-            .forward_keys(keymap::forward_chords())
+            .forward_keys(keymap::forward_chords(KeySet::Normal))
             .on("ready", move |(): ()| -> Result<Content, RpcError> {
+                chrome_stale.store(true, Ordering::Release);
                 let doc = ready_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
                 Ok(content_for(&doc, ScrollTo::Preserve))
             })
@@ -334,8 +469,7 @@ fn register_view(
                     Ok(StageAssetsResponse { urls })
                 },
             )
-            .add_event::<SearchCount>("searchCount")
-            .add_event::<ScrollState>("scrollState")
+            .add_event::<PageEvent>("page")
             .add_event::<NavigateRequest>("navigate")
             .add_event::<OpenExternal>("openExternal")
             .add_event::<OpenPath>("openPath"),
@@ -345,37 +479,36 @@ fn register_view(
 
 fn event_loop(
     current_watcher: FileWatcher,
-    orzma: &Orzma,
-    view: &WebviewHandle,
-    shared: &Arc<Mutex<Document>>,
     start_path: PathBuf,
-    reload_tx: mpsc::Sender<()>,
+    ctx: &Ctx<'_>,
     reload_rx: &mpsc::Receiver<()>,
+    chrome_stale: &AtomicBool,
 ) -> anyhow::Result<()> {
+    let (orzma, view, shared) = (ctx.orzma, ctx.view, ctx.shared);
     let backend = OrzmaBackend::new(CrosstermBackend::new(stdout()), orzma);
     let mut terminal = Terminal::new(backend)?;
 
     let mut session = Session::new(start_path, current_watcher);
-    session
-        .state
-        .set_outline(shared.lock().unwrap().outline.clone());
     loop {
-        session.apply_focus_changes(view);
-        for c in view.read_events::<SearchCount>() {
-            session.search_status = Some(c);
+        let cmds = session.apply_focus_changes(view);
+        if run_cmds(&mut session, cmds, ctx).is_break() {
+            return Ok(());
         }
-        for s in view.read_events::<ScrollState>() {
-            session.latest_ratio = s.ratio.clamp(0.0, 1.0);
-            session
-                .state
-                .set_current_heading_index(s.current_heading_index);
+        for event in view.read_events::<PageEvent>() {
+            let cmds = session.on_page_event(event);
+            if run_cmds(&mut session, cmds, ctx).is_break() {
+                return Ok(());
+            }
         }
         for request in view.read_events::<NavigateRequest>() {
-            session.navigate(request, shared, view, &reload_tx);
+            let cmds = session.navigate(request, shared, view, ctx.reload_tx);
+            if run_cmds(&mut session, cmds, ctx).is_break() {
+                return Ok(());
+            }
         }
         for ext in view.read_events::<OpenExternal>() {
             if allowed_external_url(&ext.url) && spawn_open(&ext.url).is_err() {
-                session.flash = Some(format!("cannot open {}", ext.url));
+                session.show_error(format!("cannot open {}", ext.url));
             }
         }
         for op in view.read_events::<OpenPath>() {
@@ -384,7 +517,7 @@ fn event_loop(
                 .ok()
                 .is_some_and(|target| spawn_open(shell_path(&target).as_os_str()).is_ok());
             if !opened {
-                session.flash = Some(format!("cannot open {}", op.path));
+                session.show_error(format!("cannot open {}", op.path));
             }
         }
 
@@ -396,56 +529,35 @@ fn event_loop(
             session.reload(shared, view);
         }
 
-        let percent = session.scroll_percent();
+        session.expire_toast(Instant::now());
+        session.sync_chrome(view, chrome_stale);
         terminal.draw(|f| {
-            ui::draw(
-                f,
+            f.render_stateful_widget(
+                WebviewWidget::new(view.instance_id()),
+                f.area(),
                 &mut orzma.frame(),
-                &session.state,
-                &view.instance_id(),
-                &session.file_name,
-                session.live,
-                percent,
-                session.search_status,
-                session.flash.as_deref(),
             );
         })?;
 
+        // NOTE: key releases (reported on Windows) must be dropped here: `keymap::map`
+        // maps a release as its press, and any action drops a pending chord prefix.
         if event::poll(Duration::from_millis(33))?
             && let Event::Key(key) = event::read()?
+            && key.kind != KeyEventKind::Release
         {
-            session.apply_focus_changes(view);
-            let action = keymap::map(session.state.mode(), key);
-            for cmd in session.state.on_action(action) {
-                match cmd {
-                    Cmd::Quit => return Ok(()),
-                    Cmd::Reload => session.reload(shared, view),
-                    Cmd::Back => session.back(shared, view, &reload_tx),
-                    Cmd::Scroll(action) => {
-                        let _ = view.emit("scroll", &Scroll { action });
-                    }
-                    Cmd::ScrollToHeading(index) => {
-                        let _ =
-                            view.emit("scrollToHeading", &serde_json::json!({ "index": index }));
-                    }
-                    Cmd::Search(query) => {
-                        let _ = view.emit("search", &Search { query });
-                    }
-                    Cmd::SearchNav(dir) => {
-                        let _ = view.emit("searchNav", &SearchNav { dir });
-                    }
-                    Cmd::ClearSearch => {
-                        session.search_status = None;
-                        let _ = view.emit("clearSearch", &());
-                    }
-                    Cmd::Focus => {
-                        let _ = view.focus();
-                    }
-                    Cmd::Blur => {
-                        let _ = orzma.blur();
-                    }
-                }
+            let cmds = session.apply_focus_changes(view);
+            if run_cmds(&mut session, cmds, ctx).is_break() {
+                return Ok(());
             }
+            let action = keymap::map(session.state.mode(), key);
+            if action != Action::Ignore {
+                session.toast = None;
+            }
+            let cmds = session.state.on_action(action);
+            if run_cmds(&mut session, cmds, ctx).is_break() {
+                return Ok(());
+            }
+            session.sync_chrome(view, chrome_stale);
         }
     }
 }

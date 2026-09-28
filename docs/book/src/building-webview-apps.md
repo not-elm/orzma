@@ -141,8 +141,10 @@ keyboard to the page and takes it back.
 - `view.focus()` gives the page keyboard focus, and `orzma.blur()` gives it
   back to the terminal.
 - `Webview::forward_keys` lists chords that reach your app even while the page
-  has focus; every other key goes to the page. Replace the list later with
-  `view.set_forward_keys`.
+  has focus; every other key goes to the page. The orzma shortcuts that run
+  while a page has focus take precedence over both (see
+  [Key Bindings](key-bindings.md#shortcuts-while-a-webview-has-focus)).
+  Replace the list later with `view.set_forward_keys`.
 - `view.read_focus_changes()` reports every focus change, including a click on
   the page.
 - Users can always take the keyboard back with the `release-webview-focus`

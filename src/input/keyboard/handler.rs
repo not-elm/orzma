@@ -178,7 +178,7 @@ mod tests {
     use bevy::input::keyboard::Key;
     use bevy_orzma_webview::{ChordKey, NormalizedChord};
     use bevy_orzmux::prelude::WorkspaceId;
-    use orzma_configs::shortcuts::{Modifiers, PaneDirection};
+    use orzma_configs::shortcuts::{FontSizeStep, Modifiers, PaneDirection};
     use orzma_vt::prelude::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
     use std::time::Duration;
 
@@ -638,6 +638,43 @@ mod tests {
             ),
             "a forward chord must be withheld from the page"
         );
+    }
+
+    /// Asserts that a direct chord fired over a focused webview reaches the
+    /// applier and is withheld from the page through the CEF filter.
+    ///
+    /// Case: the user has clicked into a page and presses `Cmd+=` to enlarge
+    /// the terminal font.
+    #[test]
+    fn direct_chord_over_webview_is_fanned_out_and_filtered() {
+        let mut app = resolve_app(test_shortcuts_with_direct_chord(
+            KeyCode::Equal,
+            meta_mods(),
+            Shortcut::FontSize(FontSizeStep::Increase),
+        ));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
+        let webview = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::SuperLeft);
+        press_key(&mut app, KeyCode::Equal, Key::Character("=".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::FontSize(FontSizeStep::Increase),
+                via_leader: false,
+            }]
+        );
+        assert!(app.world().resource::<CefKeyboardFilter>().contains(
+            webview,
+            KeyCode::Equal,
+            ModifiersState {
+                logo: true,
+                ..ModifiersState::default()
+            }
+        ));
     }
 
     #[test]
