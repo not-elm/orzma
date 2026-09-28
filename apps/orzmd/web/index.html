@@ -5,14 +5,14 @@
     <link rel="stylesheet" href="bundle.css" />
     <style>
       :root { color-scheme: dark; }
-      body { margin: 0; padding: 24px; background: #0d1117; color: #c9d1d9;
+      body { margin: 0; padding: calc(var(--rail-h) + 24px) 24px 24px; background: #0d1117; color: #c9d1d9;
              font: 16px/1.6 -apple-system, system-ui, sans-serif; }
       img { max-width: 100%; height: auto; }
       pre { background: #161b22; padding: 12px; border-radius: 6px; overflow: auto; }
       code { font-family: ui-monospace, monospace; }
       mark.orzmd-match { background: #ffd33d55; color: inherit; }
       mark.orzmd-current { background: #ffd33d; color: #000; }
-      .orzmd-anchor { display: inline; scroll-margin-top: 8px; }
+      .orzmd-anchor { display: inline; }
       table { border-collapse: collapse; }
       th, td { border: 1px solid #30363d; padding: 6px 12px; }
       .markdown-alert { border-left: 4px solid var(--alert-accent);
@@ -28,10 +28,43 @@
       .markdown-alert-important { --alert-accent: #a371f7; }
       .markdown-alert-warning { --alert-accent: #d29922; }
       .markdown-alert-caution { --alert-accent: #f85149; }
+      html { scroll-padding-top: var(--scroll-offset); }
+      #rail { position: fixed; top: 0; left: 0; right: 0; z-index: 10; box-sizing: border-box;
+              height: var(--rail-h); display: flex; align-items: center; gap: 8px; padding: 0 14px;
+              background: #0d1117; border-bottom: 1px solid #21262d; color: #9198a1;
+              font: 12.5px/1 -apple-system, system-ui, sans-serif; white-space: nowrap; }
+      #rail .rail-file { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis;
+              color: #f0f6fc; font-weight: 600; }
+      #rail .rail-crumbs { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+      #rail .rail-sep { margin: 0 6px; color: #484f58; }
+      #rail .rail-key { font: 11.5px ui-monospace, monospace; color: #f0f6fc; border: 1px solid #30363d;
+              border-bottom-width: 2px; border-radius: 4px; padding: 2px 6px; }
+      #rail .rail-missing { color: #ff7b72; font-weight: 600; border: 1px solid #f8514966;
+              border-radius: 999px; padding: 3px 8px; }
+      #toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 10;
+               align-items: center; gap: 8px; max-width: 80vw; padding: 8px 12px;
+               background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+               box-shadow: 0 10px 28px rgba(1, 4, 9, .6); color: #e6edf3;
+               font: 12.5px/1.4 -apple-system, system-ui, sans-serif; }
+      #toast:not([hidden]) { display: flex; }
+      #toast.toast-error { border-color: #f8514966; }
+      #toast.toast-info { color: #9198a1; }
+      #toast .toast-icon { flex: none; width: 14px; height: 14px; color: #ff7b72; }
+      #toast.toast-info .toast-icon { display: none; }
     </style>
   </head>
   <body>
+    <header id="rail">
+      <span class="rail-file"></span>
+      <span class="rail-crumbs"></span>
+      <kbd class="rail-key" hidden></kbd>
+      <span class="rail-missing" hidden>File deleted</span>
+    </header>
     <div id="content"></div>
+    <div id="toast" role="status" hidden>
+      <svg class="toast-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.8v3.8M8 10.9v.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span class="toast-text"></span>
+    </div>
     <script type="module" src="bundle.js"></script>
   </body>
 </html>

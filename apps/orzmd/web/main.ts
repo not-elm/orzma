@@ -4,7 +4,9 @@ import { orzma } from '@orzma/web';
 import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
+import { breadcrumb, type Chrome, type HeadingInfo, renderRail, renderToast } from './chrome';
 import { collectLocalImages } from './images';
+import { applyLayoutVars, RAIL_HEIGHT, reachedTop } from './layout';
 import { classifyLink } from './links';
 import { renderMarkdown } from './render';
 import { Search } from './search';
@@ -13,6 +15,14 @@ mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' 
 
 const content = document.getElementById('content') as HTMLElement;
 const search = new Search();
+
+const rail = document.getElementById('rail') as HTMLElement;
+const toast = document.getElementById('toast') as HTMLElement;
+
+let chrome: Chrome | null = null;
+let currentHeading: number | null = null;
+
+applyLayoutVars(document.documentElement);
 
 let mermaidSeq = 0;
 let renderGeneration = 0;
@@ -39,6 +49,21 @@ function scrollMax(): number {
   return document.documentElement.scrollHeight - window.innerHeight;
 }
 
+function headingInfos(): HeadingInfo[] {
+  return headingEls().map((h) => ({
+    level: Number(h.tagName.slice(1)),
+    text: h.textContent ?? '',
+  }));
+}
+
+function renderChromeUi(): void {
+  if (chrome === null) {
+    return;
+  }
+  renderRail(rail, chrome, breadcrumb(headingInfos(), currentHeading));
+  renderToast(toast, chrome.toast);
+}
+
 interface ScrollAnchor {
   id: string | null;
   offset: number;
@@ -51,7 +76,7 @@ function captureScrollAnchor(): ScrollAnchor {
   let offset = 0;
   for (const h of heads) {
     const top = h.getBoundingClientRect().top;
-    if (top <= 1) {
+    if (reachedTop(top)) {
       id = h.id;
       offset = top;
     } else {
@@ -112,11 +137,15 @@ function reportScrollState(): void {
   const heads = headingEls();
   let currentHeadingIndex: number | null = null;
   for (let i = 0; i < heads.length; i++) {
-    if (heads[i].getBoundingClientRect().top <= 1) {
+    if (reachedTop(heads[i].getBoundingClientRect().top)) {
       currentHeadingIndex = i;
     }
   }
   orzma.emit('scrollState', { ratio, currentHeadingIndex });
+  if (currentHeadingIndex !== currentHeading) {
+    currentHeading = currentHeadingIndex;
+    renderChromeUi();
+  }
 }
 
 async function renderMermaid(): Promise<void> {
@@ -192,10 +221,11 @@ async function setContent(payload: ContentPayload): Promise<void> {
   }
   applyScrollTarget(payload.scrollTo, anchor);
   reportScrollState();
+  renderChromeUi();
 }
 
 function scrollByAction(action: string): void {
-  const page = window.innerHeight;
+  const page = window.innerHeight - RAIL_HEIGHT;
   const line = 60;
   switch (action) {
     case 'down':
@@ -245,6 +275,12 @@ orzma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
 orzma.on('clearSearch', () => {
   search.clear(content);
 });
+orzma.on('chrome', (c: Chrome) => {
+  chrome = c;
+  renderChromeUi();
+});
+
+window.addEventListener('resize', renderChromeUi);
 
 content.addEventListener('click', (e) => {
   const target = e.target;
