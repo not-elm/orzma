@@ -14,6 +14,7 @@ from stage_windows import locked_version, sha256_file
 
 TAG_PATTERN = re.compile(r"v(\d+\.\d+\.\d+)")
 LOCKED_PACKAGES = ("orzma", "ratatui_orzma")
+SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 
 
 def tag_version(tag: str) -> str | None:
@@ -97,6 +98,47 @@ def uploaded_problems(assets: list[dict], version: str, dist: Path | None) -> li
     return problems
 
 
+def draft_action(releases: list[dict], tag: str, sha: str) -> tuple[str | None, list[str]]:
+    """How the draft job treats the tag's existing releases: "create", "upload", or None with problems."""
+    matching = [release for release in releases if release.get("tag_name") == tag]
+    published = [release for release in matching if not release.get("draft")]
+    drafts = [release for release in matching if release.get("draft")]
+    if published:
+        url = published[0].get("html_url")
+        return None, [f"{tag} is already published at {url}; release a new version instead."]
+    if len(drafts) > 1:
+        urls = ", ".join(str(draft.get("html_url")) for draft in drafts)
+        return None, [f"{tag} has {len(drafts)} drafts ({urls}); delete the extra drafts and re-run."]
+    if not drafts:
+        return "create", []
+    draft = drafts[0]
+    if draft.get("target_commitish") != sha:
+        return None, [
+            f"The draft {draft.get('html_url')} was built from {draft.get('target_commitish')}, "
+            f"not {sha}; copy its description, delete it, and re-run."
+        ]
+    return "upload", []
+
+
+def published_problems(release: dict, tag: str, tag_sha: str) -> list[str]:
+    """Checks that the tag's release is published, not a pre-release, built from the tag's commit, and complete.
+
+    A target that is not a commit SHA, such as a branch name, is not compared.
+    """
+    version = tag_version(tag)
+    if version is None:
+        return [f"Tag {tag} is not vMAJOR.MINOR.PATCH."]
+    problems = []
+    if release.get("isDraft"):
+        problems.append(f"{tag} is still a draft.")
+    if release.get("isPrerelease"):
+        problems.append(f"{tag} is a pre-release.")
+    target = release.get("targetCommitish") or ""
+    if SHA_PATTERN.fullmatch(target) and target != tag_sha:
+        problems.append(f"{tag} was built from {target}, but the tag points at {tag_sha}.")
+    return problems + uploaded_problems(release.get("assets", []), version, None)
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -122,6 +164,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     uploaded.add_argument("--version", required=True)
     uploaded.add_argument("--dir", type=Path, required=True)
     uploaded.set_defaults(handler=_uploaded_command)
+
+    draft = commands.add_parser(
+        "draft-action",
+        help="print create or upload for the tag's draft (reads gh api --paginate --slurp releases on stdin)",
+    )
+    draft.add_argument("--tag", required=True)
+    draft.add_argument("--sha", required=True)
+    draft.set_defaults(handler=_draft_action_command)
+
+    published = commands.add_parser(
+        "published",
+        help="print the version of a correctly published release (reads gh release view JSON on stdin)",
+    )
+    published.add_argument("--tag", required=True)
+    published.add_argument("--sha", required=True)
+    published.set_defaults(handler=_published_command)
 
     return parser
 
@@ -149,6 +207,16 @@ def _dist_command(args: argparse.Namespace) -> tuple[list[str], str | None]:
 def _uploaded_command(args: argparse.Namespace) -> tuple[list[str], str | None]:
     release = json.load(sys.stdin)
     return uploaded_problems(release.get("assets", []), args.version, args.dir), None
+
+
+def _draft_action_command(args: argparse.Namespace) -> tuple[list[str], str | None]:
+    releases = [release for page in json.load(sys.stdin) for release in page]
+    action, problems = draft_action(releases, args.tag, args.sha)
+    return problems, action
+
+
+def _published_command(args: argparse.Namespace) -> tuple[list[str], str | None]:
+    return published_problems(json.load(sys.stdin), args.tag, args.sha), tag_version(args.tag)
 
 
 if __name__ == "__main__":

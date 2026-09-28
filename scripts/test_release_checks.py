@@ -258,5 +258,128 @@ class Uploaded(unittest.TestCase):
         self.assertEqual(result, (0, "", ""))
 
 
+SHA = "a" * 40
+OTHER_SHA = "b" * 40
+
+
+def _release(tag: str = "v0.2.2", draft: bool = True, target: str = SHA, number: int = 1) -> dict:
+    return {
+        "tag_name": tag,
+        "draft": draft,
+        "target_commitish": target,
+        "html_url": f"https://github.com/not-elm/orzma/releases/{number}",
+    }
+
+
+class DraftAction(unittest.TestCase):
+    def test_no_release_creates_a_draft(self):
+        self.assertEqual(rc.draft_action([], "v0.2.2", SHA), ("create", []))
+
+    def test_other_tags_are_ignored(self):
+        releases = [_release(tag="v0.2.1", draft=False), _release(tag="v0.2.3")]
+        self.assertEqual(rc.draft_action(releases, "v0.2.2", SHA), ("create", []))
+
+    def test_draft_from_this_commit_is_refilled(self):
+        self.assertEqual(rc.draft_action([_release()], "v0.2.2", SHA), ("upload", []))
+
+    def test_draft_from_another_commit_stops_the_run(self):
+        self.assertEqual(
+            rc.draft_action([_release(target=OTHER_SHA)], "v0.2.2", SHA),
+            (
+                None,
+                [
+                    "The draft https://github.com/not-elm/orzma/releases/1 was built from "
+                    f"{OTHER_SHA}, not {SHA}; copy its description, delete it, and re-run."
+                ],
+            ),
+        )
+
+    def test_two_drafts_stop_the_run(self):
+        action, problems = rc.draft_action([_release(number=1), _release(number=2)], "v0.2.2", SHA)
+        self.assertIsNone(action)
+        self.assertEqual(
+            problems,
+            [
+                "v0.2.2 has 2 drafts (https://github.com/not-elm/orzma/releases/1, "
+                "https://github.com/not-elm/orzma/releases/2); delete the extra drafts and re-run."
+            ],
+        )
+
+    def test_published_release_stops_the_run(self):
+        self.assertEqual(
+            rc.draft_action([_release(draft=False)], "v0.2.2", SHA),
+            (
+                None,
+                [
+                    "v0.2.2 is already published at https://github.com/not-elm/orzma/releases/1; "
+                    "release a new version instead."
+                ],
+            ),
+        )
+
+    def test_command_reads_every_page(self):
+        stdin = json.dumps([[_release(tag="v0.2.1", draft=False)], [_release()]])
+        result = _run(["draft-action", "--tag", "v0.2.2", "--sha", SHA], stdin=stdin)
+        self.assertEqual(result, (0, "upload\n", ""))
+
+
+class Published(unittest.TestCase):
+    def _release(self, **overrides) -> dict:
+        release = {
+            "isDraft": False,
+            "isPrerelease": False,
+            "targetCommitish": SHA,
+            "assets": [{"name": n, "state": "uploaded"} for n in rc.expected_assets("0.2.2")],
+        }
+        release.update(overrides)
+        return release
+
+    def test_complete_published_release_passes(self):
+        self.assertEqual(rc.published_problems(self._release(), "v0.2.2", SHA), [])
+
+    def test_command_prints_the_version(self):
+        result = _run(
+            ["published", "--tag", "v0.2.2", "--sha", SHA], stdin=json.dumps(self._release())
+        )
+        self.assertEqual(result, (0, "0.2.2\n", ""))
+
+    def test_draft_is_reported(self):
+        self.assertEqual(
+            rc.published_problems(self._release(isDraft=True), "v0.2.2", SHA),
+            ["v0.2.2 is still a draft."],
+        )
+
+    def test_prerelease_is_reported(self):
+        self.assertEqual(
+            rc.published_problems(self._release(isPrerelease=True), "v0.2.2", SHA),
+            ["v0.2.2 is a pre-release."],
+        )
+
+    def test_release_built_from_another_commit_is_reported(self):
+        self.assertEqual(
+            rc.published_problems(self._release(targetCommitish=OTHER_SHA), "v0.2.2", SHA),
+            [f"v0.2.2 was built from {OTHER_SHA}, but the tag points at {SHA}."],
+        )
+
+    def test_target_rewritten_to_a_branch_is_not_compared(self):
+        self.assertEqual(
+            rc.published_problems(self._release(targetCommitish="main"), "v0.2.2", SHA), []
+        )
+
+    def test_missing_asset_is_reported(self):
+        release = self._release()
+        release["assets"] = [a for a in release["assets"] if a["name"] != "orzma-0.2.2-x64.msi"]
+        self.assertEqual(
+            rc.published_problems(release, "v0.2.2", SHA),
+            ["Asset orzma-0.2.2-x64.msi is missing."],
+        )
+
+    def test_prerelease_tag_is_rejected(self):
+        code, out, err = _run(
+            ["published", "--tag", "v0.3.0-rc.1", "--sha", SHA], stdin=json.dumps(self._release())
+        )
+        self.assertEqual((code, out, err), (1, "", "Tag v0.3.0-rc.1 is not vMAJOR.MINOR.PATCH.\n"))
+
+
 if __name__ == "__main__":
     unittest.main()
