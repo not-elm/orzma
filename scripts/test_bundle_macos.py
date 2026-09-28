@@ -360,6 +360,7 @@ class CefLocaleHelpers(unittest.TestCase):
         self.assertEqual(bm.app_advertised_localizations({}, []), set())
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
 class CefFrameworkPruning(unittest.TestCase):
     def _cfg(self, d: Path) -> "bm.BundleConfig":
         _write_fake_macho(d / "orzma")
