@@ -136,18 +136,21 @@ Maintainers cut a release from `main`:
 3. Wait for the `release` workflow run to succeed. It builds every platform and
    leaves a draft release, linked from the run's summary. Nothing is public yet.
 4. Open the draft, check that it holds the four packages and their `.sha256`
-   files, write a description above the generated notes, and publish it.
+   files, write a description above the generated notes, and publish it with
+   "Set as the latest release" checked. Do not attach other files: the
+   `post-release` check accepts exactly those eight.
 5. Publishing starts the `post-release` workflow, which bumps the Homebrew
    cask, publishes the SDK to npm and crates.io, and deploys the user guide.
 
 | If this fails | Do this |
 | --- | --- |
 | The `plan` job (a version file disagrees with the tag) | Fix the versions on `main`, then move the tag as described in the next row. |
-| A build in `release`, before any draft exists | Re-run the failed jobs. If the fix needs a code change, merge it to `main`, cancel the old run, and move the tag: `git push --delete origin vX.Y.Z`, then tag the new commit and push it again. |
+| A build in `release`, before any draft exists | Re-run the failed jobs. If the fix needs a code change, merge it to `main`, cancel the old run, and move the tag: `git push --delete origin vX.Y.Z`, then `git tag -f vX.Y.Z` on the new commit and `git push origin vX.Y.Z`. |
 | The `draft` job | Re-run the failed jobs within 7 days, while the build artifacts are kept; the job refills the same draft and keeps your description. After that, re-run all jobs. |
 | A problem you find in the draft | Copy your description, delete the draft, merge the fix, and move the tag as above. |
 | You published the draft before the `release` run succeeded | Treat it as an incident: `post-release` refuses a release with missing assets, so nothing else goes out. Do not re-run the draft job; release a new version. |
 | A `post-release` job | Re-run the failed jobs, or run `gh workflow run post-release.yml --ref vX.Y.Z`. Both run the workflow files as they were at the tag, so a bug in those files needs a new version. |
+| `post-release` skipped Homebrew and the user guide ("is not the Latest release") | Mark the release as Latest on its release page, then run `gh workflow run post-release.yml --ref vX.Y.Z`. |
 
 Once a release is published, fix problems with a new version; never move its
 tag.

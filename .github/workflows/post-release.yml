@@ -68,7 +68,6 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ github.ref_name }}
       VERSION: ${{ needs.check.outputs.version }}
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -76,6 +75,8 @@ jobs:
           sparse-checkout: build/macos/homebrew
 
       - name: Bump the Homebrew cask
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
             echo "::error::HOMEBREW_TAP_TOKEN is not set, so the cask cannot be bumped."
