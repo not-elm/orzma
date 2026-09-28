@@ -17,10 +17,10 @@ orzmd: not inside an orzma pane: ORZMA_SOCK is unset. Run orzmd inside an orzma 
 
 ## orzmd
 
-orzmd runs inside an orzma pane and renders Markdown in an embedded webview,
-wrapped in native terminal chrome: a status line, an optional outline panel,
-and a search line. You drive it from the keyboard like a pager, while the page
-handles rich rendering — diagrams, math, and highlighted code.
+orzmd runs inside an orzma pane and renders Markdown in an embedded webview
+with its own chrome: a rail at the top, an optional outline sidebar, and a
+find box. You drive it from the keyboard like a pager, while the page handles
+rich rendering — diagrams, math, and highlighted code.
 
 ### Features
 
@@ -32,8 +32,9 @@ handles rich rendering — diagrams, math, and highlighted code.
 - **Mermaid diagrams** — ` ```mermaid ` fences render as diagrams.
 - **GitHub alerts** — `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, and
   `[!CAUTION]` blockquotes render as colored callout boxes with icons.
-- **Outline panel** — jump between the document's headings.
-- **In-page search** — highlight matches and step through them.
+- **Outline sidebar** — jump between the document's headings; it opens on the
+  section you are reading.
+- **In-page search** — matches highlight as you type, and you step through them.
 
 ### Usage
 
@@ -41,15 +42,17 @@ handles rich rendering — diagrams, math, and highlighted code.
 orzmd <markdown-file>
 ```
 
-The status line at the top shows the file name, the live-reload state, and the
-scroll position:
+The rail at the top shows the file name and the heading you are reading,
+after its parent headings:
 
 ```
-orzmd · README.md    ● live    42%
+configuration.md › Settings › [inactive_pane]
 ```
 
-`● live` means the file is being watched. If the file is deleted, the status
-switches to `○ missing` and the last rendered content stays on screen.
+If the file is deleted, the rail shows a red **File deleted** badge and the
+last rendered content stays on screen. Messages such as
+`cannot open ../notes.md` appear at the bottom of the page and disappear after
+four seconds or at your next key press.
 
 On Windows, local images referenced by a document are staged as symlinks when
 Windows allows it (Developer Mode is on, or orzmd runs as administrator) and
@@ -78,7 +81,8 @@ copied otherwise; a copied image does not refresh until orzmd is restarted.
 
 While the page has keyboard focus, `Ctrl-c` copies in the page instead of
 quitting; `q` still quits, because orzmd forwards it to the TUI even while
-the page is focused.
+the page is focused. The exception is typing a search query: then every key,
+`q` included, goes into the find box.
 
 #### Outline panel
 
@@ -87,20 +91,23 @@ the page is focused.
 | `j` / `↓` | Move the selection down |
 | `k` / `↑` | Move the selection up |
 | `Enter` | Jump to the selected heading |
+| Click a heading | Jump to that heading |
 | `o` / `Tab` / `Esc` | Close the panel |
 | `q` | Quit |
+
+The outline opens with the section you are reading selected.
 
 #### Search
 
 | Key | Action |
 | --- | --- |
-| (type) | Build the query |
-| `Backspace` | Delete the last character |
-| `Enter` | Run the search |
-| `Esc` | Cancel |
+| (type) | Build the query; matches highlight as you type |
+| `Enter` | Keep the matches and return to reading |
+| `Esc` | Cancel the search and return to where it started |
 
-After running a search, use `n` / `N` in reading mode to move between matches,
-and `Esc` to clear the highlight.
+After `Enter`, use `n` / `N` in reading mode to move between matches, and
+`Esc` to clear the highlight. The search ignores case unless the query
+contains an uppercase letter.
 
 ## orzbrowser
 
