@@ -1,8 +1,11 @@
-//! OSC 8 hyperlink vocabulary and the id interner that dedupes it.
+//! OSC 8 hyperlink vocabulary, the id interner that dedupes it, and
+//! plain-text URL detection.
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+
+pub mod detect;
 
 /// OSC 8 hyperlink: an interned id → URI mapping.
 ///
