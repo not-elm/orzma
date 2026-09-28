@@ -14,7 +14,7 @@ use std::ops::Range;
 /// erasure, editing, margins, scrolling, pen changes, cursor saves, and
 /// screen flips.
 #[derive(Debug, Clone)]
-enum Traffic {
+pub(super) enum Traffic {
     Ascii(u8),
     Cjk,
     Mark,
@@ -53,7 +53,7 @@ fn output_strategy() -> impl Strategy<Value = Traffic> {
     ]
 }
 
-fn traffic_strategy() -> impl Strategy<Value = Traffic> {
+pub(super) fn traffic_strategy() -> impl Strategy<Value = Traffic> {
     prop_oneof![
         20 => (b'a'..=b'z').prop_map(Traffic::Ascii),
         4 => Just(Traffic::Cjk),
@@ -83,7 +83,7 @@ fn traffic_strategy() -> impl Strategy<Value = Traffic> {
     ]
 }
 
-fn bytes_of(traffic: &Traffic) -> Vec<u8> {
+pub(super) fn bytes_of(traffic: &Traffic) -> Vec<u8> {
     match traffic {
         Traffic::Ascii(byte) => vec![*byte],
         Traffic::Cjk => "あ".as_bytes().to_vec(),

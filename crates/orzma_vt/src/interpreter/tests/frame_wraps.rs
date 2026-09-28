@@ -2,8 +2,10 @@
 //! change to the rows' recorded wraps, including the ones no row damage
 //! reports.
 
+use super::reflow_invariants::{Traffic, bytes_of, traffic_strategy};
 use super::*;
 use crate::screen::viewport::Scroll;
+use proptest::prelude::*;
 
 /// A 4x3 terminal with ten rows of history whose bootstrap frame has
 /// already been drained.
@@ -102,4 +104,106 @@ fn the_oldest_history_row_continues_from_nothing() {
     let top = vt.frame().expect("a moved viewport emits");
     assert!(!top.continues_from_above);
     assert_eq!(top.wraps, Some(vec![Some(4), Some(4), Some(4)]));
+}
+
+/// One step of a session: traffic from the program, a viewport scroll,
+/// a resize, or a full reset.
+#[derive(Debug, Clone)]
+enum Step {
+    Traffic(Traffic),
+    Scroll(i32),
+    Resize(u16, u16),
+    Reset,
+}
+
+fn step_strategy() -> impl Strategy<Value = Step> {
+    prop_oneof![
+        12 => traffic_strategy().prop_map(Step::Traffic),
+        2 => (-4i32..=4).prop_map(Step::Scroll),
+        1 => (2u16..10, 1u16..6).prop_map(|(cols, rows)| Step::Resize(cols, rows)),
+        1 => Just(Step::Reset),
+    ]
+}
+
+/// What a consumer that applied every emitted frame knows about the
+/// viewport's wraps.
+#[derive(Default)]
+struct Mirror {
+    wraps: Vec<Option<u16>>,
+    continues_from_above: bool,
+    rows: u16,
+}
+
+impl Mirror {
+    fn apply(&mut self, frame: &Frame) {
+        if let Some(wraps) = &frame.wraps {
+            self.wraps.clone_from(wraps);
+        }
+        self.continues_from_above = frame.continues_from_above;
+        self.rows = frame.size.rows;
+    }
+}
+
+/// Checks that `mirror` holds what the grid records for the rows the
+/// viewport shows, reading the grid directly rather than through the
+/// accessors the tracker uses.
+fn check(vt: &OrzmaVt, mirror: &Mirror) -> Result<(), TestCaseError> {
+    let screen = vt.device.active_screen();
+    let grid = screen.grid();
+    let top = -i32::try_from(screen.display_offset().0).expect("scrollback fits an i32");
+    let wraps: Vec<Option<u16>> = (0..i32::from(grid.size().rows))
+        .map(|line| grid.wrap_at(GridLine(top + line)))
+        .collect();
+    prop_assert_eq!(&mirror.wraps, &wraps);
+    prop_assert_eq!(mirror.wraps.len(), usize::from(mirror.rows));
+    prop_assert_eq!(
+        mirror.continues_from_above,
+        grid.wrap_at(GridLine(top - 1)).is_some()
+    );
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// Asserts that after every emitted frame the consumer's wrap list and
+    /// top-row flag equal what the grid records, with one wrap entry per
+    /// viewport row.
+    ///
+    /// Case: a shell and full-screen programs print, erase, edit, scroll
+    /// and reset across wrapped lines while the user scrolls back and
+    /// resizes the window.
+    #[test]
+    fn the_consumer_wraps_always_match_the_grid(
+        steps in prop::collection::vec((step_strategy(), any::<bool>()), 1..160),
+    ) {
+        let mut vt = OrzmaVt::new(GridSize { cols: 6, rows: 3 }, 20);
+        let mut mirror = Mirror::default();
+        for (step, emit) in &steps {
+            match step {
+                Step::Traffic(traffic) => {
+                    vt.interpret(&bytes_of(traffic));
+                }
+                Step::Scroll(delta) => {
+                    vt.scroll(Scroll::Delta(*delta));
+                }
+                Step::Resize(cols, rows) => {
+                    let _ = vt.resize(GridSize { cols: *cols, rows: *rows });
+                }
+                Step::Reset => {
+                    vt.interpret(b"\x1bc");
+                }
+            }
+            if *emit {
+                if let Some(frame) = vt.frame() {
+                    mirror.apply(&frame);
+                }
+                check(&vt, &mirror)?;
+            }
+        }
+        if let Some(frame) = vt.frame() {
+            mirror.apply(&frame);
+        }
+        check(&vt, &mirror)?;
+    }
 }
