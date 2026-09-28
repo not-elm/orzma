@@ -27,24 +27,6 @@ const MAX_HELLO_LINE: u64 = 4 * 1024;
 /// The longest request line a connection may send, newline included.
 const MAX_REQUEST_LINE: u64 = 32 * 1024 * 1024;
 
-// TODO: temporary Windows diagnostic; remove before merge.
-#[cfg(all(test, windows))]
-static DIAG_STAGES: std::sync::Mutex<
-    Option<std::collections::HashMap<ConnectionId, &'static str>>,
-> = std::sync::Mutex::new(None);
-
-// TODO: temporary Windows diagnostic; remove before merge.
-fn diag_stage(connection: ConnectionId, stage: &'static str) {
-    #[cfg(all(test, windows))]
-    if let Ok(mut stages) = DIAG_STAGES.lock() {
-        stages
-            .get_or_insert_with(Default::default)
-            .insert(connection, stage);
-    }
-    #[cfg(not(all(test, windows)))]
-    let _ = (connection, stage);
-}
-
 /// Binds `sock_path` (replacing a stale socket file there), spawns the
 /// accept loop, and returns the receiver of the events its connections
 /// produce. The listener threads are detached and live as long as the
@@ -114,11 +96,9 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
         return;
     };
     let mut lines = BufReader::new(read_half);
-    diag_stage(connection, "cloned");
     let Some(token) = read_hello(&mut lines) else {
         return;
     };
-    diag_stage(connection, "hello_read");
     let (out_tx, out_rx) = unbounded::<String>();
     let writer = match spawn_writer(write_half, out_rx) {
         Ok(writer) => writer,
@@ -134,7 +114,6 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
         writer: out_tx.clone(),
         reply: answer_tx,
     };
-    diag_stage(connection, "writer_spawned");
     if events.send(hello).is_err() || !answer_rx.recv().unwrap_or(false) {
         // NOTE: the host keeps no clone of `out_tx` for a `hello` it refused
         // or dropped unanswered; if it kept one, this join would never
@@ -143,9 +122,7 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
         let _ = writer.join();
         return;
     }
-    diag_stage(connection, "answered");
     read_requests(&mut lines, connection, &events, &out_tx);
-    diag_stage(connection, "requests_done");
     // NOTE: the host holds a clone of `out_tx`, so dropping ours does not end
     // the writer thread; only the host dropping its clone when it applies
     // `Disconnect` does. Shut the socket down first, send `Disconnect`, and
@@ -155,12 +132,9 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
     // the shutdown on Unix; on Windows it stays parked, and this join with it,
     // until the peer closes its socket.
     let _ = stream.shutdown(Shutdown::Both);
-    diag_stage(connection, "shutdown_done");
     let _ = events.send(ControlEvent::Disconnect { connection });
-    diag_stage(connection, "disconnect_sent");
     drop(out_tx);
     let _ = writer.join();
-    diag_stage(connection, "joined");
 }
 
 /// Starts the thread that writes each line `lines` yields to `stream`,
@@ -210,12 +184,9 @@ fn read_requests(
     let mut buf = String::new();
     loop {
         buf.clear();
-        diag_stage(connection, "reading");
         if !read_capped_line(lines, &mut buf, MAX_REQUEST_LINE) {
-            diag_stage(connection, "read_ended");
             return;
         }
-        diag_stage(connection, "read_line");
         let line = buf.trim_end_matches(['\n', '\r']);
         let Ok(msg) = serde_json::from_str::<ClientMsg>(line) else {
             continue;
@@ -721,93 +692,6 @@ mod tests {
         ));
         drop(client);
         drop(writer);
-    }
-
-    // TODO: temporary Windows diagnostic for the flaky disconnect test; remove before merge.
-    #[cfg(windows)]
-    #[test]
-    fn diag_windows_timeout_retry() {
-        use std::fmt::Write as _;
-        let mut report = String::from("\n");
-        for (dup, shutdown_first, timeout_ms) in [
-            (false, true, 500u64),
-            (true, true, 500),
-            (true, false, 500),
-            (true, true, 0),
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            let sock = dir.path().join("retry.sock");
-            let listener = UnixListener::bind(&sock).unwrap();
-            let (mut ok, mut stuck, mut via_retry) = (0, 0, 0);
-            let mut worst = Duration::ZERO;
-            for _ in 0..300 {
-                let mut client = connect(&sock);
-                let (server, _) = listener.accept().unwrap();
-                let (hello_tx, hello_rx) = bounded::<()>(1);
-                let (answer_tx, answer_rx) = bounded::<()>(1);
-                let (eof_tx, eof_rx) = bounded::<u32>(1);
-                thread::spawn(move || {
-                    fn read_retrying(lines: &mut BufReader<UnixStream>) -> u32 {
-                        let mut out = Vec::new();
-                        let mut retries = 0;
-                        loop {
-                            match lines.read_until(b'\n', &mut out) {
-                                Err(error)
-                                    if matches!(
-                                        error.kind(),
-                                        ErrorKind::WouldBlock | ErrorKind::TimedOut
-                                    ) =>
-                                {
-                                    retries += 1;
-                                }
-                                _ => return retries,
-                            }
-                        }
-                    }
-                    let (kept, reader) = if dup {
-                        let clone = server.try_clone().unwrap();
-                        (Some(server), clone)
-                    } else {
-                        (None, server)
-                    };
-                    if timeout_ms > 0 {
-                        reader
-                            .set_read_timeout(Some(Duration::from_millis(timeout_ms)))
-                            .unwrap();
-                    }
-                    let mut lines = BufReader::new(reader);
-                    read_retrying(&mut lines);
-                    let _ = hello_tx.send(());
-                    let _ = answer_rx.recv();
-                    let retries = read_retrying(&mut lines);
-                    let _ = eof_tx.send(retries);
-                    drop(kept);
-                });
-                send_line(&mut client, r#"{"op":"hello","token":"tok"}"#);
-                hello_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-                answer_tx.send(()).unwrap();
-                if shutdown_first {
-                    client.shutdown(Shutdown::Write).unwrap();
-                }
-                let closed = Instant::now();
-                drop(client);
-                match eof_rx.recv_timeout(Duration::from_secs(3)) {
-                    Ok(retries) => {
-                        ok += 1;
-                        worst = worst.max(closed.elapsed());
-                        if retries > 0 {
-                            via_retry += 1;
-                        }
-                    }
-                    Err(_) => stuck += 1,
-                }
-                if stuck >= 10 {
-                    break;
-                }
-            }
-            writeln!(report, "dup={dup} shutdown_first={shutdown_first} timeout_ms={timeout_ms}: ok={ok} stuck={stuck} eof_via_retry={via_retry} worst={worst:?}").unwrap();
-        }
-        panic!("{report}");
     }
 
     /// Asserts that the bound socket file inherits the runtime directory's
