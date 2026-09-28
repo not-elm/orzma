@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -184,6 +185,73 @@ class CommandBuilders(unittest.TestCase):
             )
         finally:
             os.unlink(name)
+
+
+class DmgCommands(unittest.TestCase):
+    def test_dmg_name(self):
+        self.assertEqual(bm.dmg_name("orzma", "0.1.0", "arm64"), "orzma-0.1.0-arm64.dmg")
+
+    def test_ditto_copy_argv(self):
+        self.assertEqual(
+            bm.ditto_copy_argv(Path("/tmp/a.app"), Path("/tmp/stage/a.app")),
+            ["ditto", "/tmp/a.app", "/tmp/stage/a.app"],
+        )
+
+    def test_hdiutil_create_argv(self):
+        self.assertEqual(
+            bm.hdiutil_create_argv("orzma", Path("/tmp/stage"), Path("/tmp/a.dmg")),
+            ["hdiutil", "create", "-volname", "orzma", "-srcfolder", "/tmp/stage",
+             "-fs", "HFS+", "-format", "ULMO", "-ov", "/tmp/a.dmg"],
+        )
+
+    def test_hdiutil_create_argv_keeps_a_spaced_path_as_one_argument(self):
+        argv = bm.hdiutil_create_argv(
+            "orzma", Path("/tmp/My Projects/stage"), Path("/tmp/My Projects/a.dmg")
+        )
+        self.assertEqual(argv[argv.index("-srcfolder") + 1], "/tmp/My Projects/stage")
+        self.assertEqual(argv[-1], "/tmp/My Projects/a.dmg")
+
+    def test_hdiutil_verify_argv(self):
+        self.assertEqual(
+            bm.hdiutil_verify_argv(Path("/tmp/a.dmg")), ["hdiutil", "verify", "/tmp/a.dmg"]
+        )
+
+
+def _run_failing_first(failures: int):
+    calls = []
+
+    def fake_run(argv, redact=()):
+        calls.append(argv)
+        if len(calls) <= failures:
+            raise subprocess.CalledProcessError(1, argv)
+
+    return fake_run, calls
+
+
+class CreateDmgRetry(unittest.TestCase):
+    ARGV = ["hdiutil", "create", "/tmp/a.dmg"]
+
+    def test_a_first_try_success_does_not_wait(self):
+        fake_run, calls = _run_failing_first(0)
+        with mock.patch.object(bm, "run", fake_run), mock.patch.object(bm.time, "sleep") as sleep:
+            bm.create_dmg(self.ARGV)
+        self.assertEqual(calls, [self.ARGV])
+        sleep.assert_not_called()
+
+    def test_a_transient_failure_is_retried_until_it_succeeds(self):
+        fake_run, calls = _run_failing_first(2)
+        with mock.patch.object(bm, "run", fake_run), mock.patch.object(bm.time, "sleep") as sleep:
+            bm.create_dmg(self.ARGV)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleep.call_args_list, [mock.call(5), mock.call(5)])
+
+    def test_the_last_failure_is_raised_without_a_final_wait(self):
+        fake_run, calls = _run_failing_first(3)
+        with mock.patch.object(bm, "run", fake_run), mock.patch.object(bm.time, "sleep") as sleep:
+            with self.assertRaises(subprocess.CalledProcessError):
+                bm.create_dmg(self.ARGV)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(sleep.call_count, 2)
 
 
 class ConfigResolution(unittest.TestCase):
