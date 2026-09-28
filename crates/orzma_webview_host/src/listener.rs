@@ -726,83 +726,100 @@ mod tests {
     // TODO: temporary Windows diagnostic for the flaky disconnect test; remove before merge.
     #[cfg(windows)]
     #[test]
-    fn diag_windows_serve_connection_stages() {
-        use std::collections::BTreeMap;
+    fn diag_windows_second_read_handle() {
         use std::fmt::Write as _;
+        use std::sync::Arc;
+        #[derive(Clone, Copy, Debug)]
+        enum Handle {
+            Original,
+            OriginalWithDups,
+            Dup,
+            ArcShared,
+        }
         let mut report = String::from("\n");
-        for (variant, shutdown_first, base) in [
-            ("drop", false, 1_000_000u64),
-            ("shutdown-drop", true, 2_000_000u64),
+        for (variant, shutdown_first) in [
+            (Handle::Dup, true),
+            (Handle::Original, true),
+            (Handle::OriginalWithDups, true),
+            (Handle::ArcShared, true),
+            (Handle::Dup, false),
+            (Handle::ArcShared, false),
         ] {
             let dir = tempfile::tempdir().unwrap();
-            let sock = dir.path().join("stages.sock");
+            let sock = dir.path().join("second.sock");
             let listener = UnixListener::bind(&sock).unwrap();
-            let (events_tx, events) = unbounded();
-            let mut stuck_at: BTreeMap<&'static str, usize> = BTreeMap::new();
             let (mut ok, mut stuck) = (0, 0);
-            for i in 0..300 {
-                let connection = ConnectionId::new(base + i);
+            for _ in 0..300 {
                 let mut client = connect(&sock);
                 let (server, _) = listener.accept().unwrap();
-                let tx = events_tx.clone();
-                thread::spawn(move || serve_connection(server, connection, tx));
-                send_line(&mut client, r#"{"op":"hello","token":"tok"}"#);
-                let deadline = Instant::now() + Duration::from_secs(3);
-                let writer = loop {
-                    match events.recv_deadline(deadline) {
-                        Ok(ControlEvent::Hello {
-                            connection: c,
-                            writer,
-                            reply,
-                            ..
-                        }) if c == connection => {
-                            reply.send(true).unwrap();
-                            break Some(writer);
+                let (hello_tx, hello_rx) = bounded::<()>(1);
+                let (answer_tx, answer_rx) = bounded::<()>(1);
+                let (eof_tx, eof_rx) = bounded::<()>(1);
+                thread::spawn(move || {
+                    let mut buf = String::new();
+                    let second = |reader: &mut dyn BufRead, buf: &mut String| {
+                        buf.clear();
+                        let _ = reader.read_line(buf);
+                    };
+                    match variant {
+                        Handle::Original => {
+                            let mut lines = BufReader::new(server);
+                            let _ = lines.read_line(&mut buf);
+                            let _ = hello_tx.send(());
+                            let _ = answer_rx.recv();
+                            second(&mut lines, &mut buf);
                         }
-                        Ok(_) => continue,
-                        Err(_) => break None,
+                        Handle::OriginalWithDups => {
+                            let dup_a = server.try_clone().unwrap();
+                            let dup_b = server.try_clone().unwrap();
+                            let mut lines = BufReader::new(server);
+                            let _ = lines.read_line(&mut buf);
+                            let _ = hello_tx.send(());
+                            let _ = answer_rx.recv();
+                            second(&mut lines, &mut buf);
+                            drop((dup_a, dup_b));
+                        }
+                        Handle::Dup => {
+                            let read_half = server.try_clone().unwrap();
+                            let write_half = server.try_clone().unwrap();
+                            let mut lines = BufReader::new(read_half);
+                            let _ = lines.read_line(&mut buf);
+                            let _ = hello_tx.send(());
+                            let _ = answer_rx.recv();
+                            second(&mut lines, &mut buf);
+                            drop((server, write_half));
+                        }
+                        Handle::ArcShared => {
+                            let shared = Arc::new(server);
+                            let writer_side = Arc::clone(&shared);
+                            let mut lines = BufReader::new(&*shared);
+                            let _ = lines.read_line(&mut buf);
+                            let _ = hello_tx.send(());
+                            let _ = answer_rx.recv();
+                            second(&mut lines, &mut buf);
+                            drop(writer_side);
+                        }
                     }
-                };
-                let Some(writer) = writer else {
-                    *stuck_at.entry("no-hello").or_default() += 1;
-                    stuck += 1;
-                    continue;
-                };
+                    let _ = eof_tx.send(());
+                });
+                send_line(&mut client, r#"{"op":"hello","token":"tok"}"#);
+                hello_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+                answer_tx.send(()).unwrap();
                 if shutdown_first {
                     client.shutdown(Shutdown::Write).unwrap();
                 }
                 drop(client);
-                let deadline = Instant::now() + Duration::from_secs(3);
-                let arrived = loop {
-                    match events.recv_deadline(deadline) {
-                        Ok(ControlEvent::Disconnect { connection: c }) if c == connection => {
-                            break true;
-                        }
-                        Ok(_) => continue,
-                        Err(_) => break false,
-                    }
-                };
-                if arrived {
-                    ok += 1;
-                } else {
-                    stuck += 1;
-                    let stage = DIAG_STAGES
-                        .lock()
-                        .ok()
-                        .and_then(|stages| {
-                            stages.as_ref().and_then(|m| m.get(&connection).copied())
-                        })
-                        .unwrap_or("unknown");
-                    *stuck_at.entry(stage).or_default() += 1;
+                match eof_rx.recv_timeout(Duration::from_secs(3)) {
+                    Ok(()) => ok += 1,
+                    Err(_) => stuck += 1,
                 }
-                drop(writer);
                 if stuck >= 10 {
                     break;
                 }
             }
             writeln!(
                 report,
-                "{variant}: ok={ok} stuck={stuck} stuck_at={stuck_at:?}"
+                "{variant:?} shutdown_first={shutdown_first}: ok={ok} stuck={stuck}"
             )
             .unwrap();
         }
