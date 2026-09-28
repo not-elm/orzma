@@ -2,8 +2,8 @@
 # Merged PRs are grouped into the categories below by their LABELS — labels,
 # not commit-message prefixes, drive this. Categories are first-match: a PR
 # with several labels lands in the first category it matches (so a breaking
-# enhancement appears under Breaking Changes, not Features). The release-macos
-# workflow passes generate_release_notes: true; GitHub loads this file from the
+# enhancement appears under Breaking Changes, not Features). The draft job in
+# release.yml passes --generate-notes; GitHub loads this file from the
 # tree of the released tag's commit (for tags cut from main, that is main).
 changelog:
   exclude:

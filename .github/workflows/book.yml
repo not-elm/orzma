@@ -2,9 +2,15 @@ name: book
 
 on:
   pull_request:
-  push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
+  # post-release.yml passes deploy: true once a release is published; pull
+  # requests and manual runs only build.
+  workflow_call:
+    inputs:
+      deploy:
+        description: "Deploy the built book to GitHub Pages"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -71,7 +77,7 @@ jobs:
           fi
 
       - name: Check that the tag matches VERSION
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: inputs.deploy
         run: |
           VERSION="$(cat VERSION)"
           if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
@@ -80,14 +86,14 @@ jobs:
           fi
 
       - name: Upload the book
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: inputs.deploy
         uses: actions/upload-pages-artifact@v5
         with:
           path: target/book
 
   deploy:
     name: deploy
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: inputs.deploy
     needs: build
     runs-on: ubuntu-latest
     permissions:

@@ -1,9 +1,7 @@
 name: publish-sdk
 
 on:
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -28,15 +26,14 @@ jobs:
         run: |
           VERSION="$(cat VERSION)"
 
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
-              echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${VERSION}" >&2
-              exit 1
-            fi
-          elif ! printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            # crates.io cannot delete a published version, so a manual run must not
-            # publish the development version VERSION carries between releases.
-            echo "VERSION ${VERSION} is a prerelease; a manual run publishes only a 3-part numeric version." >&2
+          # crates.io cannot delete a published version, so only a release tag that
+          # post-release.yml has checked may publish.
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "publish-sdk runs only on a release tag; start it through post-release.yml." >&2
+            exit 1
+          fi
+          if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${VERSION}" >&2
             exit 1
           fi
 

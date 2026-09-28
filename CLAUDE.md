@@ -88,7 +88,7 @@ Biome (`biome.json`) scans `sdk/**` — it is the JS/TS lint+format tool for thi
 ## Other notable paths
 
 - `.claude/rules/` — repo-wide Rust and TypeScript conventions (linked from the rules sections below).
-- `docs/book/` — the user guide (mdBook), published to GitHub Pages when a stable `v*` tag is pushed. A change to user-visible behavior (configuration keys, shortcuts, the webview protocol) updates the matching page under `docs/book/src/` in the same change.
+- `docs/book/` — the user guide (mdBook), published to GitHub Pages when a release is published. A change to user-visible behavior (configuration keys, shortcuts, the webview protocol) updates the matching page under `docs/book/src/` in the same change.
 - `docs/memo/`, `docs/references/`, `docs/todo/` — implementation notes, reference manuals, and per-task working notes.
 - `CONTRIBUTING.md` — contributor guide: development setup, architecture, conventions, pull requests, and documentation.
 

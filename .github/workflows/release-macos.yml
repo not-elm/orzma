@@ -1,19 +1,16 @@
 name: release-macos
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
   workflow_dispatch:
 
-concurrency:
-  group: release-${{ github.ref }}
-
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     runs-on: macos-14
+    timeout-minutes: 90
     env:
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
       MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -21,7 +18,6 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v5
 
@@ -90,40 +86,25 @@ jobs:
             python3 scripts/bundle_macos.py --version "$VERSION"
           fi
 
-      - name: Read artifact metadata
-        id: meta
+      # upload-artifact's if-no-files-found fails only when no path matches, so a
+      # missing sidecar would otherwise pass unnoticed until release.yml's draft job.
+      - name: Check the bundle
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
           ZIP="target/bundle/orzma-${VERSION}-arm64.zip"
           test -f "$ZIP" || { echo "Bundle not found: $ZIP"; exit 1; }
           test -f "${ZIP}.sha256" || { echo "Missing sidecar: ${ZIP}.sha256"; exit 1; }
-          SHA="$(cut -d' ' -f1 "${ZIP}.sha256")"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "zip=${ZIP}" >> "$GITHUB_OUTPUT"
-          echo "sha256=${SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish GitHub Release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+      # Uploaded on every run, so a manual dry run can be downloaded too; the draft job
+      # in release.yml releases exactly these files.
+      - name: Upload the release files
+        uses: actions/upload-artifact@v4
         with:
-          files: ${{ steps.meta.outputs.zip }}
-          generate_release_notes: true
-
-      - name: Bump Homebrew cask
-        if: github.ref_type == 'tag' && env.HOMEBREW_TAP_TOKEN != ''
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          SHA256: ${{ steps.meta.outputs.sha256 }}
-        run: |
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/not-elm/homebrew-orzma.git" tap
-          mkdir -p tap/Casks
-          sed -e "s/__VERSION__/${VERSION}/g" -e "s/__SHA256__/${SHA256}/g" \
-            build/macos/homebrew/orzma.rb.tmpl > tap/Casks/orzma.rb
-          cd tap
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/orzma.rb
-          git commit -m "orzma ${VERSION}"
-          git push
+          name: orzma-macos-${{ steps.ver.outputs.version }}
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+          path: |
+            target/bundle/orzma-${{ steps.ver.outputs.version }}-arm64.zip
+            target/bundle/orzma-${{ steps.ver.outputs.version }}-arm64.zip.sha256
