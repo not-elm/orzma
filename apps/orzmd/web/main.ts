@@ -6,6 +6,7 @@ import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
 import { breadcrumb, type Chrome, type HeadingInfo, renderRail, renderToast } from './chrome';
 import { FindBox, type SearchCause } from './find';
+import { HeadingTracker } from './headings';
 import { collectLocalImages } from './images';
 import { applyLayoutVars, FIND_CLEARANCE, RAIL_HEIGHT, reachedTop } from './layout';
 import { classifyLink } from './links';
@@ -68,6 +69,7 @@ const toast = document.getElementById('toast') as HTMLElement;
 let chrome: Chrome | null = null;
 let currentHeading: number | null = null;
 let headings: HeadingInfo[] = [];
+const headingTracker = new HeadingTracker();
 
 applyLayoutVars(document.documentElement);
 
@@ -149,13 +151,21 @@ function restoreScrollAnchor(anchor: ScrollAnchor): void {
   window.scrollTo({ top: max > 0 ? anchor.ratio * max : 0 });
 }
 
+function jumpTo(target: HTMLElement): void {
+  target.scrollIntoView({ block: 'start' });
+  const index = target.closest('h1,h2,h3,h4,h5,h6')?.id.match(/^h(\d+)$/)?.[1];
+  if (index !== undefined) {
+    headingTracker.jumped(Number(index), window.scrollY);
+  }
+  reportScrollState();
+}
+
 function scrollToAnchor(fragment: string): boolean {
   const el = document.getElementById(fragment);
   if (el === null) {
     return false;
   }
-  el.scrollIntoView({ block: 'start' });
-  reportScrollState();
+  jumpTo(el);
   return true;
 }
 
@@ -184,12 +194,10 @@ function reportScrollState(): void {
   const max = scrollMax();
   const ratio = max > 0 ? window.scrollY / max : 0;
   const heads = headingEls();
-  let currentHeadingIndex: number | null = null;
-  for (let i = 0; i < heads.length; i++) {
-    if (reachedTop(heads[i].getBoundingClientRect().top)) {
-      currentHeadingIndex = i;
-    }
-  }
+  const currentHeadingIndex = headingTracker.current(
+    heads.map((h) => h.getBoundingClientRect().top),
+    window.scrollY,
+  );
   emitPage({ kind: 'scrollState', ratio, currentHeadingIndex, headingCount: heads.length });
   if (currentHeadingIndex !== currentHeading) {
     currentHeading = currentHeadingIndex;
@@ -315,8 +323,10 @@ orzma.on('scroll', (p: { action: string }) => {
   scrollByAction(p.action);
 });
 orzma.on('scrollToHeading', (p: { index: number }) => {
-  document.getElementById(`h${p.index}`)?.scrollIntoView({ block: 'start' });
-  reportScrollState();
+  const heading = document.getElementById(`h${p.index}`);
+  if (heading !== null) {
+    jumpTo(heading);
+  }
 });
 
 orzma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
