@@ -128,7 +128,7 @@ to leave the change out of the notes.
 
 The user guide lives in `docs/book` and is built with
 [mdBook](https://rust-lang.github.io/mdBook/). It is published to
-<https://not-elm.github.io/orzma/> when a release tag is pushed.
+<https://not-elm.github.io/orzma/> when a release is published.
 
 ```sh
 just setup-book   # one-time: installs the pinned mdBook and mdbook-mermaid
