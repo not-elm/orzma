@@ -1,20 +1,17 @@
 //! The in-memory Markdown document plus path resolution and change detection.
 
-use crate::outline::{self, Heading};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// A loaded Markdown document and its derived outline.
+/// A loaded Markdown document.
 #[derive(Debug, Clone)]
 pub(crate) struct Document {
     /// Raw Markdown source.
     pub(crate) text: String,
     /// Absolute parent directory of the source file.
     pub(crate) base_dir: PathBuf,
-    /// Headings parsed from `text`, in document order.
-    pub(crate) outline: Vec<Heading>,
 }
 
 /// A cheap change fingerprint: file length plus mtime.
@@ -22,19 +19,6 @@ pub(crate) struct Document {
 pub(crate) struct Fingerprint {
     len: u64,
     mtime: Option<SystemTime>,
-}
-
-impl Document {
-    /// Builds a document from source text and the file's parent directory,
-    /// parsing the outline from `text`.
-    fn from_source(text: String, base_dir: PathBuf) -> Self {
-        let outline = outline::parse(&text);
-        Self {
-            text,
-            base_dir,
-            outline,
-        }
-    }
 }
 
 /// Resolves a user-supplied path to an absolute, canonical regular-file path.
@@ -45,11 +29,11 @@ pub(crate) fn resolve_path(arg: &str) -> io::Result<PathBuf> {
     require_regular_file(arg)
 }
 
-/// Reads and parses the Markdown file at `path` into a [`Document`].
+/// Reads the Markdown file at `path` into a [`Document`].
 pub(crate) fn load(path: &Path) -> io::Result<Document> {
     let text = fs::read_to_string(path)?;
     let base_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    Ok(Document::from_source(text, base_dir))
+    Ok(Document { text, base_dir })
 }
 
 /// Resolves a link `target` (relative or absolute) against `base_dir` to an
@@ -102,12 +86,14 @@ mod tests {
         (dir, path)
     }
 
+    /// Asserts that loading reads the source text and the parent directory.
+    ///
+    /// Case: the user opens a Markdown file that has two headings.
     #[test]
-    fn load_reads_text_outline_and_base_dir() {
+    fn load_reads_text_and_base_dir() {
         let (_dir, path) = write_temp("doc.md", "# A\n\ntext\n## B\n");
         let doc = load(&path).unwrap();
         assert_eq!(doc.text, "# A\n\ntext\n## B\n");
-        assert_eq!(doc.outline.len(), 2);
         assert_eq!(doc.base_dir, path.parent().unwrap());
     }
 

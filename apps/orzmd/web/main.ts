@@ -4,15 +4,74 @@ import { orzma } from '@orzma/web';
 import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
+import { breadcrumb, type Chrome, type HeadingInfo, renderRail, renderToast } from './chrome';
+import { FindBox, type SearchCause } from './find';
+import { HeadingTracker } from './headings';
 import { collectLocalImages } from './images';
+import { applyLayoutVars, FIND_CLEARANCE, RAIL_HEIGHT, reachedTop } from './layout';
 import { classifyLink } from './links';
+import { OutlinePanel } from './outline';
 import { renderMarkdown } from './render';
-import { Search } from './search';
+import { CssHighlightPainter, measureTop, revealRange, Search } from './search';
 
 mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
 
+/** A report to the controller (`page` event), tagged by `kind`. */
+type PageEvent =
+  | { kind: 'scrollState'; ratio: number; currentHeadingIndex: number | null; headingCount: number }
+  | { kind: 'searchSubmit' | 'searchEscape'; cause: SearchCause }
+  | { kind: 'searchClose' }
+  | { kind: 'outlineJump'; index: number };
+
+function emitPage(event: PageEvent): void {
+  orzma.emit('page', event);
+}
+
 const content = document.getElementById('content') as HTMLElement;
-const search = new Search();
+const search = new Search(new CssHighlightPainter(), measureTop);
+
+const findBox = new FindBox(
+  document.getElementById('find') as HTMLElement,
+  search,
+  {
+    submit: (cause) => emitPage({ kind: 'searchSubmit', cause }),
+    escape: (cause) => emitPage({ kind: 'searchEscape', cause }),
+    close: () => emitPage({ kind: 'searchClose' }),
+  },
+  {
+    content,
+    schedule: (task) => {
+      requestAnimationFrame(task);
+    },
+    reveal: (range) => revealRange(range, { top: FIND_CLEARANCE, bottom: window.innerHeight }),
+    scrollY: () => window.scrollY,
+    scrollTo: (y) => window.scrollTo({ top: y }),
+  },
+);
+
+const outlinePanel = new OutlinePanel(document.getElementById('outline') as HTMLElement, (index) =>
+  emitPage({ kind: 'outlineJump', index }),
+);
+
+function applyOutline(open: boolean): void {
+  if (document.body.classList.contains('outline-open') === open) {
+    return;
+  }
+  const anchor = captureScrollAnchor();
+  document.body.classList.toggle('outline-open', open);
+  outlinePanel.setOpen(open);
+  restoreScrollAnchor(anchor);
+}
+
+const rail = document.getElementById('rail') as HTMLElement;
+const toast = document.getElementById('toast') as HTMLElement;
+
+let chrome: Chrome | null = null;
+let currentHeading: number | null = null;
+let headings: HeadingInfo[] = [];
+const headingTracker = new HeadingTracker();
+
+applyLayoutVars(document.documentElement);
 
 let mermaidSeq = 0;
 let renderGeneration = 0;
@@ -39,6 +98,23 @@ function scrollMax(): number {
   return document.documentElement.scrollHeight - window.innerHeight;
 }
 
+function headingInfos(): HeadingInfo[] {
+  return headingEls().map((h) => ({
+    level: Number(h.tagName.slice(1)),
+    text: h.textContent ?? '',
+  }));
+}
+
+function renderChromeUi(): void {
+  if (chrome === null) {
+    return;
+  }
+  renderRail(rail, chrome, breadcrumb(headings, currentHeading));
+  renderToast(toast, chrome.toast);
+  applyOutline(chrome.outline.open);
+  outlinePanel.mark(chrome.outline.selected, currentHeading);
+}
+
 interface ScrollAnchor {
   id: string | null;
   offset: number;
@@ -51,7 +127,7 @@ function captureScrollAnchor(): ScrollAnchor {
   let offset = 0;
   for (const h of heads) {
     const top = h.getBoundingClientRect().top;
-    if (top <= 1) {
+    if (reachedTop(top)) {
       id = h.id;
       offset = top;
     } else {
@@ -75,13 +151,21 @@ function restoreScrollAnchor(anchor: ScrollAnchor): void {
   window.scrollTo({ top: max > 0 ? anchor.ratio * max : 0 });
 }
 
+function jumpTo(target: HTMLElement): void {
+  target.scrollIntoView({ block: 'start' });
+  const index = target.closest('h1,h2,h3,h4,h5,h6')?.id.match(/^h(\d+)$/)?.[1];
+  if (index !== undefined) {
+    headingTracker.jumped(Number(index), window.scrollY);
+  }
+  reportScrollState();
+}
+
 function scrollToAnchor(fragment: string): boolean {
   const el = document.getElementById(fragment);
   if (el === null) {
     return false;
   }
-  el.scrollIntoView({ block: 'start' });
-  reportScrollState();
+  jumpTo(el);
   return true;
 }
 
@@ -110,13 +194,15 @@ function reportScrollState(): void {
   const max = scrollMax();
   const ratio = max > 0 ? window.scrollY / max : 0;
   const heads = headingEls();
-  let currentHeadingIndex: number | null = null;
-  for (let i = 0; i < heads.length; i++) {
-    if (heads[i].getBoundingClientRect().top <= 1) {
-      currentHeadingIndex = i;
-    }
+  const currentHeadingIndex = headingTracker.current(
+    heads.map((h) => h.getBoundingClientRect().top),
+    window.scrollY,
+  );
+  emitPage({ kind: 'scrollState', ratio, currentHeadingIndex, headingCount: heads.length });
+  if (currentHeadingIndex !== currentHeading) {
+    currentHeading = currentHeadingIndex;
+    renderChromeUi();
   }
-  orzma.emit('scrollState', { ratio, currentHeadingIndex });
 }
 
 async function renderMermaid(): Promise<void> {
@@ -183,6 +269,8 @@ async function setContent(payload: ContentPayload): Promise<void> {
   const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
   installHeadingAnchors(content);
+  headings = headingInfos();
+  outlinePanel.setItems(headings);
   await renderMermaid();
   await stageLocalImages(content);
   // NOTE: a newer setContent superseded this one during the await (rapid reloads
@@ -191,11 +279,13 @@ async function setContent(payload: ContentPayload): Promise<void> {
     return;
   }
   applyScrollTarget(payload.scrollTo, anchor);
+  findBox.rerun();
   reportScrollState();
+  renderChromeUi();
 }
 
 function scrollByAction(action: string): void {
-  const page = window.innerHeight;
+  const page = window.innerHeight - RAIL_HEIGHT;
   const line = 60;
   switch (action) {
     case 'down':
@@ -233,18 +323,37 @@ orzma.on('scroll', (p: { action: string }) => {
   scrollByAction(p.action);
 });
 orzma.on('scrollToHeading', (p: { index: number }) => {
-  document.getElementById(`h${p.index}`)?.scrollIntoView({ block: 'start' });
-  reportScrollState();
+  const heading = document.getElementById(`h${p.index}`);
+  if (heading !== null) {
+    jumpTo(heading);
+  }
 });
-orzma.on('search', (p: { query: string }) => {
-  orzma.emit('searchCount', search.run(content, p.query));
-});
+
 orzma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
-  orzma.emit('searchCount', search.navigate(p.dir));
+  findBox.nav(p.dir);
 });
-orzma.on('clearSearch', () => {
-  search.clear(content);
+orzma.on('searchType', (p: { text: string }) => {
+  findBox.typeText(p.text);
 });
+orzma.on('searchBackspace', () => {
+  findBox.backspace();
+});
+orzma.on('searchEnter', () => {
+  findBox.enter();
+});
+orzma.on('searchResolve', () => {
+  findBox.resolve();
+});
+orzma.on('searchCancel', () => {
+  findBox.cancel();
+});
+orzma.on('chrome', (c: Chrome) => {
+  chrome = c;
+  renderChromeUi();
+  findBox.setStage(c.search);
+});
+
+window.addEventListener('resize', renderChromeUi);
 
 content.addEventListener('click', (e) => {
   const target = e.target;

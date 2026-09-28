@@ -1,33 +1,41 @@
 //! The pure App state machine. `on_action` is the single entry point; it
 //! returns the side-effect [`Cmd`]s for `main.rs` to execute. No SDK or I/O here.
 
-use crate::keymap::{Action, Mode};
-use crate::outline::Heading;
-use crate::protocol::{ScrollAction, SearchDir};
+use crate::chrome::SearchStage;
+use crate::keymap::{Action, KeySet, Mode};
+use crate::protocol::{ScrollAction, SearchCause, SearchDir};
 use std::mem;
 
 /// A side effect for `main.rs` to perform after `on_action`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Cmd {
-    /// Scroll the page.
+    /// Scrolls the page.
     Scroll(ScrollAction),
-    /// Scroll heading `index` (the `id="h{index}"` anchor) into view.
+    /// Scrolls heading `index` (the `id="h{index}"` anchor) into view.
     ScrollToHeading(usize),
-    /// Run an in-page search for `query`.
-    Search(String),
-    /// Navigate to the next/previous search match.
+    /// Moves to the next or previous search match.
     SearchNav(SearchDir),
-    /// Clear the in-page search highlight.
-    ClearSearch,
-    /// Re-read the file from disk and push new content.
+    /// Puts a character into the page's search input, replacing its selection.
+    SearchType(char),
+    /// Deletes backwards in the page's search input.
+    SearchBackspace,
+    /// Relays an Enter the TUI received to the page's search input.
+    SearchEnter,
+    /// Asks the page to end the typed search by its match count.
+    SearchResolve,
+    /// Abandons the typed search and returns to where it started.
+    SearchCancel,
+    /// Replaces the page's forward keys with the given set.
+    SetForwardKeys(KeySet),
+    /// Re-reads the file from disk and pushes new content.
     Reload,
-    /// Pop the navigation back stack.
+    /// Pops the navigation back stack.
     Back,
-    /// Exit the app.
+    /// Exits the app.
     Quit,
-    /// Give the page keyboard focus.
+    /// Gives the page keyboard focus.
     Focus,
-    /// Take keyboard focus back from the page to the TUI.
+    /// Takes keyboard focus back from the page to the TUI.
     Blur,
 }
 
@@ -36,62 +44,64 @@ pub(crate) enum Cmd {
 pub(crate) struct App {
     mode: Mode,
     pending_prefix: Option<char>,
-    outline: Vec<Heading>,
+    heading_count: usize,
     outline_open: bool,
     outline_selected: usize,
     current_heading_index: Option<usize>,
-    search_query: String,
     search_active: bool,
     page_focused: bool,
-    refocus_after_search: bool,
+    blur_after_search: bool,
 }
 
 impl App {
     /// The current input mode.
-    pub(crate) fn mode(&self) -> Mode {
+    pub fn mode(&self) -> Mode {
         self.mode
     }
 
     /// Whether the outline panel is open.
-    pub(crate) fn outline_open(&self) -> bool {
+    pub fn outline_open(&self) -> bool {
         self.outline_open
     }
 
     /// The selected outline index.
-    pub(crate) fn selected(&self) -> usize {
+    pub fn selected(&self) -> usize {
         self.outline_selected
     }
 
-    /// The current search query buffer.
-    pub(crate) fn query(&self) -> &str {
-        &self.search_query
-    }
-
-    /// The headings to draw in the outline panel.
-    pub(crate) fn outline(&self) -> &[Heading] {
-        &self.outline
-    }
-
-    /// Replaces the outline (called after a (re)load), clamping the selection.
-    pub(crate) fn set_outline(&mut self, outline: Vec<Heading>) {
-        self.outline = outline;
-        if self.outline_selected >= self.outline.len() {
-            self.outline_selected = self.outline.len().saturating_sub(1);
+    /// Records how many headings the rendered page has, clamping the selection.
+    pub fn set_heading_count(&mut self, count: usize) {
+        self.heading_count = count;
+        if self.outline_selected >= count {
+            self.outline_selected = count.saturating_sub(1);
         }
     }
 
     /// Records the heading index nearest the viewport top (from `scrollState`).
-    pub(crate) fn set_current_heading_index(&mut self, index: Option<usize>) {
+    pub fn set_current_heading_index(&mut self, index: Option<usize>) {
         self.current_heading_index = index;
     }
 
-    /// Whether a search is active (matches highlighted, awaiting clear).
-    pub(crate) fn search_active(&self) -> bool {
-        self.search_active
+    /// The first key of a pending two-key chord (`g`, `[`, `]`), if any.
+    pub fn pending_key(&self) -> Option<char> {
+        self.pending_prefix
+    }
+
+    /// The search stage the page shows: `Typing` while a query is being
+    /// typed, `Active` while confirmed matches are highlighted, else `Closed`.
+    pub fn search_stage(&self) -> SearchStage {
+        if self.mode == Mode::Search {
+            SearchStage::Typing
+        } else if self.search_active {
+            SearchStage::Active
+        } else {
+            SearchStage::Closed
+        }
     }
 
     /// Processes an [`Action`], returning the side effects to perform.
-    pub(crate) fn on_action(&mut self, action: Action) -> Vec<Cmd> {
+    pub fn on_action(&mut self, action: Action) -> Vec<Cmd> {
+        let key_set = KeySet::of(self.mode);
         if let Some(prefix) = self.pending_prefix.take()
             && let Action::Prefix(c) = action
             && c == prefix
@@ -99,7 +109,7 @@ impl App {
             return self.resolve_chord(c);
         }
 
-        match action {
+        let cmds = match action {
             Action::Prefix(c) => {
                 self.pending_prefix = Some(c);
                 vec![]
@@ -117,6 +127,10 @@ impl App {
             Action::ToggleOutline => {
                 self.outline_open = !self.outline_open;
                 self.mode = if self.outline_open {
+                    self.outline_selected = self
+                        .current_heading_index
+                        .unwrap_or(0)
+                        .min(self.heading_count.saturating_sub(1));
                     Mode::Outline
                 } else {
                     Mode::Normal
@@ -124,7 +138,7 @@ impl App {
                 vec![]
             }
             Action::OutlineMoveDown => {
-                if self.outline_selected + 1 < self.outline.len() {
+                if self.outline_selected + 1 < self.heading_count {
                     self.outline_selected += 1;
                 }
                 vec![]
@@ -134,81 +148,103 @@ impl App {
                 vec![]
             }
             Action::OutlineConfirm => {
-                if self.outline.is_empty() {
+                if self.heading_count == 0 {
                     vec![]
                 } else {
                     vec![Cmd::ScrollToHeading(self.outline_selected)]
                 }
             }
+            Action::OutlineJump(index)
+                if self.mode == Mode::Outline && index < self.heading_count =>
+            {
+                self.outline_selected = index;
+                vec![Cmd::ScrollToHeading(index)]
+            }
+            Action::OutlineJump(_) => vec![],
             Action::EnterSearch => {
-                self.refocus_after_search = self.page_focused;
+                self.blur_after_search = !self.page_focused;
                 self.mode = Mode::Search;
-                self.search_query.clear();
-                vec![Cmd::Blur]
+                vec![Cmd::Focus]
             }
-            Action::SearchChar(c) => {
-                self.search_query.push(c);
-                vec![]
-            }
-            Action::SearchBackspace => {
-                self.search_query.pop();
-                vec![]
-            }
-            Action::SearchConfirm => {
+            Action::SearchChar(c) => vec![Cmd::SearchType(c)],
+            Action::SearchBackspace => vec![Cmd::SearchBackspace],
+            Action::SearchConfirm => vec![Cmd::SearchEnter],
+            Action::PageSearchSubmit(cause) if self.mode == Mode::Search => {
                 self.mode = Mode::Normal;
                 self.search_active = true;
-                let mut cmds = vec![Cmd::Search(self.search_query.clone())];
-                cmds.extend(self.take_refocus());
-                cmds
+                self.release_after_search(cause).into_iter().collect()
+            }
+            Action::PageSearchEscape(cause) if self.mode == Mode::Search => {
+                self.cancel_search(cause)
+            }
+            Action::PageSearchSubmit(_) | Action::PageSearchEscape(_) => vec![],
+            Action::PageSearchClose => {
+                if self.search_stage() == SearchStage::Active {
+                    self.search_active = false;
+                }
+                vec![]
             }
             Action::SearchNext if self.search_active => vec![Cmd::SearchNav(SearchDir::Next)],
             Action::SearchPrev if self.search_active => vec![Cmd::SearchNav(SearchDir::Prev)],
             Action::SearchNext | Action::SearchPrev => vec![],
+            Action::Escape if self.mode == Mode::Search => self.cancel_search(SearchCause::Key),
             Action::Escape => {
-                let leaving_search = self.mode == Mode::Search;
                 self.outline_open = false;
                 self.mode = Mode::Normal;
-                let mut cmds = Vec::new();
-                if self.search_active {
-                    self.search_active = false;
-                    self.search_query.clear();
-                    cmds.push(Cmd::ClearSearch);
-                }
-                if leaving_search {
-                    cmds.extend(self.take_refocus());
-                }
-                cmds
+                self.search_active = false;
+                vec![]
             }
             Action::Ignore => vec![],
-        }
+        };
+        self.with_key_set(key_set, cmds)
     }
 
-    /// Clears search state when the viewed document changes (matches/bar are stale).
-    pub(crate) fn clear_search_state(&mut self) {
+    /// Clears search state when the viewed document changes, returning the
+    /// forward-key change that leaving a typed search needs.
+    pub fn clear_search_state(&mut self) -> Vec<Cmd> {
+        let key_set = KeySet::of(self.mode);
         self.search_active = false;
-        self.search_query.clear();
         if self.mode == Mode::Search {
             self.mode = Mode::Normal;
-            self.refocus_after_search = false;
+            self.blur_after_search = false;
         }
+        self.with_key_set(key_set, vec![])
     }
 
-    /// Records a focus change the host reported for the page. A page that
-    /// gains focus during a search cancels the typed query, keeping the
-    /// previous search.
-    pub(crate) fn on_focus_change(&mut self, focused: bool) {
+    /// Records a focus change the host reported for the page. Losing focus
+    /// while a query is typed asks the page to end the search; gaining focus
+    /// changes nothing else.
+    pub fn on_focus_change(&mut self, focused: bool) -> Vec<Cmd> {
         self.page_focused = focused;
-        if focused && self.mode == Mode::Search {
-            self.mode = Mode::Normal;
-            self.search_query.clear();
-            self.refocus_after_search = false;
+        if !focused && self.mode == Mode::Search {
+            vec![Cmd::SearchResolve]
+        } else {
+            vec![]
         }
     }
 
-    /// `Focus` when the page held focus when the search began, clearing the
-    /// flag.
-    fn take_refocus(&mut self) -> Option<Cmd> {
-        mem::take(&mut self.refocus_after_search).then_some(Cmd::Focus)
+    fn cancel_search(&mut self, cause: SearchCause) -> Vec<Cmd> {
+        self.mode = Mode::Normal;
+        self.search_active = false;
+        let mut cmds = vec![Cmd::SearchCancel];
+        cmds.extend(self.release_after_search(cause));
+        cmds
+    }
+
+    /// `Blur` when a key ended a search that began without page focus; clears the flag.
+    fn release_after_search(&mut self, cause: SearchCause) -> Option<Cmd> {
+        let blur = mem::take(&mut self.blur_after_search);
+        (blur && cause == SearchCause::Key).then_some(Cmd::Blur)
+    }
+
+    /// Puts `SetForwardKeys` first in `cmds` when the mode now needs a
+    /// different forward-key set than `before`, the set the page carried.
+    fn with_key_set(&self, before: KeySet, mut cmds: Vec<Cmd>) -> Vec<Cmd> {
+        let wanted = KeySet::of(self.mode);
+        if wanted != before {
+            cmds.insert(0, Cmd::SetForwardKeys(wanted));
+        }
+        cmds
     }
 
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
@@ -221,10 +257,10 @@ impl App {
     }
 
     fn heading_jump(&self, forward: bool) -> Vec<Cmd> {
-        if self.outline.is_empty() {
+        if self.heading_count == 0 {
             return vec![];
         }
-        let last = self.outline.len() - 1;
+        let last = self.heading_count - 1;
         let target = match (self.current_heading_index, forward) {
             (None, _) => 0,
             (Some(i), true) => (i + 1).min(last),
@@ -243,14 +279,7 @@ mod tests {
 
     fn app_with_outline(n: usize) -> App {
         let mut app = App::default();
-        app.set_outline(
-            (0..n)
-                .map(|i| Heading {
-                    level: 1,
-                    text: format!("h{i}"),
-                })
-                .collect(),
-        );
+        app.set_heading_count(n);
         app
     }
 
@@ -302,42 +331,6 @@ mod tests {
     }
 
     #[test]
-    fn search_flow_enters_types_confirms_returns_to_normal() {
-        let mut app = App::default();
-        app.on_action(Action::EnterSearch);
-        assert_eq!(app.mode(), Mode::Search);
-        app.on_action(Action::SearchChar('f'));
-        app.on_action(Action::SearchChar('o'));
-        assert_eq!(
-            app.on_action(Action::SearchConfirm),
-            vec![Cmd::Search("fo".into())]
-        );
-        assert_eq!(app.mode(), Mode::Normal);
-    }
-
-    #[test]
-    fn n_navigates_only_when_search_active() {
-        let mut app = App::default();
-        assert_eq!(app.on_action(Action::SearchNext), vec![]);
-        app.on_action(Action::EnterSearch);
-        app.on_action(Action::SearchChar('x'));
-        app.on_action(Action::SearchConfirm);
-        assert_eq!(
-            app.on_action(Action::SearchNext),
-            vec![Cmd::SearchNav(SearchDir::Next)]
-        );
-    }
-
-    #[test]
-    fn escape_clears_active_search() {
-        let mut app = App::default();
-        app.on_action(Action::EnterSearch);
-        app.on_action(Action::SearchChar('x'));
-        app.on_action(Action::SearchConfirm);
-        assert_eq!(app.on_action(Action::Escape), vec![Cmd::ClearSearch]);
-    }
-
-    #[test]
     fn outline_toggle_move_and_confirm() {
         let mut app = app_with_outline(3);
         app.on_action(Action::ToggleOutline);
@@ -380,18 +373,6 @@ mod tests {
     }
 
     #[test]
-    fn search_active_reflects_lifecycle() {
-        let mut app = App::default();
-        assert!(!app.search_active());
-        app.on_action(Action::EnterSearch);
-        app.on_action(Action::SearchChar('x'));
-        app.on_action(Action::SearchConfirm);
-        assert!(app.search_active());
-        app.on_action(Action::Escape);
-        assert!(!app.search_active());
-    }
-
-    #[test]
     fn heading_jump_is_noop_at_boundaries() {
         let mut app = app_with_outline(3);
         app.set_current_heading_index(Some(2));
@@ -414,83 +395,247 @@ mod tests {
         app
     }
 
-    /// Asserts that opening the search always takes the keyboard back from
-    /// the page.
-    ///
-    /// Case: the user presses `/`, once after clicking the page and once
-    /// before ever clicking it.
-    #[test]
-    fn entering_search_blurs_the_page() {
-        assert_eq!(
-            focused_app().on_action(Action::EnterSearch),
-            vec![Cmd::Blur]
-        );
-        assert_eq!(
-            App::default().on_action(Action::EnterSearch),
-            vec![Cmd::Blur]
-        );
+    fn submitted(app: &mut App) {
+        app.on_action(Action::EnterSearch);
+        app.on_action(Action::PageSearchSubmit(SearchCause::Key));
     }
 
-    /// Asserts that confirming or escaping a search gives the page its focus
-    /// back when it had it at `/`.
+    /// Asserts that `/` empties the forward keys, focuses the page, and starts typing.
     ///
-    /// Case: the user clicks the page, searches, and wants to keep scrolling
-    /// with the wheel afterwards.
+    /// Case: the user presses `/` before ever clicking the page.
     #[test]
-    fn leaving_search_refocuses_a_page_that_was_focused() {
-        let mut app = focused_app();
-        app.on_action(Action::EnterSearch);
-        app.on_focus_change(false);
-        app.on_action(Action::SearchChar('x'));
+    fn entering_search_focuses_the_page_with_no_forward_keys() {
+        let mut app = App::default();
         assert_eq!(
-            app.on_action(Action::SearchConfirm),
-            vec![Cmd::Search("x".into()), Cmd::Focus]
+            app.on_action(Action::EnterSearch),
+            vec![Cmd::SetForwardKeys(KeySet::Search), Cmd::Focus]
         );
-
-        let mut app = focused_app();
-        app.on_action(Action::EnterSearch);
-        app.on_focus_change(false);
-        assert_eq!(app.on_action(Action::Escape), vec![Cmd::Focus]);
+        assert_eq!(app.search_stage(), SearchStage::Typing);
     }
 
-    /// Asserts that leaving a search started without page focus leaves the
-    /// page unfocused.
+    /// Asserts that the focus echo of `/` changes nothing, and that a key submit
+    /// then restores the forward keys and blurs a page that was unfocused at `/`.
     ///
-    /// Case: the user searches before ever clicking the page.
+    /// Case: the user presses `/` without having clicked the page, types a query, and presses Enter.
     #[test]
-    fn leaving_search_leaves_an_unfocused_page_alone() {
+    fn a_key_submit_blurs_a_page_that_was_unfocused_at_slash() {
         let mut app = App::default();
         app.on_action(Action::EnterSearch);
-        app.on_action(Action::SearchChar('x'));
+        assert_eq!(app.on_focus_change(true), vec![]);
+        assert_eq!(app.mode(), Mode::Search);
         assert_eq!(
-            app.on_action(Action::SearchConfirm),
-            vec![Cmd::Search("x".into())]
+            app.on_action(Action::PageSearchSubmit(SearchCause::Key)),
+            vec![Cmd::SetForwardKeys(KeySet::Normal), Cmd::Blur]
+        );
+        assert_eq!(app.search_stage(), SearchStage::Active);
+    }
+
+    /// Asserts that a submit leaves focus on a page that already had it at `/`.
+    ///
+    /// Case: the user clicks the page, then searches and presses Enter.
+    #[test]
+    fn a_submit_keeps_focus_on_a_page_that_had_it() {
+        let mut app = focused_app();
+        app.on_action(Action::EnterSearch);
+        assert_eq!(
+            app.on_action(Action::PageSearchSubmit(SearchCause::Key)),
+            vec![Cmd::SetForwardKeys(KeySet::Normal)]
         );
     }
 
-    /// Asserts that a click on the page during a search cancels the typed
-    /// query, keeps the previous search, and does not refocus later.
+    /// Asserts that a submit caused by a blur never blurs the page.
     ///
-    /// Case: the user starts a second search, then clicks a link on the page
-    /// instead of finishing it.
+    /// Case: the user types a query and then clicks the document body.
     #[test]
-    fn a_page_click_during_search_cancels_it() {
+    fn a_blur_submit_never_blurs() {
+        let mut app = App::default();
+        app.on_action(Action::EnterSearch);
+        assert_eq!(
+            app.on_action(Action::PageSearchSubmit(SearchCause::Blur)),
+            vec![Cmd::SetForwardKeys(KeySet::Normal)]
+        );
+    }
+
+    /// Asserts that escaping a typed search cancels it and returns focus as it was.
+    ///
+    /// Case: the user presses `/`, types, and presses Esc without having clicked the page.
+    #[test]
+    fn escaping_a_typed_search_cancels_it() {
+        let mut app = App::default();
+        app.on_action(Action::EnterSearch);
+        assert_eq!(
+            app.on_action(Action::PageSearchEscape(SearchCause::Key)),
+            vec![
+                Cmd::SetForwardKeys(KeySet::Normal),
+                Cmd::SearchCancel,
+                Cmd::Blur
+            ]
+        );
+        assert_eq!(app.search_stage(), SearchStage::Closed);
+    }
+
+    /// Asserts that cancelling a second search also drops the first, confirmed one
+    /// rather than keeping it.
+    ///
+    /// Case: the user confirms a search, starts another with `/`, and presses Esc.
+    #[test]
+    fn escaping_a_second_search_drops_the_first() {
+        let mut app = App::default();
+        submitted(&mut app);
+        app.on_action(Action::EnterSearch);
+        let cmds = app.on_action(Action::Escape);
+        assert!(cmds.contains(&Cmd::SearchCancel));
+        assert_eq!(app.search_stage(), SearchStage::Closed);
+    }
+
+    /// Asserts that page search reports outside a typed search are ignored.
+    ///
+    /// Case: the page sends a second report for the same search (Enter, then the
+    /// input's blur), or a late report while the outline is open.
+    #[test]
+    fn page_search_reports_outside_a_typed_search_do_nothing() {
+        let mut app = App::default();
+        submitted(&mut app);
+        assert_eq!(
+            app.on_action(Action::PageSearchSubmit(SearchCause::Blur)),
+            vec![]
+        );
+        assert_eq!(app.search_stage(), SearchStage::Active);
+
+        let mut app = app_with_outline(2);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(
+            app.on_action(Action::PageSearchEscape(SearchCause::Key)),
+            vec![]
+        );
+        assert!(app.outline_open());
+    }
+
+    /// Asserts that losing focus while typing asks the page to end the search.
+    ///
+    /// Case: the user types a query and then clicks another pane.
+    #[test]
+    fn losing_focus_while_typing_asks_the_page_to_resolve() {
         let mut app = focused_app();
         app.on_action(Action::EnterSearch);
-        app.on_focus_change(false);
-        app.on_action(Action::SearchChar('a'));
-        app.on_action(Action::SearchConfirm);
-        app.on_focus_change(true);
+        assert_eq!(app.on_focus_change(false), vec![Cmd::SearchResolve]);
+        assert_eq!(app.mode(), Mode::Search);
+    }
+
+    /// Asserts that keys reaching the TUI during a typed search are relayed to the page.
+    ///
+    /// Case: the user types right after `/`, before the page holds keyboard focus.
+    #[test]
+    fn keys_reaching_the_tui_while_typing_are_relayed() {
+        let mut app = App::default();
         app.on_action(Action::EnterSearch);
-        app.on_focus_change(false);
-        app.on_action(Action::SearchChar('b'));
+        assert_eq!(
+            app.on_action(Action::SearchChar('a')),
+            vec![Cmd::SearchType('a')]
+        );
+        assert_eq!(
+            app.on_action(Action::SearchBackspace),
+            vec![Cmd::SearchBackspace]
+        );
+        assert_eq!(app.on_action(Action::SearchConfirm), vec![Cmd::SearchEnter]);
+    }
 
-        app.on_focus_change(true);
-
+    /// Asserts that leaving the document mid-search restores the reading forward keys once.
+    ///
+    /// Case: the user is typing a query and clicks a link to another Markdown file.
+    #[test]
+    fn leaving_the_document_mid_search_restores_the_forward_keys() {
+        let mut app = App::default();
+        app.on_action(Action::EnterSearch);
+        assert_eq!(
+            app.clear_search_state(),
+            vec![Cmd::SetForwardKeys(KeySet::Normal)]
+        );
         assert_eq!(app.mode(), Mode::Normal);
-        assert_eq!(app.query(), "");
-        assert!(app.search_active(), "the previous search stays active");
-        assert_eq!(app.on_action(Action::Escape), vec![Cmd::ClearSearch]);
+        assert_eq!(app.clear_search_state(), vec![]);
+    }
+
+    /// Asserts that `n` navigates only while a confirmed search is active.
+    ///
+    /// Case: the user presses `n` before and after confirming a search.
+    #[test]
+    fn n_navigates_only_when_search_active() {
+        let mut app = App::default();
+        assert_eq!(app.on_action(Action::SearchNext), vec![]);
+        submitted(&mut app);
+        assert_eq!(
+            app.on_action(Action::SearchNext),
+            vec![Cmd::SearchNav(SearchDir::Next)]
+        );
+    }
+
+    /// Asserts that Esc clears a confirmed search.
+    ///
+    /// Case: the user confirms a search, reads the matches, and presses Esc.
+    #[test]
+    fn escape_clears_an_active_search() {
+        let mut app = App::default();
+        submitted(&mut app);
+        assert_eq!(app.on_action(Action::Escape), vec![]);
+        assert_eq!(app.search_stage(), SearchStage::Closed);
+    }
+
+    /// Asserts that an action that keeps the mode does not resend the forward keys.
+    ///
+    /// Case: the user scrolls with `j` while reading.
+    #[test]
+    fn actions_that_keep_the_mode_do_not_resend_forward_keys() {
+        let mut app = App::default();
+        assert_eq!(
+            app.on_action(Action::ScrollLineDown),
+            vec![Cmd::Scroll(ScrollAction::Down)]
+        );
+    }
+
+    /// Asserts that the close button clears a confirmed search and does nothing
+    /// while a query is typed.
+    ///
+    /// Case: the user confirms a search and clicks the find box's close button.
+    #[test]
+    fn the_close_button_clears_a_confirmed_search() {
+        let mut app = App::default();
+        app.on_action(Action::EnterSearch);
+        assert_eq!(app.on_action(Action::PageSearchClose), vec![]);
+        assert_eq!(app.search_stage(), SearchStage::Typing);
+        app.on_action(Action::PageSearchSubmit(SearchCause::Key));
+        app.on_action(Action::PageSearchClose);
+        assert_eq!(app.search_stage(), SearchStage::Closed);
+    }
+
+    /// Asserts that the close button clears a confirmed search while the outline is
+    /// open, leaving the outline open.
+    ///
+    /// Case: the user confirms a search, opens the outline with `o`, and clicks the
+    /// find box's close button.
+    #[test]
+    fn the_close_button_works_with_the_outline_open() {
+        let mut app = app_with_outline(2);
+        submitted(&mut app);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.on_action(Action::PageSearchClose), vec![]);
+        assert_eq!(app.search_stage(), SearchStage::Closed);
+        assert_eq!(app.mode(), Mode::Outline);
+    }
+
+    /// Asserts that a search abandoned by a blur is cancelled without blurring the page.
+    ///
+    /// Case: the user confirms a search, starts another with `/`, types a query with
+    /// no match, and clicks the document body.
+    #[test]
+    fn a_blur_escape_cancels_without_blurring() {
+        let mut app = App::default();
+        submitted(&mut app);
+        app.on_action(Action::EnterSearch);
+        assert_eq!(
+            app.on_action(Action::PageSearchEscape(SearchCause::Blur)),
+            vec![Cmd::SetForwardKeys(KeySet::Normal), Cmd::SearchCancel]
+        );
+        assert_eq!(app.search_stage(), SearchStage::Closed);
     }
 
     /// Asserts that a focus change outside the search leaves the mode as it
@@ -506,5 +651,56 @@ mod tests {
         assert_eq!(app.mode(), Mode::Outline);
         app.on_focus_change(false);
         assert_eq!(app.mode(), Mode::Outline);
+    }
+
+    /// Asserts that opening the outline selects the heading being read.
+    ///
+    /// Case: the user scrolls to the third section and presses `o`.
+    #[test]
+    fn opening_the_outline_selects_the_current_heading() {
+        let mut app = app_with_outline(5);
+        app.set_current_heading_index(Some(2));
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.selected(), 2);
+    }
+
+    /// Asserts that a clicked outline entry becomes the selection and is scrolled to.
+    ///
+    /// Case: the user opens the outline and clicks the fourth heading.
+    #[test]
+    fn an_outline_click_selects_and_jumps() {
+        let mut app = app_with_outline(5);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(
+            app.on_action(Action::OutlineJump(3)),
+            vec![Cmd::ScrollToHeading(3)]
+        );
+        assert_eq!(app.selected(), 3);
+    }
+
+    /// Asserts that an outline click out of range or with the outline closed is ignored.
+    ///
+    /// Case: a click arrives just after the document was replaced by a shorter one,
+    /// or just after the outline was closed.
+    #[test]
+    fn a_stray_outline_click_is_ignored() {
+        let mut app = app_with_outline(2);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.on_action(Action::OutlineJump(5)), vec![]);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.on_action(Action::OutlineJump(1)), vec![]);
+    }
+
+    /// Asserts that heading navigation does nothing in a document without headings.
+    ///
+    /// Case: the user opens a note that has no headings and presses `]]`, then `o` and Enter.
+    #[test]
+    fn a_document_without_headings_ignores_heading_navigation() {
+        let mut app = app_with_outline(0);
+        app.on_action(Action::Prefix(']'));
+        assert_eq!(app.on_action(Action::Prefix(']')), vec![]);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.on_action(Action::OutlineConfirm), vec![]);
+        assert_eq!(app.selected(), 0);
     }
 }
