@@ -9,6 +9,7 @@ import { FindBox } from './find';
 import { collectLocalImages } from './images';
 import { applyLayoutVars, RAIL_HEIGHT, reachedTop } from './layout';
 import { classifyLink } from './links';
+import { OutlinePanel } from './outline';
 import { renderMarkdown } from './render';
 import { CssHighlightPainter, measureTop, revealRange, Search } from './search';
 
@@ -35,6 +36,21 @@ const findBox = new FindBox(
     scrollTo: (y) => window.scrollTo({ top: y }),
   },
 );
+
+const outlineRoot = document.getElementById('outline') as HTMLElement;
+const outlinePanel = new OutlinePanel(outlineRoot, (index) => {
+  orzma.emit('outlineJump', { index });
+});
+
+function applyOutline(open: boolean): void {
+  if (document.body.classList.contains('outline-open') === open) {
+    return;
+  }
+  const anchor = captureScrollAnchor();
+  document.body.classList.toggle('outline-open', open);
+  outlineRoot.hidden = !open;
+  restoreScrollAnchor(anchor);
+}
 
 const rail = document.getElementById('rail') as HTMLElement;
 const toast = document.getElementById('toast') as HTMLElement;
@@ -82,6 +98,8 @@ function renderChromeUi(): void {
   }
   renderRail(rail, chrome, breadcrumb(headingInfos(), currentHeading));
   renderToast(toast, chrome.toast);
+  applyOutline(chrome.outline.open);
+  outlinePanel.mark(chrome.outline.selected, currentHeading);
 }
 
 interface ScrollAnchor {
@@ -161,7 +179,7 @@ function reportScrollState(): void {
       currentHeadingIndex = i;
     }
   }
-  orzma.emit('scrollState', { ratio, currentHeadingIndex });
+  orzma.emit('scrollState', { ratio, currentHeadingIndex, headingCount: heads.length });
   if (currentHeadingIndex !== currentHeading) {
     currentHeading = currentHeadingIndex;
     renderChromeUi();
@@ -232,6 +250,7 @@ async function setContent(payload: ContentPayload): Promise<void> {
   const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
   installHeadingAnchors(content);
+  outlinePanel.setItems(headingInfos());
   await renderMermaid();
   await stageLocalImages(content);
   // NOTE: a newer setContent superseded this one during the await (rapid reloads

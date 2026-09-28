@@ -73,6 +73,22 @@
               padding: 0; border: 0; border-radius: 5px; background: transparent; color: #c9d1d9; }
       #find button:disabled { color: #484f58; }
       #find button svg { width: 14px; height: 14px; }
+      :root { --outline-w: min(260px, 40vw); }
+      body.outline-open { padding-left: calc(var(--outline-w) + 24px); }
+      #outline { position: fixed; top: var(--rail-h); left: 0; bottom: 0; z-index: 5;
+                 box-sizing: border-box; width: var(--outline-w); overflow-y: auto;
+                 overscroll-behavior: contain; padding: 8px 0;
+                 background: #0d1117; border-right: 1px solid #21262d;
+                 font: 13px/1.5 -apple-system, system-ui, sans-serif; }
+      .outline-list { list-style: none; margin: 0; padding: 0; }
+      .outline-list li { position: relative; padding-top: 3px; padding-bottom: 3px; padding-right: 12px;
+                 color: #c9d1d9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                 cursor: pointer; }
+      .outline-list li.current { color: #f0f6fc; }
+      .outline-list li.current::before { content: ''; position: absolute; left: 4px; top: 50%;
+                 width: 4px; height: 4px; margin-top: -2px; border-radius: 50%; background: #4493f8; }
+      .outline-list li.selected { background: #1f6feb40; color: #f0f6fc; }
+      .outline-list li.outline-empty { color: #9198a1; cursor: default; padding-left: 12px; }
     </style>
   </head>
   <body>
@@ -92,6 +108,9 @@
       <button type="button" data-act="next" aria-label="Next match"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button type="button" data-act="close" aria-label="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
     </div>
+    <nav id="outline" aria-label="Outline" hidden>
+      <ol class="outline-list"></ol>
+    </nav>
     <div id="content"></div>
     <div id="toast" role="status" hidden>
       <svg class="toast-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.8v3.8M8 10.9v.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
