@@ -1,6 +1,6 @@
-//! OSC 8 hyperlink hover and cursor-icon control: this module alone writes
-//! `HyperlinkHoverState`, and over an inline webview that owns the pointer it
-//! leaves `CursorIcon` to CEF except to restore CEF's last cursor on entry.
+//! Link hover (OSC 8 and plain-text URLs) and cursor-icon control: this module
+//! alone writes `HyperlinkHoverState`, and over an inline webview that owns the
+//! pointer it leaves `CursorIcon` to CEF except to restore CEF's last cursor on entry.
 
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled, WebviewMouseDisabled};
@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_orzma_tty_renderer::prelude::{
-    HyperlinkHoverState, TerminalCellMetricsResource, TerminalCells, TerminalView,
+    DetectedSpan, HyperlinkHoverState, TerminalCellMetricsResource, TerminalCells, TerminalView,
 };
 use bevy_orzmux::prelude::{OrzmuxSeparator, PaneGeometry, SplitOrientation};
 use orzma_configs::shortcuts::Modifiers;
@@ -36,12 +36,7 @@ impl Plugin for HyperlinkInputPlugin {
             .add_systems(
                 Update,
                 hyperlink_hover_and_cursor
-                    .run_if(
-                        on_message::<MouseMotion>
-                            .or_else(on_message::<CursorMoved>)
-                            .or_else(on_message::<KeyboardInput>)
-                            .or_else(on_message::<CursorIconInserted>),
-                    )
+                    .run_if(hover_needs_refresh())
                     .in_set(InputPhase::Hover),
             );
     }
@@ -55,6 +50,33 @@ pub(crate) fn link_modifier_held(mods: &Modifiers) -> bool {
     } else {
         mods.ctrl
     }
+}
+
+/// True on a frame that can change what the pointer hovers or what the
+/// cursor shows: pointer motion, a key (including the releases Bevy sends
+/// for every held key when the window loses keyboard focus), a cursor
+/// inserted on the window, or new cells in the pane under the pointer
+/// while the link modifier is held. Every condition is evaluated on every
+/// frame.
+fn hover_needs_refresh() -> impl SystemCondition<()> {
+    on_message::<MouseMotion>
+        .or_eager(on_message::<CursorMoved>)
+        .or_eager(on_message::<KeyboardInput>)
+        .or_eager(on_message::<CursorIconInserted>)
+        .or_eager(hovered_cells_changed)
+}
+
+/// Whether the cells of the pane under the pointer changed while the link
+/// modifier is held.
+fn hovered_cells_changed(
+    hover: Res<HyperlinkHoverState>,
+    cells: Query<Ref<TerminalCells>>,
+) -> bool {
+    hover.modifier_held
+        && hover
+            .entity
+            .and_then(|entity| cells.get(entity).ok())
+            .is_some_and(|cells| cells.is_changed())
 }
 
 /// Every terminal surface, with the input gates that decide who owns the
@@ -108,6 +130,7 @@ fn hyperlink_hover_and_cursor(
 
     hover.entity = None;
     hover.hyperlink_id = None;
+    hover.detected = None;
 
     let target = targets.target(&mut hover, cursor_phys);
     let over_webview = matches!(target, HoverTarget::Webview);
@@ -127,6 +150,7 @@ fn hyperlink_hover_and_cursor(
 fn reset_hover_state(hover: &mut HyperlinkHoverState) {
     hover.entity = None;
     hover.hyperlink_id = None;
+    hover.detected = None;
     hover.modifier_held = false;
 }
 
@@ -233,8 +257,9 @@ impl HoverTargetParams<'_, '_> {
 
     /// The region for the topmost terminal surface under `cursor_phys`, in
     /// window physical px. Over a terminal grid whose mouse input is live,
-    /// records that surface and the hyperlink id of the cell under the
-    /// pointer in `hover`; elsewhere leaves both untouched.
+    /// records in `hover` that surface, the hyperlink id of the cell under the
+    /// pointer, and, while the link modifier is held over a cell without one,
+    /// the detected URL that cell shows; elsewhere leaves them untouched.
     fn over_surface(&self, hover: &mut HyperlinkHoverState, cursor_phys: Vec2) -> HoverTarget {
         let candidates = self
             .surfaces
@@ -262,16 +287,22 @@ impl HoverTargetParams<'_, '_> {
             return HoverTarget::Default;
         };
         let (cell_w, cell_h) = cell_pitch_phys(&self.metrics.metrics);
-        let id = phys_to_pane_local(node, transform, cursor_phys)
+        let cell = phys_to_pane_local(node, transform, cursor_phys)
             .map(|local| cell_at_local(local, cell_w, cell_h, view.cols, view.rows))
-            .and_then(|(col, row, _side)| {
-                cells.hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
-            })
+            .map(|(col, row, _side)| (row.saturating_sub(1) as u16, col.saturating_sub(1) as u16));
+        let id = cell
+            .and_then(|(row, col)| cells.hyperlink_at(row, col))
             .map(|(id, _uri)| id);
+        let detected = cell
+            .filter(|_| id.is_none() && hover.modifier_held)
+            .and_then(|(row, col)| cells.detected_url_at(row, col))
+            .as_ref()
+            .map(DetectedSpan::from);
         hover.entity = Some(entity);
         hover.hyperlink_id = id;
+        hover.detected = detected;
         HoverTarget::Terminal {
-            has_link: id.is_some(),
+            has_link: id.is_some() || detected.is_some(),
             modifier_held: hover.modifier_held,
         }
     }
@@ -350,7 +381,7 @@ fn watch_primary_window_cursor(
 mod tests {
     use super::*;
     use bevy_orzmux::prelude::SplitId;
-    use orzma_vt::prelude::HyperlinkId;
+    use orzma_vt::prelude::{HyperlinkId, HyperlinkUri, ViewportCell};
 
     fn empty() -> Modifiers {
         Modifiers::default()
@@ -1243,5 +1274,236 @@ mod tests {
             None,
             "a drag in flight hovers no terminal"
         );
+    }
+
+    /// A 10x5 grid whose top row shows the plain-text URL `http://a.b`
+    /// and carries no OSC 8 link.
+    fn url_grid() -> (TerminalView, TerminalCells) {
+        use orzma_vt::prelude::Cell;
+        let mut rows = vec![vec![Cell::default(); 10]; 5];
+        for (cell, c) in rows[0].iter_mut().zip("http://a.b".chars()) {
+            cell.c = c;
+        }
+        (
+            TerminalView {
+                cols: 10,
+                rows: 5,
+                ..default()
+            },
+            TerminalCells {
+                cells: rows,
+                ..default()
+            },
+        )
+    }
+
+    fn hold_link_modifier(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        if cfg!(target_os = "macos") {
+            keys.press(KeyCode::SuperLeft);
+        } else {
+            keys.press(KeyCode::ControlLeft);
+        }
+    }
+
+    /// A hover world with the pointer on the first cell of `url_grid`,
+    /// with the link modifier held when `hold` is set; returns the app,
+    /// the window and the pane.
+    fn url_hover_app(hold: bool) -> (App, Entity, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseMotion>()
+            .init_resource::<HyperlinkHoverState>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .insert_resource(hover_test_metrics())
+            .init_resource::<CefCursor>()
+            .init_resource::<OrzmaMouseConfig>()
+            .add_systems(Update, hyperlink_hover_and_cursor);
+        if hold {
+            hold_link_modifier(&mut app);
+        }
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
+        let window = app
+            .world_mut()
+            .spawn((
+                window,
+                PrimaryWindow,
+                CursorIcon::System(SystemCursorIcon::Default),
+            ))
+            .id();
+        let (view, cells) = url_grid();
+        let pane = app
+            .world_mut()
+            .spawn((
+                OrzmaTerminal,
+                ComputedNode {
+                    size: Vec2::new(80.0, 80.0),
+                    ..ComputedNode::DEFAULT
+                },
+                UiGlobalTransform::from_xy(40.0, 40.0),
+                view,
+                cells,
+            ))
+            .id();
+        (app, window, pane)
+    }
+
+    /// Asserts that hovering a plain-text URL with the activation modifier
+    /// held records its span and no OSC 8 id, and shows the pointer.
+    ///
+    /// Case: the user holds Cmd (Ctrl off macOS) over the address a
+    /// development server printed.
+    #[test]
+    fn hovering_a_plain_url_with_the_modifier_records_its_span() {
+        let (mut app, window, pane) = url_hover_app(true);
+        app.update();
+        let hover = app.world().resource::<HyperlinkHoverState>();
+        assert_eq!(hover.entity, Some(pane));
+        assert_eq!(hover.hyperlink_id, None);
+        assert_eq!(
+            hover.detected,
+            Some(DetectedSpan {
+                first: ViewportCell { row: 0, col: 0 },
+                last: ViewportCell { row: 0, col: 9 },
+            })
+        );
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Pointer))
+        );
+    }
+
+    /// Asserts that without the activation modifier a plain-text URL is not
+    /// detected and the pointer stays an I-beam.
+    ///
+    /// Case: the user moves the mouse across a URL in build output without
+    /// holding Cmd or Ctrl.
+    #[test]
+    fn a_plain_url_is_not_detected_without_the_modifier() {
+        let (mut app, window, _) = url_hover_app(false);
+        app.update();
+        assert_eq!(app.world().resource::<HyperlinkHoverState>().detected, None);
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Text))
+        );
+    }
+
+    /// Asserts that an OSC 8 link on the hovered cell wins over the URL its
+    /// text shows.
+    ///
+    /// Case: a program prints a URL as the visible text of an OSC 8 link
+    /// that points elsewhere, and the user holds Cmd over it.
+    #[test]
+    fn an_osc8_link_wins_over_the_url_its_text_shows() {
+        let (mut app, _, pane) = url_hover_app(true);
+        {
+            let mut cells = app
+                .world_mut()
+                .get_mut::<TerminalCells>(pane)
+                .expect("the pane's cells");
+            cells.cells[0][0].hyperlink_id = Some(id(7));
+            cells
+                .hyperlinks
+                .insert(id(7), HyperlinkUri::new("https://osc8.example"));
+        }
+        app.update();
+        let hover = app.world().resource::<HyperlinkHoverState>();
+        assert_eq!(hover.hyperlink_id, Some(id(7)));
+        assert_eq!(hover.detected, None);
+    }
+
+    /// Asserts that once the keys are released the next hover pass clears
+    /// the detected span and turns the pointer back into an I-beam.
+    ///
+    /// Case: the user holds Cmd over a URL and presses Cmd+Tab, so the
+    /// window loses keyboard focus, which releases every key.
+    #[test]
+    fn released_keys_clear_the_detected_span_and_the_pointer() {
+        let (mut app, window, _) = url_hover_app(true);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<HyperlinkHoverState>()
+                .detected
+                .is_some()
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release_all();
+        app.update();
+        assert_eq!(app.world().resource::<HyperlinkHoverState>().detected, None);
+        assert_eq!(
+            cursor_of(&app, window),
+            Some(CursorIcon::System(SystemCursorIcon::Text))
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct Refreshes(usize);
+
+    /// An app counting the runs `hover_needs_refresh` allows, with two panes
+    /// and the settling run already forgotten; returns the app, the pane
+    /// the tests hover, and another pane.
+    fn refresh_app() -> (App, Entity, Entity) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseMotion>()
+            .add_message::<CursorMoved>()
+            .add_message::<KeyboardInput>()
+            .add_message::<CursorIconInserted>()
+            .init_resource::<HyperlinkHoverState>()
+            .init_resource::<Refreshes>()
+            .add_systems(
+                Update,
+                (|mut runs: ResMut<Refreshes>| runs.0 += 1).run_if(hover_needs_refresh()),
+            );
+        let hovered = app.world_mut().spawn(TerminalCells::default()).id();
+        let other = app.world_mut().spawn(TerminalCells::default()).id();
+        app.update();
+        app.world_mut().resource_mut::<Refreshes>().0 = 0;
+        (app, hovered, other)
+    }
+
+    fn refreshes(app: &App) -> usize {
+        app.world().resource::<Refreshes>().0
+    }
+
+    fn repaint(app: &mut App, pane: Entity) {
+        app.world_mut()
+            .get_mut::<TerminalCells>(pane)
+            .expect("a pane")
+            .cells
+            .push(Vec::new());
+    }
+
+    /// Asserts that new cells in the hovered pane ask for a hover pass only
+    /// while the link modifier is held, and new cells elsewhere never do.
+    ///
+    /// Case: the user holds Cmd over a pane where a build is printing while
+    /// a second pane prints a log, and then lets go of Cmd.
+    #[test]
+    fn only_the_hovered_panes_new_cells_refresh_the_hover_while_the_modifier_is_held() {
+        let (mut app, hovered, other) = refresh_app();
+        {
+            let mut hover = app.world_mut().resource_mut::<HyperlinkHoverState>();
+            hover.entity = Some(hovered);
+            hover.modifier_held = true;
+        }
+        repaint(&mut app, hovered);
+        app.update();
+        assert_eq!(refreshes(&app), 1, "the hovered pane repainted");
+        app.update();
+        assert_eq!(refreshes(&app), 1, "nothing changed");
+        repaint(&mut app, other);
+        app.update();
+        assert_eq!(refreshes(&app), 1, "another pane repainted");
+        app.world_mut()
+            .resource_mut::<HyperlinkHoverState>()
+            .modifier_held = false;
+        repaint(&mut app, hovered);
+        app.update();
+        assert_eq!(refreshes(&app), 1, "the modifier is up");
     }
 }
