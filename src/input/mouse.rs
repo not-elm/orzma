@@ -251,11 +251,14 @@ impl<'a> CellContext<'a> {
         )
     }
 
-    /// The URI of the OSC 8 hyperlink on the 1-based `cell`, if any.
+    /// The URI the 1-based `cell` links to: its OSC 8 hyperlink, else the
+    /// URL detected in the plain text it shows.
     fn link_at(&self, cell: CellCoord) -> Option<String> {
+        let (row, col) = ((cell.row - 1) as u16, (cell.col - 1) as u16);
         self.cells
-            .hyperlink_at((cell.row - 1) as u16, (cell.col - 1) as u16)
+            .hyperlink_at(row, col)
             .map(|(_id, uri)| uri.as_str().to_string())
+            .or_else(|| self.cells.detected_url_at(row, col).map(|url| url.uri))
     }
 }
 

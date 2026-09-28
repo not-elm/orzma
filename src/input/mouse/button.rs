@@ -1139,9 +1139,96 @@ mod tests {
         assert!(
             !log.iter().any(|heard| matches!(
                 heard,
-                Heard::Pointer(entity, PointerInput { kind: PointerKind::Cancel, .. }) if *entity == left
+                    Heard::Pointer(entity, PointerInput { kind: PointerKind::Cancel, .. }) if *entity == left
             )),
             "{log:?}"
         );
+    }
+
+    /// A pane like `spawn_pane` whose top row shows `text` in plain,
+    /// unlinked cells.
+    fn spawn_text_pane(app: &mut App, left: f32, width: f32, text: &str) -> Entity {
+        let pane = spawn_pane(app, left, width);
+        let row = text
+            .chars()
+            .map(|c| Cell {
+                c,
+                ..Cell::default()
+            })
+            .collect();
+        app.world_mut().entity_mut(pane).insert(TerminalCells {
+            cells: vec![row],
+            ..default()
+        });
+        pane
+    }
+
+    /// Presses and releases the left button with the link modifier held
+    /// at the pane's first cell, after forgetting what the move logged.
+    fn modified_click_at_origin(app: &mut App) {
+        move_to(app, Vec2::new(4.0, 8.0));
+        app.update();
+        app.world_mut().resource_mut::<Log>().0.clear();
+        hold_link_modifier(app);
+        write_button(app, MouseButton::Left, ButtonState::Pressed);
+        write_button(app, MouseButton::Left, ButtonState::Released);
+        app.update();
+    }
+
+    /// Asserts that a modified press on a URL in plain text opens it instead
+    /// of reaching the pane's backend.
+    ///
+    /// Case: the user holds the platform's link modifier and clicks the
+    /// address `npm run dev` printed.
+    #[test]
+    fn a_modified_press_on_a_plain_url_opens_it_without_forwarding() {
+        let mut app = pointer_app();
+        spawn_text_pane(&mut app, 0.0, 800.0, "https://example.com");
+        modified_click_at_origin(&mut app);
+        assert_eq!(
+            app.world().resource::<Log>().0,
+            vec![Heard::Opened("https://example.com".to_string())]
+        );
+    }
+
+    /// Asserts that a modified press on an OSC 8 link opens the link's
+    /// target rather than the URL its text shows.
+    ///
+    /// Case: a program prints a URL as the visible text of an OSC 8 link
+    /// that points elsewhere, and the user Cmd-clicks it.
+    #[test]
+    fn an_osc8_target_wins_over_the_url_its_text_shows() {
+        let mut app = pointer_app();
+        let pane = spawn_text_pane(&mut app, 0.0, 800.0, "https://text.example");
+        let id = HyperlinkId::new(7).expect("nonzero");
+        {
+            let mut cells = app
+                .world_mut()
+                .get_mut::<TerminalCells>(pane)
+                .expect("the pane's cells");
+            cells.cells[0][0].hyperlink_id = Some(id);
+            cells
+                .hyperlinks
+                .insert(id, HyperlinkUri::new("https://osc8.example"));
+        }
+        modified_click_at_origin(&mut app);
+        assert_eq!(
+            app.world().resource::<Log>().0,
+            vec![Heard::Opened("https://osc8.example".to_string())]
+        );
+    }
+
+    /// Asserts that a modified press on text that shows no URL reaches the
+    /// pane as an ordinary press.
+    ///
+    /// Case: the user holds Cmd and clicks a word in the shell output.
+    #[test]
+    fn a_modified_press_on_text_without_a_url_reaches_the_pane() {
+        let mut app = pointer_app();
+        let pane = spawn_text_pane(&mut app, 0.0, 800.0, "hello");
+        modified_click_at_origin(&mut app);
+        let log = &app.world().resource::<Log>().0;
+        assert!(log.contains(&Heard::Clicked(pane)));
+        assert!(!log.iter().any(|heard| matches!(heard, Heard::Opened(_))));
     }
 }
