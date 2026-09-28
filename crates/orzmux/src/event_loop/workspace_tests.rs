@@ -60,8 +60,9 @@ fn the_first_pane_opens_the_first_workspace() {
     );
 }
 
-/// Asserts that a new workspace is displayed and that the `Layout` then
-/// lists only its pane.
+/// Asserts that a new workspace is announced as displayed between
+/// `PaneOpened` and `Layout`, and that the `Layout` then lists only its
+/// pane.
 ///
 /// Case: the user presses new-workspace while a shell runs in the first
 /// workspace.
@@ -69,10 +70,34 @@ fn the_first_pane_opens_the_first_workspace() {
 fn a_new_workspace_is_displayed_alone() {
     let mut h = Harness::new();
     let (first, _p1) = h.open_root();
-    let (second, _p2) = h.open_workspace(RequestId(2));
-    let layout = h.backend().workspaces().active().map(|w| w.tree.panes());
-    assert_eq!(layout, Some(vec![second]));
-    assert_ne!(first, second);
+    h.send(OrzmuxCommand::NewPane {
+        request: RequestId(2),
+        at: NewPaneAt::Workspace,
+        cwd: None,
+        env: vec![],
+    });
+    let events = h.drain();
+    let Some(OrzmuxEvent::PaneOpened { pane: second, .. }) = events.front() else {
+        panic!("expected PaneOpened, got {events:?}");
+    };
+    assert_ne!(first, *second);
+    assert!(
+        matches!(
+            events.get(1),
+            Some(OrzmuxEvent::Workspaces { entries, active, .. })
+                if entries.iter().map(|w| w.id).eq([WorkspaceId(1), WorkspaceId(2)])
+                    && *active == Some(WorkspaceId(2))
+        ),
+        "expected Workspaces displaying the new workspace, got {events:?}"
+    );
+    let Some(OrzmuxEvent::Layout { layout, .. }) = events.get(2) else {
+        panic!("expected a Layout after Workspaces, got {events:?}");
+    };
+    assert_eq!(
+        layout.panes.iter().map(|r| r.pane).collect::<Vec<_>>(),
+        vec![*second]
+    );
+    assert_eq!(layout.active, Some(*second));
 }
 
 /// Asserts that the last pane of the last workspace empties both the
