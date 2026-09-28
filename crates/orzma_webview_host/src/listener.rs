@@ -753,6 +753,45 @@ mod tests {
             )
             .unwrap();
         }
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let sock = dir.path().join("raw.sock");
+            let listener = UnixListener::bind(&sock).unwrap();
+            let (mut eof, mut timed_out, mut other) = (0, 0, 0);
+            for _ in 0..200 {
+                let mut client = UnixStream::connect(&sock).unwrap();
+                let (server, _) = listener.accept().unwrap();
+                let mut reader = server.try_clone().unwrap();
+                let writer_dup = server.try_clone().unwrap();
+                reader
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut buf = [0u8; 64];
+                client.write_all(b"hello\n").unwrap();
+                let _ = reader.read(&mut buf).unwrap();
+                drop(client);
+                thread::sleep(Duration::from_millis(20));
+                match reader.read(&mut buf) {
+                    Ok(0) => eof += 1,
+                    Err(error)
+                        if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                    {
+                        timed_out += 1;
+                    }
+                    _ => other += 1,
+                }
+                drop(writer_dup);
+                drop(server);
+                if timed_out >= 10 {
+                    break;
+                }
+            }
+            writeln!(
+                report,
+                "{listener_like}: eof={eof} timed_out={timed_out} other={other}"
+            )
+            .unwrap();
+        }
         panic!("{report}");
     }
 
