@@ -287,6 +287,7 @@ class PackageDmg(unittest.TestCase):
                 self.staged.append({
                     "entries": sorted(p.name for p in srcfolder.iterdir()),
                     "link": os.readlink(srcfolder / "Applications"),
+                    "mode": srcfolder.stat().st_mode & 0o777,
                 })
                 Path(argv[-1]).write_bytes(b"new dmg")
             if fail_on is not None and argv[:2] == fail_on:
@@ -306,7 +307,8 @@ class PackageDmg(unittest.TestCase):
         self.assertEqual(self.dmg.read_bytes(), b"new dmg")
         self.assertEqual(self.sidecar.read_text(), f"{digest}  orzma-9.9.9-arm64.dmg\n")
         self.assertEqual(
-            self.staged, [{"entries": ["Applications", "orzma.app"], "link": "/Applications"}]
+            self.staged,
+            [{"entries": ["Applications", "orzma.app"], "link": "/Applications", "mode": 0o755}],
         )
         self.assertEqual(self._staging_dirs(), [])
 
@@ -758,6 +760,7 @@ class EndToEnd(unittest.TestCase):
             )
             try:
                 mounted_app = mount / "orzma.app"
+                self.assertEqual(mount.stat().st_mode & 0o777, 0o755)
                 self.assertTrue(mounted_app.is_dir())
                 link = mount / "Applications"
                 self.assertTrue(link.is_symlink())

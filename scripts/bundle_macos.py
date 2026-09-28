@@ -502,6 +502,7 @@ def notarize(cfg: BundleConfig) -> None:
 
 
 def stage_dmg(app: Path, staging: Path) -> None:
+    staging.chmod(0o755)
     run(ditto_copy_argv(app, staging / app.name))
     (staging / "Applications").symlink_to("/Applications")
 
