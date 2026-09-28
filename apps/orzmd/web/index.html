@@ -51,6 +51,28 @@
       #toast.toast-info { color: #9198a1; }
       #toast .toast-icon { flex: none; width: 14px; height: 14px; color: #ff7b72; }
       #toast.toast-info .toast-icon { display: none; }
+      #find { position: fixed; top: calc(var(--rail-h) + 8px); right: 16px; z-index: 10;
+              box-sizing: border-box; width: min(320px, 100vw - 32px); height: 32px;
+              align-items: center; gap: 8px; padding: 0 6px 0 10px;
+              background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+              box-shadow: 0 10px 28px rgba(1, 4, 9, .6); color: #e6edf3;
+              font: 12.5px/1 -apple-system, system-ui, sans-serif; }
+      #find:not([hidden]) { display: flex; }
+      #find.no-results { border-color: #f85149aa; }
+      #find .find-icon { flex: none; width: 14px; height: 14px; color: #9198a1; }
+      #find .find-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
+              color: inherit; font: inherit; padding: 0; }
+      #find .find-case { flex: none; font-size: 11px; color: #6e7681; padding: 1px 4px;
+              border: 1px solid transparent; border-radius: 4px; }
+      #find .find-case.on { color: #f0f6fc; border-color: #30363d; }
+      #find .find-count { flex: none; color: #9198a1; font-variant-numeric: tabular-nums; }
+      #find.no-results .find-count { color: #ff7b72; }
+      #find .find-wrap { color: #e3b341; margin-right: 6px; }
+      #find .find-sep { flex: none; width: 1px; height: 16px; background: #30363d; }
+      #find button { flex: none; width: 22px; height: 22px; display: grid; place-items: center;
+              padding: 0; border: 0; border-radius: 5px; background: transparent; color: #c9d1d9; }
+      #find button:disabled { color: #484f58; }
+      #find button svg { width: 14px; height: 14px; }
     </style>
   </head>
   <body>
@@ -60,6 +82,16 @@
       <kbd class="rail-key" hidden></kbd>
       <span class="rail-missing" hidden>File deleted</span>
     </header>
+    <div id="find" hidden>
+      <svg class="find-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <input class="find-input" type="text" placeholder="Find" autocomplete="off" spellcheck="false" aria-label="Find in document" />
+      <span class="find-case" title="Match case (automatic)">Aa</span>
+      <span class="find-count"><span class="find-wrap" hidden>↻</span><span class="find-num"></span></span>
+      <span class="find-sep"></span>
+      <button type="button" data-act="prev" aria-label="Previous match"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button type="button" data-act="next" aria-label="Next match"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button type="button" data-act="close" aria-label="Close"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+    </div>
     <div id="content"></div>
     <div id="toast" role="status" hidden>
       <svg class="toast-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.8v3.8M8 10.9v.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>

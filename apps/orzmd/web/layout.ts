@@ -9,6 +9,9 @@ export function reachedTop(top: number): boolean {
   return top <= SCROLL_OFFSET + 1;
 }
 
+/** Distance from the viewport top below which a match is covered by neither the rail nor the find box. */
+export const FIND_CLEARANCE = RAIL_HEIGHT + 48;
+
 /** Writes the layout values into the `--rail-h` and `--scroll-offset` custom properties of `root`. */
 export function applyLayoutVars(root: HTMLElement): void {
   root.style.setProperty('--rail-h', `${RAIL_HEIGHT}px`);

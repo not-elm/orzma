@@ -5,6 +5,7 @@ import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
 import { breadcrumb, type Chrome, type HeadingInfo, renderRail, renderToast } from './chrome';
+import { FindBox } from './find';
 import { collectLocalImages } from './images';
 import { applyLayoutVars, RAIL_HEIGHT, reachedTop, SCROLL_OFFSET } from './layout';
 import { classifyLink } from './links';
@@ -15,6 +16,25 @@ mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' 
 
 const content = document.getElementById('content') as HTMLElement;
 const search = new Search(new CssHighlightPainter(), measureTop);
+
+const findBox = new FindBox(
+  document.getElementById('find') as HTMLElement,
+  search,
+  {
+    submit: (cause) => orzma.emit('searchSubmit', { cause }),
+    escape: (cause) => orzma.emit('searchEscape', { cause }),
+    close: () => orzma.emit('searchClose', {}),
+  },
+  {
+    content,
+    schedule: (task) => {
+      requestAnimationFrame(task);
+    },
+    reveal: (range, top) => revealRange(range, { top, bottom: window.innerHeight }),
+    scrollY: () => window.scrollY,
+    scrollTo: (y) => window.scrollTo({ top: y }),
+  },
+);
 
 const rail = document.getElementById('rail') as HTMLElement;
 const toast = document.getElementById('toast') as HTMLElement;
@@ -220,6 +240,7 @@ async function setContent(payload: ContentPayload): Promise<void> {
     return;
   }
   applyScrollTarget(payload.scrollTo, anchor);
+  findBox.rerun();
   reportScrollState();
   renderChromeUi();
 }
@@ -280,16 +301,30 @@ orzma.on('search', (p: { query: string }) => {
   orzma.emit('searchCount', { total: result.total, current: result.current });
 });
 orzma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
-  const result = search.navigate(p.dir);
-  revealCurrentMatch();
-  orzma.emit('searchCount', { total: result.total, current: result.current });
+  findBox.nav(p.dir);
 });
 orzma.on('clearSearch', () => {
-  search.clear();
+  findBox.clear();
+});
+orzma.on('searchType', (p: { text: string }) => {
+  findBox.typeText(p.text);
+});
+orzma.on('searchBackspace', () => {
+  findBox.backspace();
+});
+orzma.on('searchEnter', () => {
+  findBox.enter();
+});
+orzma.on('searchResolve', () => {
+  findBox.resolve();
+});
+orzma.on('searchCancel', () => {
+  findBox.cancel();
 });
 orzma.on('chrome', (c: Chrome) => {
   chrome = c;
   renderChromeUi();
+  findBox.setStage(c.search);
 });
 
 window.addEventListener('resize', renderChromeUi);
