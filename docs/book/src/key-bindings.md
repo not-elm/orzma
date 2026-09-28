@@ -126,6 +126,7 @@ the seven that differ elsewhere.
 | `next-workspace` | `<Leader>]` | Show the workspace to the right, wrapping around. |
 | `previous-workspace` | `<Leader>[` | Show the workspace to the left, wrapping around. |
 | `select-workspace-1` … `select-workspace-9` | `<Leader>1` … `<Leader>9` | Show the first … ninth workspace. |
+| `rename-workspace` | `<Leader>r` | Rename the workspace on screen. |
 
 The window actions orzma 0.1.0 accepted (`new-window`, `next-window`,
 `select-window-0` and the rest, `rename-window`) and `zoom-pane` have been
@@ -145,7 +146,7 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   actions. Unbind the stock default explicitly (`select-left-pane = ""`) or
   pick a free chord.
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
-  stock defaults that includes all 26 leader-bound actions above, silently
+  stock defaults that includes all 27 leader-bound actions above, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g.
   `split-vertical-pane = "Ctrl+Shift+I"`.

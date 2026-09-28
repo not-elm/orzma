@@ -34,11 +34,17 @@ the other workspaces keep running, and pages shown in them keep their state.
 | Leader, then `Shift+X` | Close the workspace on screen and end every shell in it. |
 | Leader, then `]` / `[` | Show the workspace to the right / left (wrapping around). |
 | Leader, then `1` … `9` | Show the first … ninth workspace. |
+| Leader, then `r` | Rename the workspace on screen. |
 
 Click a tab to show its workspace, click its `×` to close it, and click `+` to
 open a new one. A workspace you have not named is called `Workspace n`, where
 `n` is its position in the tab bar. A new workspace starts in the working
 directory of the active pane, like a split.
+
+Double-click a tab, or press the leader and then `r`, to rename its workspace
+in place. Enter or a click anywhere else keeps the new name, and Esc keeps the
+old one. Leave the field empty to go back to `Workspace n`. Drag a tab to move
+its workspace; the numbers of unnamed workspaces follow their new positions.
 
 ## Resizing panes
 
