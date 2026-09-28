@@ -182,7 +182,8 @@ def main(argv: list[str] | None = None) -> None:
     rust_body = run_cargo_about(args.cargo_about_version)
     npm_entries = run_pnpm_licenses(args.pnpm_licenses_version)
     content = assemble(rust_body, npm_entries, LICENSES_DIR)
-    OUTPUT_PATH.write_text(content, encoding="utf-8", newline="\n")
+    with OUTPUT_PATH.open("w", encoding="utf-8", newline="\n") as output:
+        output.write(content)
     print(f"Wrote {OUTPUT_PATH.relative_to(REPO_ROOT)} ({len(npm_entries)} npm packages)")
 
 
