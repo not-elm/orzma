@@ -686,14 +686,24 @@ mod tests {
         );
     }
 
-    /// Asserts that a hidden pane gets both mouse gates, so a gesture held
-    /// in it is cancelled and a pressed webview in it is released.
+    /// Asserts that a hidden pane gets both mouse gates and stops claiming
+    /// the mouse for a webview, so a gesture held in it is cancelled and a
+    /// pressed webview in it is released.
     ///
     /// Case: the user presses the switch-workspace key while dragging a
-    /// selection in a pane.
+    /// selection over a page mounted in a pane.
     #[test]
     fn a_hidden_pane_gets_both_mouse_gates() {
         let (mut app, shell) = make_gate_app();
+        set_gate_cursor(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        assert!(
+            app.world()
+                .entity(shell)
+                .contains::<MouseClaimedByWebview>(),
+            "the cursor over the rect must claim the shell before the pane is hidden, or the \
+             later absence proves nothing"
+        );
         app.world_mut().entity_mut(shell).insert(OrzmuxPaneHidden);
         app.update();
         assert!(
