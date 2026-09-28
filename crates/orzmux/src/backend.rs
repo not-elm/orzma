@@ -37,7 +37,7 @@ pub(crate) use pane::ShellFactory;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u32);
 
-/// A split the layout tree minted. Never reused within one tree.
+/// A split the backend minted. Never reused within one backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SplitId(pub u32);
 
@@ -197,11 +197,12 @@ pub struct Layout {
     /// The extent the panes tile: the window size in cells, widened per
     /// axis to the tree's minimum when the window is smaller.
     pub size: GridSize,
-    /// The pane the backend considers active, when any pane exists.
+    /// The displayed workspace's active pane, or `None` when no workspace
+    /// is displayed.
     pub active: Option<PaneId>,
-    /// Every pane's rectangle in the current tree.
+    /// The rectangle of every pane in the displayed workspace.
     pub panes: Vec<PaneRect>,
-    /// Every divider between adjacent panes in the current tree.
+    /// Every divider between adjacent panes in the displayed workspace.
     pub separators: Vec<Separator>,
 }
 

@@ -45,7 +45,8 @@ pub enum OrzmuxCommand {
     NewPane {
         /// The id the resulting `PaneOpened` / `SpawnFailed` correlates to.
         request: RequestId,
-        /// Where the new pane goes in the layout tree.
+        /// Where the new pane goes: into a split of an existing pane, or
+        /// as the first pane of a new workspace.
         at: NewPaneAt,
         /// The working directory to spawn the shell in, when given.
         cwd: Option<PathBuf>,
@@ -552,9 +553,9 @@ impl EventLoop {
 
 /// Logs a command the backend refused, at the level its failure earns.
 ///
-/// An unresolvable target and a request the webview host turned down log
-/// at `DEBUG`, a refused PTY write goes through [`log_refused_write`] at
-/// `ERROR`, and every other failure logs at `WARN`.
+/// An unresolvable pane or workspace target and a request the webview
+/// host turned down log at `DEBUG`, a refused PTY write goes through
+/// [`log_refused_write`] at `ERROR`, and every other failure logs at `WARN`.
 fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
     match error {
         OrzmuxError::UnresolvedTarget => match target {
@@ -569,6 +570,12 @@ fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &O
                 tracing::debug!(command = name, "pane command dropped: no such pane");
             }
         },
+        OrzmuxError::UnresolvedWorkspace => {
+            tracing::debug!(
+                command = name,
+                "workspace command dropped: no such workspace"
+            );
+        }
         OrzmuxError::PtyWrite { pane, source } => {
             log_refused_write(*pane, name, source, Level::ERROR);
         }
