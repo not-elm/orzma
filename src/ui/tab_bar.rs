@@ -44,7 +44,8 @@ pub(crate) struct WorkspaceTab {
     pub workspace: WorkspaceId,
 }
 
-/// A tab's label text.
+/// A tab's label: a direct child of the tab that holds the label text and
+/// clips it at its own edges, so hiding this node hides the whole label.
 #[derive(Component)]
 pub(crate) struct TabLabel;
 
@@ -136,6 +137,10 @@ const HOVER_BG: Color = Color::srgb_u8(0x1c, 0x1d, 0x22);
 /// hides it under that tab.
 #[derive(Component)]
 struct TabBarLine;
+
+/// The text inside a tab's `TabLabel`.
+#[derive(Component)]
+struct TabLabelText;
 
 /// A tab's close button.
 #[derive(Component)]
@@ -265,10 +270,11 @@ fn size_tab_bar(
 /// keeping the new-workspace button last.
 fn reconcile_tabs(
     mut commands: Commands,
-    mut labels: Query<&mut Text, With<TabLabel>>,
+    mut labels: Query<&mut Text, With<TabLabelText>>,
     workspaces: Res<CurrentWorkspaces>,
     ui_font: Option<Res<TerminalUiFont>>,
     tabs: Query<(Entity, &WorkspaceTab, Option<&Children>)>,
+    label_boxes: Query<&Children, With<TabLabel>>,
     strip: Query<(Entity, Option<&Children>), With<TabStrip>>,
     plus: Query<Entity, With<NewWorkspaceButton>>,
 ) {
@@ -286,8 +292,11 @@ fn reconcile_tabs(
             .get(position)
             .and_then(|entry| entry.name.as_deref());
         let label = tab_label(position, name);
-        for part in parts.into_iter().flatten() {
-            if let Ok(mut text) = labels.get_mut(*part)
+        let texts = parts
+            .into_iter()
+            .flat_map(|parts| label_texts(parts, &label_boxes));
+        for text in texts {
+            if let Ok(mut text) = labels.get_mut(text)
                 && text.0 != label
             {
                 text.0.clone_from(&label);
@@ -344,20 +353,24 @@ fn spawn_tab(
         .observe(on_tab_enter)
         .observe(on_tab_leave)
         .id();
-    commands.spawn((
-        TabLabel,
-        Text::new(label),
-        font.clone(),
-        TextColor(INACTIVE_TEXT),
-        TextLayout::no_wrap(),
-        Node {
-            flex_grow: 1.0,
-            min_width: Val::Px(0.0),
-            overflow: Overflow::clip_x(),
-            ..default()
-        },
-        ChildOf(tab),
-    ));
+    commands
+        .spawn((
+            TabLabel,
+            Node {
+                flex_grow: 1.0,
+                min_width: Val::Px(0.0),
+                overflow: Overflow::clip_x(),
+                ..default()
+            },
+            ChildOf(tab),
+        ))
+        .with_child((
+            TabLabelText,
+            Text::new(label),
+            font.clone(),
+            TextColor(INACTIVE_TEXT),
+            TextLayout::no_wrap(),
+        ));
     commands
         .spawn((
             TabClose,
@@ -388,6 +401,17 @@ fn spawn_tab(
     tab
 }
 
+/// The text entities inside the `TabLabel` among a tab's `parts`.
+fn label_texts<'a>(
+    parts: &'a Children,
+    label_boxes: &'a Query<&Children, With<TabLabel>>,
+) -> impl Iterator<Item = Entity> + 'a {
+    parts
+        .iter()
+        .filter_map(|part| label_boxes.get(part).ok())
+        .flat_map(|texts| texts.iter())
+}
+
 /// Colors each tab for whether it is displayed or hovered, shows the close
 /// button on the displayed tab and on a hovered one, and shows a tab's
 /// divider only when neither it nor the next tab is displayed.
@@ -399,10 +423,11 @@ fn style_tabs(
         &Children,
         Has<TabHovered>,
     )>,
-    mut texts: Query<&mut TextColor, Or<(With<TabLabel>, With<TabClose>)>>,
+    mut texts: Query<&mut TextColor, Or<(With<TabLabelText>, With<TabClose>)>>,
     mut closes: Query<&mut Node, (With<TabClose>, Without<TabDivider>)>,
     mut dividers: Query<&mut Node, (With<TabDivider>, Without<TabClose>)>,
     workspaces: Res<CurrentWorkspaces>,
+    label_boxes: Query<&Children, With<TabLabel>>,
 ) {
     let order = tab_order(&workspaces.entries);
     for (tab, mut background, mut border, parts, hovered) in &mut tabs {
@@ -441,7 +466,7 @@ fn style_tabs(
             top: accent,
             ..BorderColor::DEFAULT
         });
-        for part in parts.iter() {
+        for part in parts.iter().chain(label_texts(parts, &label_boxes)) {
             if let Ok(mut color) = texts.get_mut(part) {
                 color.set_if_neq(text);
             }
@@ -557,8 +582,12 @@ fn scroll_active_tab_into_view(
 mod tests {
     use super::*;
     use bevy::camera::NormalizedRenderTarget;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::math::Affine2;
     use bevy::picking::backend::HitData;
     use bevy::picking::pointer::{Location, PointerId};
+    use bevy::ui::CalculatedClip;
+    use bevy::ui::update::update_clipping_system;
     use std::time::Duration;
 
     /// A request the tab bar sent, in the order it was sent.
@@ -609,13 +638,35 @@ mod tests {
             .filter_map(|child| {
                 let tab = world.get::<WorkspaceTab>(*child)?;
                 let label = world
-                    .get::<Children>(*child)?
+                    .get::<Children>(label_box_in(world, *child))?
                     .iter()
-                    .filter(|part| world.get::<TabLabel>(*part).is_some())
-                    .find_map(|part| world.get::<Text>(part))?;
+                    .find_map(|text| world.get::<Text>(text))?;
                 Some((tab.workspace, label.0.clone()))
             })
             .collect()
+    }
+
+    /// The tab's direct child that carries `TabLabel`.
+    fn label_box_in(world: &World, tab: Entity) -> Entity {
+        world
+            .get::<Children>(tab)
+            .expect("the tab has parts")
+            .iter()
+            .find(|part| world.get::<TabLabel>(*part).is_some())
+            .expect("the label box is a direct child of the tab")
+    }
+
+    fn only_child(app: &App, parent: Entity) -> Entity {
+        let children = app.world().get::<Children>(parent).expect("has children");
+        assert_eq!(children.len(), 1, "exactly one child");
+        children[0]
+    }
+
+    fn place(app: &mut App, entity: Entity, center: Vec2, size: Vec2) {
+        app.world_mut().entity_mut(entity).insert((
+            ComputedNode { size, ..default() },
+            UiGlobalTransform::from(Affine2::from_translation(center)),
+        ));
     }
 
     fn tab_of(app: &mut App, workspace: u32) -> Entity {
@@ -756,6 +807,54 @@ mod tests {
                 Sent::Spawn(NewPaneAt::Workspace),
             ]
         );
+    }
+
+    /// Asserts that a tab's label text is clipped horizontally at the edges
+    /// of its label box, a direct child of the tab, rather than at the
+    /// strip's edges.
+    ///
+    /// Case: a tab has shrunk to its minimum width, and its label is wider
+    /// than the room left beside the ×.
+    #[test]
+    fn a_long_label_is_clipped_at_its_label_box() {
+        let mut app = app_with_tab_bar();
+        set_workspaces(&mut app, &[1], 1);
+        app.update();
+        app.update();
+        let tab = tab_of(&mut app, 1);
+        let label_box = label_box_in(app.world(), tab);
+        let text = only_child(&app, label_box);
+        let strip = {
+            let world = app.world_mut();
+            world
+                .query_filtered::<Entity, With<TabStrip>>()
+                .single(world)
+                .expect("exactly one tab strip")
+        };
+        place(
+            &mut app,
+            strip,
+            Vec2::new(500.0, 14.0),
+            Vec2::new(1000.0, 28.0),
+        );
+        place(
+            &mut app,
+            label_box,
+            Vec2::new(32.5, 14.0),
+            Vec2::new(41.0, 14.0),
+        );
+        place(&mut app, text, Vec2::new(47.0, 14.0), Vec2::new(70.0, 14.0));
+
+        app.world_mut()
+            .run_system_once(update_clipping_system)
+            .expect("the clipping system runs");
+
+        let clip = app
+            .world()
+            .get::<CalculatedClip>(text)
+            .expect("the label text is clipped")
+            .clip;
+        assert_eq!((clip.min.x, clip.max.x), (12.0, 53.0));
     }
 
     /// Asserts that the bar's physical height is 28 logical px rounded to
