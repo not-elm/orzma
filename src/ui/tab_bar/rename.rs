@@ -11,6 +11,7 @@ use bevy::picking::PickingSettings;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems};
 use bevy::ui_widgets::SelectAllOnFocus;
+use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_webview::RequestWebviewFocus;
 use bevy_orzmux::prelude::{
     CurrentWorkspaces, OrzmuxSystems, RequestWorkspaceAction, WorkspaceAction, WorkspaceId,
@@ -180,6 +181,9 @@ impl Plugin for TabRenamePlugin {
                     drop_rename_of_closed_workspace
                         .after(OrzmuxSystems::Drain)
                         .run_if(resource_exists_and_changed::<CurrentWorkspaces>),
+                    commit_on_webview_focus
+                        .after(OrzmuxSystems::Drain)
+                        .run_if(resource_exists_and_changed::<FocusedWebview>),
                     align_multi_click_interval
                         .run_if(resource_exists_and_changed::<OrzmaMouseConfig>),
                 ),
@@ -306,6 +310,13 @@ fn commit_on_outside_press(ev: On<Pointer<Press>>, mut rename: ResMut<WorkspaceR
         return;
     }
     rename.request_end(true);
+}
+
+/// Asks to commit when a webview takes the keyboard focus.
+fn commit_on_webview_focus(mut rename: ResMut<WorkspaceRename>, focused: Res<FocusedWebview>) {
+    if focused.0.is_some() && rename.can_end() {
+        rename.request_end(true);
+    }
 }
 
 /// Commits or discards the ending rename, restores the label, removes the
@@ -630,5 +641,76 @@ mod tests {
         }];
         app.update();
         assert!(!app.world().resource::<WorkspaceRename>().is_active());
+    }
+
+    /// Asserts that a webview taking the keyboard focus commits the
+    /// rename, while the webview focus release that starting the rename
+    /// makes leaves it editing.
+    ///
+    /// Case: the user starts renaming a tab while a page holds the keyboard
+    /// focus, types a name, and a program in another pane then focuses its
+    /// page through the control socket.
+    #[test]
+    fn a_webview_taking_focus_commits_the_rename() {
+        let mut app = finish_app();
+        app.init_resource::<WorkspaceRename>()
+            .init_resource::<CurrentWorkspaces>()
+            .init_resource::<FocusedWebview>()
+            .add_observer(start_rename)
+            .add_observer(
+                |ev: On<RequestWebviewFocus>, mut focused: ResMut<FocusedWebview>| {
+                    focused.0 = ev.target();
+                },
+            )
+            .add_systems(
+                Update,
+                commit_on_webview_focus.run_if(resource_exists_and_changed::<FocusedWebview>),
+            );
+        {
+            let mut workspaces = app.world_mut().resource_mut::<CurrentWorkspaces>();
+            workspaces.entries = vec![WorkspaceEntry {
+                id: WorkspaceId(1),
+                name: None,
+            }];
+            workspaces.active = Some(WorkspaceId(1));
+        }
+        let tab = app
+            .world_mut()
+            .spawn(WorkspaceTab {
+                workspace: WorkspaceId(1),
+            })
+            .id();
+        app.world_mut()
+            .spawn((TabLabel, Node::default(), ChildOf(tab)));
+        let page = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
+        app.update();
+
+        app.world_mut()
+            .trigger(StartWorkspaceRename { workspace: None });
+        app.update();
+
+        assert_eq!(app.world().resource::<FocusedWebview>().0, None);
+        assert!(app.world().resource::<WorkspaceRename>().can_end());
+        let field = app
+            .world()
+            .resource::<WorkspaceRename>()
+            .field()
+            .expect("the rename has a field");
+        app.world_mut()
+            .entity_mut(field)
+            .insert(EditableText::new("build"));
+
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
+        app.update();
+
+        assert!(!app.world().resource::<WorkspaceRename>().is_active());
+        assert_eq!(
+            app.world().resource::<Requested>().0,
+            vec![WorkspaceAction::Rename {
+                workspace: WorkspaceId(1),
+                name: Some("build".into())
+            }]
+        );
     }
 }
