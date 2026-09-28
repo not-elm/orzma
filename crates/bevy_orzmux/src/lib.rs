@@ -18,22 +18,27 @@ mod requests;
 mod signals;
 mod title;
 mod webview;
+mod workspace;
 
 pub mod prelude {
     pub use crate::{
         OrzmuxConnection, OrzmuxPane, OrzmuxPlugin, OrzmuxSystems,
         drain::{OrzmuxPaneSpawnFailed, OrzmuxSessionEnded},
         layout::{
-            OrzmuxActivePaneChanged, OrzmuxPaneContainer, OrzmuxSeparator, PaneGeometry,
-            absolute_px_node,
+            OrzmuxActivePaneChanged, OrzmuxPaneContainer, OrzmuxPaneHidden, OrzmuxSeparator,
+            PaneGeometry, absolute_px_node,
         },
         registry::PaneRegistry,
         requests::*,
         signals::*,
         title::TtyTitle,
         webview::OrzmuxWebviewEvent,
+        workspace::{CurrentWorkspaces, PendingWorkspaceMove},
     };
-    pub use orzmux::prelude::{OrzmuxClient, OrzmuxConfig, SplitId, SplitOrientation};
+    pub use orzmux::prelude::{
+        CloseTarget, OrzmuxClient, OrzmuxConfig, SplitId, SplitOrientation, WorkspaceEntry,
+        WorkspaceId, WorkspaceTarget,
+    };
 }
 
 /// The GUI's connection to the multiplexer backend.

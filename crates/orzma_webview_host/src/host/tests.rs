@@ -1106,6 +1106,32 @@ fn a_socket_focus_moves_focus_to_an_owned_mount() {
     assert_eq!(fixture.pushes(1), [focus_changed(&handle, instance, true)]);
 }
 
+/// Asserts that a socket focus of a placement in a pane that is not on
+/// screen is refused before focus moves, so the page on screen keeps focus
+/// and neither program is told anything.
+///
+/// Case: a program in a background workspace focuses its page while the
+/// user types in a page of the displayed workspace.
+#[test]
+fn a_socket_focus_of_a_hidden_pane_is_refused_before_focus_moves() {
+    let (mut fixture, _hidden_handle, hidden_instance, _hidden_mount) = focused_fixture();
+    fixture.connect_pane(2, 2);
+    let (_visible_handle, visible_instance) = fixture.registered(2, inline());
+    let visible_mount = fixture.mounted(2, visible_instance);
+    fixture.host.visible_panes_changed([2]);
+    let _ = fixture.host.active_pane_changed(Some(2));
+    let _ = gui_focus(&mut fixture, Some(visible_mount));
+    let _ = fixture.pushes(1);
+    let _ = fixture.pushes(2);
+    let result = fixture.control(ControlEvent::Focus {
+        connection: connection(1),
+        instance: Some(hidden_instance.to_string()),
+    });
+    assert!(matches!(refusal(result), Refusal::PaneHidden));
+    assert!(fixture.pushes(1).is_empty());
+    assert!(fixture.pushes(2).is_empty());
+}
+
 /// Asserts that a socket focus on another connection's placement, an
 /// unmounted placement, or a non-interactive one is refused.
 ///

@@ -19,7 +19,7 @@ use orzma_vt::prelude::{
     GridColumn, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize, ScreenLine, VtSignal,
 };
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -170,6 +170,7 @@ pub struct WebviewHost<P> {
     mounts: Mounts<P>,
     focus: FocusState<P>,
     active: Option<P>,
+    visible: Option<HashSet<P>>,
     calls: InFlightCalls,
     composited: HashMap<MountId, CompositeRoute>,
 }
@@ -292,6 +293,13 @@ impl<P: PaneKey> WebviewHost<P> {
         output
     }
 
+    /// Records which panes are on screen. From the first call on, a focus
+    /// of a mount in any other pane is refused with
+    /// [`Refusal::PaneHidden`].
+    pub fn visible_panes_changed(&mut self, visible: impl IntoIterator<Item = P>) {
+        self.visible = Some(visible.into_iter().collect());
+    }
+
     /// Applies one command the GUI sent.
     ///
     /// A `Focus` is always answered with a `FocusChanged` carrying the
@@ -338,11 +346,11 @@ impl<P: PaneKey> WebviewHost<P> {
     /// when a request without a reply names a handle or instance its
     /// connection does not own, an instance not spelled as 32 hex digits, a
     /// mount size out of range, or a `focus` of a placement that is not
-    /// mounted or takes no input, an `emit`, `navigate`, or
-    /// `set_forward_keys` of a handle or instance the connection does not
-    /// own, an `emit` of a handle without the bridge, and a `navigate` to an
-    /// invalid URL or of an unmounted placement or of a page that is not a
-    /// remote page. Nothing changes then.
+    /// mounted or takes no input, or whose pane is not on screen, an `emit`,
+    /// `navigate`, or `set_forward_keys` of a handle or instance the
+    /// connection does not own, an `emit` of a handle without the bridge,
+    /// and a `navigate` to an invalid URL or of an unmounted placement or of
+    /// a page that is not a remote page. Nothing changes then.
     pub fn control(&mut self, event: ControlEvent) -> WebviewHostResult<HostOutput<P>> {
         match event {
             ControlEvent::Hello {
@@ -426,6 +434,7 @@ impl<P: PaneKey> WebviewHost<P> {
             mounts: Mounts::default(),
             focus: FocusState::default(),
             active: None,
+            visible: None,
             calls: InFlightCalls::default(),
             composited: HashMap::new(),
         }
@@ -649,6 +658,13 @@ impl<P: PaneKey> WebviewHost<P> {
     ) -> WebviewHostResult<bool> {
         let route = self.focus_route(mount)?;
         let pane = route.pane();
+        if self
+            .visible
+            .as_ref()
+            .is_some_and(|visible| !visible.contains(&pane))
+        {
+            return Err(Refusal::PaneHidden.into());
+        }
         let FocusTransition::Moved { lost } = self.focus.set(route.clone()) else {
             return Ok(false);
         };

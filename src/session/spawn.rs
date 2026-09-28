@@ -80,7 +80,7 @@ mod tests {
             .insert_resource(OrzmuxConnection(client));
         app.world_mut().spawn((Node::default(), ShellSurfaceUi));
         app.world_mut().trigger(PaneSpawnRequest {
-            at: NewPaneAt::Root,
+            at: NewPaneAt::Workspace,
         });
         app.update();
 
@@ -98,7 +98,7 @@ mod tests {
         let [
             OrzmuxCommand::NewPane {
                 request: sent_request,
-                at: NewPaneAt::Root,
+                at: NewPaneAt::Workspace,
                 cwd: None,
                 env,
             },
@@ -126,7 +126,7 @@ mod tests {
             .insert_resource(OrzmuxConnection(client));
         app.world_mut().spawn((Node::default(), ShellSurfaceUi));
         app.world_mut().trigger(PaneSpawnRequest {
-            at: NewPaneAt::Root,
+            at: NewPaneAt::Workspace,
         });
         app.update();
 
@@ -153,7 +153,7 @@ mod tests {
             .init_resource::<PaneRegistry>();
         app.world_mut().spawn((Node::default(), ShellSurfaceUi));
         app.world_mut().trigger(PaneSpawnRequest {
-            at: NewPaneAt::Root,
+            at: NewPaneAt::Workspace,
         });
         app.update();
 

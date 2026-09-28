@@ -5,7 +5,8 @@ use crate::action::vi::mode::ViModeState;
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
 use crate::surface::OrzmaTerminal;
-use bevy::app::{App, Plugin, Update};
+use crate::ui::tab_bar::rename::{RenameSystems, WorkspaceRename};
+use bevy::app::{App, Plugin, PostUpdate, Update};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::hierarchy::ChildOf;
@@ -14,6 +15,7 @@ use bevy::ecs::observer::On;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -47,6 +49,12 @@ impl Plugin for ImePlugin {
                 (ime_policy_system, read_ime_events)
                     .chain()
                     .in_set(InputPhase::Dispatch),
+            )
+            .add_systems(
+                PostUpdate,
+                reset_ime_after_rename
+                    .after(RenameSystems::Finish)
+                    .run_if(resource_exists_and_changed::<WorkspaceRename>),
             )
             .add_observer(apply_ime_commit_to_terminal);
     }
@@ -162,8 +170,12 @@ pub(crate) fn resolve_focused_surface(
 /// the active pane, the anchor instead comes from that child's overlay
 /// rect origin (`webview_ime_position`), since inline entities carry no
 /// UI node for `webview_anchors` to read.
+///
+/// While a tab rename is active IME stays enabled and the rename field
+/// positions the candidate window.
 fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
+    rename: Option<Res<WorkspaceRename>>,
     focused: Query<Entity, With<KeyboardFocused>>,
     vi_modes: Query<(), With<ViModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalView)>,
@@ -177,6 +189,12 @@ fn ime_policy_system(
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
+    if rename.as_deref().is_some_and(WorkspaceRename::is_active) {
+        if !window.ime_enabled {
+            window.ime_enabled = true;
+        }
+        return;
+    }
     let surface = resolve_focused_surface(&focused);
 
     // NOTE: a focused CEF webview drives its own IME through bevy_cef's
@@ -282,15 +300,22 @@ fn ime_policy_system(
 /// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
 /// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
 /// state machine still runs, so `ImeState` stays consistent) when EITHER any
-/// webview owns keyboard focus OR the focused surface is in vi mode.
+/// webview owns keyboard focus OR the focused surface is in vi mode. While a
+/// tab rename is active the events are dropped unread; they belong to the
+/// rename field.
 fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
+    rename: Option<Res<WorkspaceRename>>,
     focused: Query<Entity, With<KeyboardFocused>>,
     focused_webview: Res<FocusedWebview>,
     vi_modes: Query<(), With<ViModeState>>,
 ) {
+    if rename.as_deref().is_some_and(WorkspaceRename::is_active) {
+        events.clear();
+        return;
+    }
     let surface = resolve_focused_surface(&focused);
     for event in events.read() {
         let Some(commit_text) = apply_event(&mut state, event) else {
@@ -354,6 +379,15 @@ fn webview_ime_position(
     Some((host_origin_phys + rect_origin_phys) / scale_factor.max(f32::EPSILON))
 }
 
+/// Drops an open composition when a tab rename starts or ends, so a
+/// composition cut off by the switch does not keep terminal keys
+/// suppressed.
+fn reset_ime_after_rename(mut state: ResMut<ImeState>) {
+    if state.is_composing() {
+        *state = ImeState::default();
+    }
+}
+
 fn apply_ime_commit_to_terminal(
     ev: On<ImeCommit>,
     mut commands: Commands,
@@ -382,6 +416,7 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_orzma_tty_renderer::prelude::CellMetrics;
+    use bevy_orzmux::prelude::WorkspaceId;
     use orzma_vt::prelude::{Cursor, InstanceId};
     use orzma_webview_host::prelude::MountId;
 
@@ -962,5 +997,128 @@ mod tests {
             app.world().resource::<Hits>().0,
             vec![TerminalKey::Character(KeyText::new("あ").unwrap())]
         );
+    }
+
+    fn policy_app_with_focused_terminal() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_resource::<FocusedWebview>();
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
+        app.world_mut().spawn((
+            OrzmaTerminal,
+            KeyboardFocused,
+            ComputedNode::default(),
+            UiGlobalTransform::default(),
+            TerminalView {
+                cursor: Some(Cursor::default()),
+                ..default()
+            },
+        ));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app
+    }
+
+    #[derive(Resource, Default)]
+    struct KeyInputs(usize);
+
+    /// Asserts that a rename starting or ending drops an open composition,
+    /// so terminal keys are not suppressed afterwards.
+    ///
+    /// Case: the user starts converting kana in the rename field and clicks
+    /// a pane before finishing.
+    #[test]
+    fn ending_a_rename_mid_composition_resets_the_ime_state() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ImeState>()
+            .add_systems(
+                PostUpdate,
+                reset_ime_after_rename.run_if(resource_exists_and_changed::<WorkspaceRename>),
+            );
+        app.world_mut().resource_mut::<ImeState>().0 = Composition::try_new("かん".into(), None);
+        app.world_mut().insert_resource(WorkspaceRename::default());
+        app.update();
+        assert!(!app.world().resource::<ImeState>().is_composing());
+    }
+
+    /// Asserts that IME events are dropped unread while a rename is active.
+    ///
+    /// Case: the user commits kanji in the rename field while a terminal
+    /// pane still holds keyboard focus underneath.
+    #[test]
+    fn ime_events_are_dropped_while_renaming() {
+        let (mut app, _terminal) = build_app_with_focused_terminal();
+        app.init_resource::<KeyInputs>()
+            .add_observer(apply_ime_commit_to_terminal)
+            .add_observer(
+                |_ev: On<RequestActiveKeyInput>, mut hits: ResMut<KeyInputs>| {
+                    hits.0 += 1;
+                },
+            )
+            .insert_resource(WorkspaceRename::active_for_test(WorkspaceId(1)));
+
+        app.world_mut().write_message(Ime::Preedit {
+            window: Entity::PLACEHOLDER,
+            value: "かんじ".into(),
+            cursor: Some((9, 9)),
+        });
+        app.update();
+        assert!(!app.world().resource::<ImeState>().is_composing());
+
+        app.world_mut().write_message(Ime::Commit {
+            window: Entity::PLACEHOLDER,
+            value: "漢字".into(),
+        });
+        app.update();
+        assert_eq!(app.world().resource::<KeyInputs>().0, 0);
+        assert!(!app.world().resource::<ImeState>().is_composing());
+    }
+
+    /// Asserts that the IME policy keeps IME enabled while renaming and
+    /// leaves the candidate position to the rename field.
+    ///
+    /// Case: the rename field is focused while the terminal cursor sits
+    /// elsewhere.
+    #[test]
+    fn the_ime_policy_yields_to_the_rename_field() {
+        let mut app = policy_app_with_focused_terminal();
+        app.world_mut()
+            .insert_resource(WorkspaceRename::active_for_test(WorkspaceId(1)));
+        let sentinel = Vec2::new(-7.0, -7.0);
+        {
+            let mut windows = app
+                .world_mut()
+                .query_filtered::<&mut Window, With<PrimaryWindow>>();
+            let mut window = windows.single_mut(app.world_mut()).expect("one window");
+            window.ime_enabled = false;
+            window.ime_position = sentinel;
+        }
+        app.world_mut()
+            .run_system_once(ime_policy_system)
+            .expect("the policy runs");
+        let mut windows = app
+            .world_mut()
+            .query_filtered::<&Window, With<PrimaryWindow>>();
+        let window = windows.single(app.world()).expect("one window");
+        assert!(window.ime_enabled);
+        assert_eq!(window.ime_position, sentinel);
     }
 }

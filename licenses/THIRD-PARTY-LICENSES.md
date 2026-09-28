@@ -4729,6 +4729,7 @@ Used by:
 - bevy_transform 0.19.0
 - bevy_ui 0.19.0
 - bevy_ui_render 0.19.0
+- bevy_ui_widgets 0.19.0
 - bevy_utils 0.19.0
 - bevy_window 0.19.0
 - bevy_winit 0.19.0

@@ -8,6 +8,7 @@ pub mod root;
 
 mod ime_overlay;
 mod shell_surface;
+pub(crate) mod tab_bar;
 mod vi_mode_indicator;
 
 pub(crate) use shell_surface::ShellSurfaceUi;
@@ -18,7 +19,7 @@ pub(crate) use shell_surface::ShellSurfaceUi;
 pub struct UiRoot;
 
 /// Aggregates the UI plugins: the root Node tree, the shell-surface subtree,
-/// the IME overlay, and the vi-mode indicator.
+/// the tab bar, the IME overlay, and the vi-mode indicator.
 pub struct OrzmaUiPlugin;
 
 impl Plugin for OrzmaUiPlugin {
@@ -26,6 +27,7 @@ impl Plugin for OrzmaUiPlugin {
         app.add_plugins((
             OrzmaUiRootPlugin,
             shell_surface::ShellSurfacePlugin,
+            tab_bar::TabBarPlugin,
             ime_overlay::ImeOverlayPlugin,
             vi_mode_indicator::ViModeIndicatorPlugin,
         ));

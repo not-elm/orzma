@@ -1,10 +1,11 @@
-//! The multiplexer's pane ledger: owns every pane, the layout tree, and the
-//! webview host, applies the operations the event loop dispatches, and
-//! queues the events the GUI receives.
+//! The multiplexer's pane ledger: owns every pane, the workspaces whose
+//! trees they tile, and the webview host, applies the operations the event
+//! loop dispatches, and queues the events the GUI receives.
 
-use crate::backend::layout::LayoutTree;
+use crate::backend::layout::Solved;
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::ChunkDepth;
+use crate::backend::workspace::Workspaces;
 use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::Receiver;
 use orzma_tty::prelude::{
@@ -29,13 +30,14 @@ use tracing::Level;
 pub(crate) mod layout;
 pub(crate) mod pane;
 pub(crate) mod queue_sample;
+pub(crate) mod workspace;
 pub(crate) use pane::ShellFactory;
 
 /// A pane the backend minted. Never reused within one backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PaneId(pub u32);
 
-/// A split the layout tree minted. Never reused within one tree.
+/// A split the backend minted. Never reused within one backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SplitId(pub u32);
 
@@ -52,6 +54,45 @@ impl RequestId {
     }
 }
 
+/// A workspace the backend minted. Never reused within one backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkspaceId(pub u32);
+
+/// Which workspace a selection addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceTarget {
+    /// The displayed workspace.
+    Active,
+    /// A specific workspace.
+    Id(WorkspaceId),
+    /// The workspace at this zero-based position in display order.
+    Index(u16),
+    /// The workspace right of the displayed one; the last wraps to the
+    /// first.
+    Next,
+    /// The workspace left of the displayed one; the first wraps to the
+    /// last.
+    Previous,
+}
+
+/// Which workspace a close addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseTarget {
+    /// The displayed workspace.
+    Active,
+    /// A specific workspace.
+    Id(WorkspaceId),
+}
+
+/// One workspace as the GUI lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceEntry {
+    /// The workspace.
+    pub id: WorkspaceId,
+    /// The name the user gave it, or `None` for the automatic name.
+    pub name: Option<String>,
+}
+
 /// The position of a command in the GUI's send order; `Layout.seq`
 /// reports how far the backend has processed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
@@ -60,7 +101,8 @@ pub struct CommandSeq(pub u64);
 /// Which pane a command addresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneTarget {
-    /// The backend's active pane at the moment the command is processed.
+    /// The displayed workspace's active pane at the moment the command is
+    /// processed.
     Active,
     /// A specific pane.
     Id(PaneId),
@@ -91,8 +133,9 @@ pub enum PaneDirection {
 /// Where a new pane goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NewPaneAt {
-    /// The first pane; valid only while the tree is empty.
-    Root,
+    /// The first pane of a new workspace appended after the last one; the
+    /// workspace is displayed once the pane spawns.
+    Workspace,
     /// Split `pane`, putting the new pane right of / below it.
     Split {
         /// The pane being split.
@@ -145,7 +188,8 @@ pub struct Separator {
     pub len: u16,
 }
 
-/// The complete pane geometry after one tree mutation or selection.
+/// The displayed workspace's complete pane geometry after one tree
+/// mutation, selection, or display change.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
     /// The last command the backend processed before building this.
@@ -153,11 +197,12 @@ pub struct Layout {
     /// The extent the panes tile: the window size in cells, widened per
     /// axis to the tree's minimum when the window is smaller.
     pub size: GridSize,
-    /// The pane the backend considers active, when any pane exists.
+    /// The displayed workspace's active pane, or `None` when no workspace
+    /// is displayed.
     pub active: Option<PaneId>,
-    /// Every pane's rectangle in the current tree.
+    /// The rectangle of every pane in the displayed workspace.
     pub panes: Vec<PaneRect>,
-    /// Every divider between adjacent panes in the current tree.
+    /// Every divider between adjacent panes in the displayed workspace.
     pub separators: Vec<Separator>,
 }
 
@@ -190,8 +235,10 @@ pub enum OrzmuxEvent {
         /// A human-readable description of the failure.
         error: String,
     },
-    /// Exactly one per tree mutation or selection. `frames` carries the
-    /// immediate repaint of every pane whose size changed.
+    /// Exactly one per tree mutation, selection, or display change. The
+    /// layout describes the displayed workspace; `frames` carries the
+    /// immediate repaint of every pane whose size changed, displayed or
+    /// not.
     Layout {
         /// The new layout snapshot.
         layout: Layout,
@@ -240,14 +287,26 @@ pub enum OrzmuxEvent {
         /// The last processed GUI command.
         seq: CommandSeq,
     },
+    /// The workspace list changed: a workspace opened, closed, moved, was
+    /// renamed, or was displayed. Also the answer to every
+    /// `MoveWorkspace`.
+    Workspaces {
+        /// The last command the backend processed before building this.
+        seq: CommandSeq,
+        /// Every workspace in display order.
+        entries: Vec<WorkspaceEntry>,
+        /// The displayed workspace; `None` only when no workspace remains.
+        active: Option<WorkspaceId>,
+    },
 }
 
-/// Every live pane, the layout tree they tile, the webview host serving their
-/// programs, and the events they have generated since the last drain.
+/// Every live pane, the workspaces whose trees they tile, the webview host
+/// serving their programs, and the events they have generated since the
+/// last drain.
 pub(crate) struct Backend {
     factory: Box<dyn PaneFactory>,
     panes: HashMap<PaneId, Pane>,
-    tree: LayoutTree,
+    workspaces: Workspaces,
     geometry: Option<Geometry>,
     /// Whether the primary window has keyboard focus, as the GUI last
     /// reported it.
@@ -273,7 +332,7 @@ impl Backend {
         Self {
             factory,
             panes: HashMap::new(),
-            tree: LayoutTree::new(),
+            workspaces: Workspaces::default(),
             geometry: None,
             window_focused: true,
             next_pane_id: 1,
@@ -324,7 +383,9 @@ impl Backend {
         self.publish_layout();
     }
 
-    /// Spawns a pane at `at` and announces it with `PaneOpened`.
+    /// Spawns a pane at `at` and announces it with `PaneOpened`. A new
+    /// workspace is displayed once its pane spawns, and announced with
+    /// `Workspaces` before the `Layout`.
     ///
     /// The shell's environment gains `ORZMA_SOCK` and a fresh `ORZMA_TOKEN`
     /// when the webview host has a control socket; a token that cannot be
@@ -334,12 +395,13 @@ impl Backend {
     ///
     /// Returns [`OrzmuxError::NoGeometry`] before the window has
     /// reported its size, [`OrzmuxError::UnresolvedTarget`] when the
-    /// split target is gone, [`OrzmuxError::RootOccupied`] or
+    /// split target is gone or not in the displayed workspace,
     /// [`OrzmuxError::SplitRefused`] when the tree refuses the
     /// insertion, [`OrzmuxError::Unsolved`] or [`OrzmuxError::Vt`] when
     /// the solved layout gives the new pane no valid rectangle, and
     /// whatever the pane factory returns when the shell will not start.
-    /// The tree is left as it was in every case.
+    /// The workspaces are left as they were in every case: a workspace
+    /// created for the pane is removed again.
     pub fn open_pane(
         &mut self,
         request: RequestId,
@@ -351,10 +413,11 @@ impl Backend {
         let at = self.pinned_pane_at(at)?;
         let new = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
-        let previous_active = self.tree.active();
-        let split_target = self.insert_pane(new, at, geometry.size)?;
+        let previous_active = self.visible_active();
+        let placement = self.insert_pane(new, at, geometry.size)?;
         let spawn_cwd = cwd.or_else(|| {
-            split_target
+            placement
+                .inherit_from
                 .and_then(|id| self.panes.get(&id))
                 .and_then(Pane::cwd)
         });
@@ -370,20 +433,28 @@ impl Backend {
                     .map(|(key, value)| (EnvKey(key), EnvValue(value))),
             )
             .collect();
-        match self.spawn_pane(new, geometry, spawn_cwd.clone(), env) {
+        match self.spawn_pane(new, placement.workspace, geometry, spawn_cwd.clone(), env) {
             Ok((tty, size)) => {
                 self.panes.insert(
                     new,
                     Pane::new(tty, (size.cols, size.rows, geometry.cell_px), spawn_cwd),
                 );
                 self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
+                if placement.created {
+                    self.workspaces.activate(placement.workspace);
+                    self.emit_workspaces();
+                }
                 self.publish_layout();
                 Ok(())
             }
             Err(error) => {
-                self.tree.remove(new);
-                if let Some(previous) = previous_active {
-                    self.tree.select(previous);
+                if placement.created {
+                    self.workspaces.remove(placement.workspace);
+                } else if let Some(workspace) = self.workspaces.get_mut(placement.workspace) {
+                    workspace.tree.remove(new);
+                    if let Some(previous) = previous_active {
+                        workspace.tree.select(previous);
+                    }
                 }
                 let output = self.webview.pane_closed(new);
                 self.apply_webview(output);
@@ -404,15 +475,88 @@ impl Backend {
         Ok(())
     }
 
-    /// Makes `pane` active. A layout is published either way.
+    /// Displays the workspace `target` names, publishing `Workspaces` and
+    /// `Layout` when the displayed workspace changed.
     ///
     /// # Errors
     ///
-    /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`; the active pane is unchanged and the published
-    /// layout reflects that.
+    /// Returns [`OrzmuxError::UnresolvedWorkspace`] when the target names
+    /// no workspace; nothing is published.
+    pub fn select_workspace(&mut self, target: WorkspaceTarget) -> OrzmuxResult {
+        let id = self
+            .workspaces
+            .resolve(target)
+            .ok_or(OrzmuxError::UnresolvedWorkspace)?;
+        if self.workspaces.activate(id) {
+            self.emit_workspaces();
+            self.publish_layout();
+        }
+        Ok(())
+    }
+
+    /// Kills every pane of the workspace `target` names, then publishes the
+    /// one `Layout` that follows.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedWorkspace`] when the target names
+    /// no workspace; no pane closes.
+    pub fn close_workspace(&mut self, target: CloseTarget) -> OrzmuxResult {
+        let id = self
+            .workspaces
+            .resolve_close(target)
+            .ok_or(OrzmuxError::UnresolvedWorkspace)?;
+        let panes = self
+            .workspaces
+            .get(id)
+            .map(|w| w.tree.panes())
+            .unwrap_or_default();
+        for pane in panes {
+            self.retire_pane(pane, CloseReason::Killed);
+        }
+        self.publish_layout();
+        Ok(())
+    }
+
+    /// Names workspace `id`, publishing `Workspaces` when the name changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedWorkspace`] for an unknown id.
+    pub fn rename_workspace(&mut self, id: WorkspaceId, name: Option<String>) -> OrzmuxResult {
+        if self.workspaces.rename(id, name)? {
+            self.emit_workspaces();
+        }
+        Ok(())
+    }
+
+    /// Moves workspace `id` to `index` and always publishes one
+    /// `Workspaces`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedWorkspace`] for an unknown id; the
+    /// `Workspaces` is still published.
+    pub fn move_workspace(&mut self, id: WorkspaceId, index: u16) -> OrzmuxResult {
+        let moved = self.workspaces.move_to(id, index);
+        self.emit_workspaces();
+        moved.map(|_| ())
+    }
+
+    /// Makes `pane` active when it is in the displayed workspace. A layout
+    /// is published either way.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when no pane of the
+    /// displayed workspace carries `pane`; the active pane is unchanged,
+    /// no workspace switch happens, and the published layout reflects
+    /// that.
     pub fn select_pane(&mut self, pane: PaneId) -> OrzmuxResult {
-        let selected = self.tree.select(pane);
+        let selected = self
+            .workspaces
+            .active_mut()
+            .is_some_and(|workspace| workspace.tree.select(pane));
         self.publish_layout();
         if selected {
             Ok(())
@@ -425,8 +569,10 @@ impl Backend {
     /// there, and publishes a layout either way, so every selection is
     /// answered.
     pub fn select_pane_direction(&mut self, direction: PaneDirection) {
-        if let Some(geometry) = self.geometry {
-            self.tree.select_direction(direction, geometry.size);
+        if let Some(geometry) = self.geometry
+            && let Some(workspace) = self.workspaces.active_mut()
+        {
+            workspace.tree.select_direction(direction, geometry.size);
         }
         self.publish_layout();
     }
@@ -437,23 +583,29 @@ impl Backend {
         self.refresh_focus();
     }
 
-    /// Moves a divider, publishing a layout only when the tree changed.
+    /// Moves a divider of the displayed workspace, publishing a layout only
+    /// when its tree changed. A divider of a hidden workspace does not
+    /// move.
     pub fn resize_split(&mut self, split: SplitId, position: u16) {
-        if self
-            .geometry
-            .is_some_and(|g| self.tree.resize_split(split, position, g.size))
-        {
+        let moved = self.geometry.is_some_and(|g| {
+            self.workspaces
+                .active_mut()
+                .is_some_and(|w| w.tree.resize_split(split, position, g.size))
+        });
+        if moved {
             self.publish_layout();
         }
     }
 
-    /// Moves one divider of the active pane `cells` cells in `direction`,
-    /// publishing a layout only when the tree changed.
+    /// Moves one divider of the displayed active pane `cells` cells in
+    /// `direction`, publishing a layout only when the tree changed.
     pub fn resize_pane_direction(&mut self, direction: PaneDirection, cells: u16) {
-        if self
-            .geometry
-            .is_some_and(|g| self.tree.resize_direction(direction, cells, g.size))
-        {
+        let moved = self.geometry.is_some_and(|g| {
+            self.workspaces
+                .active_mut()
+                .is_some_and(|w| w.tree.resize_direction(direction, cells, g.size))
+        });
+        if moved {
             self.publish_layout();
         }
     }
@@ -696,10 +848,10 @@ impl Backend {
         self.processed = seq;
     }
 
-    /// The pane layout tree.
+    /// The workspace set.
     #[cfg(test)]
-    pub fn tree(&self) -> &LayoutTree {
-        &self.tree
+    pub fn workspaces(&self) -> &Workspaces {
+        &self.workspaces
     }
 
     /// The live pane `id` names, or `None` when no pane carries it.
@@ -728,7 +880,9 @@ impl Backend {
     /// names no live pane.
     fn pinned_pane_at(&self, at: NewPaneAt) -> OrzmuxResult<PinnedPaneAt> {
         let NewPaneAt::Split { pane, orientation } = at else {
-            return Ok(PinnedPaneAt::Root);
+            return Ok(PinnedPaneAt::Workspace {
+                inherit_from: self.visible_active(),
+            });
         };
         let pane = self.pane_id(pane)?;
         // NOTE: `pane` is pinned to this concrete id now rather than
@@ -739,50 +893,62 @@ impl Backend {
         Ok(PinnedPaneAt::Split { pane, orientation })
     }
 
-    /// Inserts `new` into the tree at `at`. Returns the pane a split
-    /// divides, or `None` for a root pane.
+    /// Inserts `new` at `at` and reports where it went.
     ///
     /// # Errors
     ///
-    /// Returns [`OrzmuxError::RootOccupied`] when a root pane is
-    /// requested while the tree holds one, and
-    /// [`OrzmuxError::SplitRefused`] when the target has too little
-    /// room to divide.
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when a split target is not
+    /// in the displayed workspace, and [`OrzmuxError::SplitRefused`] when
+    /// the target has too little room to divide.
     fn insert_pane(
         &mut self,
         new: PaneId,
         at: PinnedPaneAt,
         window: GridSize,
-    ) -> OrzmuxResult<Option<PaneId>> {
+    ) -> OrzmuxResult<Placement> {
         match at {
-            PinnedPaneAt::Root => {
-                self.tree.insert_root(new)?;
-                Ok(None)
-            }
+            PinnedPaneAt::Workspace { inherit_from } => Ok(Placement {
+                workspace: self.workspaces.create(new),
+                created: true,
+                inherit_from,
+            }),
             PinnedPaneAt::Split { pane, orientation } => {
-                self.tree.split(pane, orientation, new, window)?;
-                Ok(Some(pane))
+                self.workspaces
+                    .split_active(pane, orientation, new, window)?;
+                let workspace = self
+                    .workspaces
+                    .active_id()
+                    .ok_or(OrzmuxError::UnresolvedTarget)?;
+                Ok(Placement {
+                    workspace,
+                    created: false,
+                    inherit_from: Some(pane),
+                })
             }
         }
     }
 
-    /// Spawns the terminal for `new` at the size the solved layout gives
-    /// it.
+    /// Spawns the terminal for `new` at the size the solved layout of
+    /// `workspace` gives it.
     ///
     /// # Errors
     ///
-    /// Returns [`OrzmuxError::Unsolved`] when the tree does not place
-    /// the pane, [`OrzmuxError::Vt`] when its rectangle is not a valid
-    /// size, and [`OrzmuxError::SpawnShell`] when the shell refuses to
-    /// start.
+    /// Returns [`OrzmuxError::Unsolved`] when `workspace` is gone or its
+    /// tree does not place the pane, [`OrzmuxError::Vt`] when its
+    /// rectangle is not a valid size, and [`OrzmuxError::SpawnShell`]
+    /// when the shell refuses to start.
     fn spawn_pane(
         &mut self,
         new: PaneId,
+        workspace: WorkspaceId,
         geometry: Geometry,
         cwd: Option<PathBuf>,
         env: Vec<(EnvKey, EnvValue)>,
     ) -> OrzmuxResult<(OrzmaTty<OrzmaVt>, GridSize)> {
         let rect = self
+            .workspaces
+            .get(workspace)
+            .ok_or(OrzmuxError::Unsolved)?
             .tree
             .solve(geometry.size)
             .rect_of(new)
@@ -792,9 +958,10 @@ impl Backend {
         Ok((tty, size))
     }
 
-    /// Tells every pane whether it holds focus, then re-solves the tree,
-    /// resizes every pane whose applied geometry differs, flushes those
-    /// panes, and emits their signals followed by one `Layout` carrying
+    /// Tells every pane whether it holds focus, then re-solves every
+    /// workspace's tree, resizes every pane whose applied geometry differs
+    /// (displayed or not), flushes those panes, and emits their signals
+    /// followed by one `Layout` of the displayed workspace carrying all
     /// their frames. Last, it tells the webview host which pane is active,
     /// so the release of a webview focus held in another pane follows the
     /// `Layout`. Without geometry, only the first and last steps run. A
@@ -806,9 +973,13 @@ impl Backend {
             self.sync_webview_active();
             return;
         };
-        let solved = self.tree.solve(geometry.size);
+        let solved: Vec<(WorkspaceId, Solved)> = self
+            .workspaces
+            .iter()
+            .map(|w| (w.id, w.tree.solve(geometry.size)))
+            .collect();
         let mut frames: Vec<(PaneId, Frame)> = Vec::new();
-        for rect in &solved.panes {
+        for rect in solved.iter().flat_map(|(_, s)| &s.panes) {
             let Some(pane) = self.panes.get_mut(&rect.pane) else {
                 continue;
             };
@@ -833,23 +1004,32 @@ impl Backend {
             let flushed = pane.tty.flush_now();
             self.forward_items(Some(&mut frames), rect.pane, flushed.items);
         }
-        let layout = Layout {
-            seq: self.processed,
-            size: solved.size,
-            active: self.tree.active(),
-            panes: solved.panes,
-            separators: solved.separators,
+        let displayed = self.workspaces.active_id();
+        let layout = match solved.into_iter().find(|(id, _)| Some(*id) == displayed) {
+            Some((_, solved)) => Layout {
+                seq: self.processed,
+                size: solved.size,
+                active: self.visible_active(),
+                panes: solved.panes,
+                separators: solved.separators,
+            },
+            None => Layout {
+                seq: self.processed,
+                size: geometry.size,
+                ..Layout::default()
+            },
         };
         self.emit(OrzmuxEvent::Layout { layout, frames });
         self.sync_webview_active();
     }
 
-    /// Tells every pane whether it holds focus: the active pane does while
-    /// the window is focused, and no pane does otherwise. A report a pane
-    /// refuses is logged without stopping the others, and reports to
-    /// different panes reach their PTYs in no fixed order.
+    /// Tells every pane whether it holds focus: the displayed workspace's
+    /// active pane does while the window is focused, and no pane does
+    /// otherwise. A report a pane refuses is logged without stopping the
+    /// others, and reports to different panes reach their PTYs in no fixed
+    /// order.
     fn refresh_focus(&mut self) {
-        let target = self.tree.active().filter(|_| self.window_focused);
+        let target = self.visible_active().filter(|_| self.window_focused);
         let report = |id: PaneId, result: OrzmaTtyResult| {
             if let Err(err) = result {
                 log_refused_write(id, "focus report", &err, Level::WARN);
@@ -905,21 +1085,38 @@ impl Backend {
         exited
     }
 
-    /// Removes a pane from the tree and the pool after flushing its last
-    /// output, then publishes the layout the survivors get. The webview
-    /// host releases the pane's registrations first, so their events
-    /// precede `PaneClosed`.
+    /// Retires `id` and publishes the layout the survivors get.
     fn close_pane(&mut self, id: PaneId, reason: CloseReason) {
+        self.retire_pane(id, reason);
+        self.publish_layout();
+    }
+
+    /// Flushes a pane's last output, removes it from its tree and the pool,
+    /// releases its webview state, and emits `PaneClosed`. The webview
+    /// host's events precede `PaneClosed`. A workspace the removal empties
+    /// is removed as well, followed by `Workspaces`.
+    fn retire_pane(&mut self, id: PaneId, reason: CloseReason) {
         if let Some(pane) = self.panes.get_mut(&id) {
             let flushed = pane.tty.flush_now();
             self.forward_items(None, id, flushed.items);
         }
-        self.tree.remove(id);
+        let mut emptied = None;
+        if let Some(workspace) = self.workspaces.workspace_of(id)
+            && let Some(entry) = self.workspaces.get_mut(workspace)
+        {
+            entry.tree.remove(id);
+            if entry.tree.is_empty() {
+                emptied = Some(workspace);
+            }
+        }
         self.panes.remove(&id);
         let output = self.webview.pane_closed(id);
         self.apply_webview(output);
         self.emit(OrzmuxEvent::PaneClosed { pane: id, reason });
-        self.publish_layout();
+        if let Some(workspace) = emptied {
+            self.workspaces.remove(workspace);
+            self.emit_workspaces();
+        }
     }
 
     /// The id of the pane `target` names.
@@ -930,7 +1127,7 @@ impl Backend {
     /// carries, and for [`PaneTarget::Active`] while no pane is active.
     fn pane_id(&self, target: PaneTarget) -> OrzmuxResult<PaneId> {
         let id = match target {
-            PaneTarget::Active => self.tree.active(),
+            PaneTarget::Active => self.visible_active(),
             PaneTarget::Id(id) => self.panes.contains_key(&id).then_some(id),
         };
         id.ok_or(OrzmuxError::UnresolvedTarget)
@@ -963,10 +1160,17 @@ impl Backend {
             .map_err(|source| OrzmuxError::PtyWrite { pane: id, source })
     }
 
-    /// Tells the webview host which pane is active, so it releases a focus
+    /// Tells the webview host which panes are on screen and which pane is
+    /// active, so it refuses focus in hidden panes and releases a focus
     /// held in any other pane.
     fn sync_webview_active(&mut self) {
-        let output = self.webview.active_pane_changed(self.tree.active());
+        let visible = self
+            .workspaces
+            .active()
+            .map(|w| w.tree.panes())
+            .unwrap_or_default();
+        self.webview.visible_panes_changed(visible);
+        let output = self.webview.active_pane_changed(self.visible_active());
         self.apply_webview(output);
     }
 
@@ -1002,6 +1206,21 @@ impl Backend {
         if let Err(error) = result {
             tracing::debug!(%error, "a webview host request was dropped");
         }
+    }
+
+    /// The displayed workspace's active pane.
+    fn visible_active(&self) -> Option<PaneId> {
+        self.workspaces.active().and_then(|w| w.tree.active())
+    }
+
+    /// Queues a `Workspaces` snapshot stamped with the last processed
+    /// command.
+    fn emit_workspaces(&mut self) {
+        self.emit(OrzmuxEvent::Workspaces {
+            seq: self.processed,
+            entries: self.workspaces.entries(),
+            active: self.workspaces.active_id(),
+        });
     }
 
     fn emit(&mut self, event: OrzmuxEvent) {
@@ -1040,8 +1259,12 @@ struct Geometry {
 /// live pane.
 #[derive(Clone, Copy)]
 enum PinnedPaneAt {
-    /// The first pane; valid only while the tree is empty.
-    Root,
+    /// The first pane of a new workspace; `inherit_from` is the displayed
+    /// active pane whose directory it starts in.
+    Workspace {
+        /// The pane whose working directory the new one inherits.
+        inherit_from: Option<PaneId>,
+    },
     /// Split `pane`, putting the new pane right of / below it.
     Split {
         /// The pane being split.
@@ -1049,6 +1272,17 @@ enum PinnedPaneAt {
         /// The direction of the divider the split introduces.
         orientation: SplitOrientation,
     },
+}
+
+/// Where `insert_pane` put a new pane.
+#[derive(Clone, Copy)]
+struct Placement {
+    /// The workspace that holds the pane.
+    workspace: WorkspaceId,
+    /// Whether the workspace was created for the pane.
+    created: bool,
+    /// The pane whose working directory the new one inherits.
+    inherit_from: Option<PaneId>,
 }
 
 /// How many times one wake pumps the same pane while its chunks stay

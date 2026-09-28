@@ -121,24 +121,39 @@ the seven that differ elsewhere.
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side by side (vertical divider); the new pane becomes active. |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (horizontal divider); the new pane becomes active. |
 | `kill-pane` | `<Leader>p` | Kill the active pane; its shell is terminated. |
+| `new-workspace` | `<Leader>c` | Open a new workspace after the last one and show it. |
+| `close-workspace` | `<Leader>Shift+X` | Close the workspace on screen and end every shell in it. |
+| `next-workspace` | `<Leader>]` | Show the workspace to the right, wrapping around. |
+| `previous-workspace` | `<Leader>[` | Show the workspace to the left, wrapping around. |
+| `select-workspace-1` … `select-workspace-9` | `<Leader>1` … `<Leader>9` | Show the first … ninth workspace. |
+| `rename-workspace` | `<Leader>r` | Rename the workspace on screen. |
 
-The window actions (`new-window`, `next-window`, `select-window-0` and the
-rest), `rename-window`, and `zoom-pane` that orzma 0.1.0 accepted have been
-removed. A configuration that still sets one of them is ignored as a whole (see
+The window actions orzma 0.1.0 accepted (`new-window`, `next-window`,
+`select-window-0` and the rest, `rename-window`) and `zoom-pane` have been
+removed; workspaces replace the window actions under new names (see
+[Workspaces](multiplexer.md#workspaces)). A configuration that still sets one
+of the old keys is ignored as a whole (see
 [Validation](configuration.md#validation)), so delete those lines when you
 upgrade.
 
 ## Conflicts and turning the leader off
 
-Two consequences of the stock `<Leader>` defaults worth knowing:
+Three consequences of the stock `<Leader>` defaults worth knowing:
 
 - **Rebinding a `<Leader>` chord that a stock default already uses** (e.g.
   `split-vertical-pane = "<Leader>h"`, which collides with the default
   `select-left-pane = "<Leader>h"`) is a startup validation error naming both
   actions. Unbind the stock default explicitly (`select-left-pane = ""`) or
   pick a free chord.
+- **The workspace actions brought new stock defaults** — `<Leader>c`,
+  `<Leader>r`, `<Leader>[`, `<Leader>]`, `<Leader>1` … `<Leader>9`, and
+  `<Leader>Shift+X`. If your configuration already binds one of these chords
+  to another action, orzma does not start after the upgrade (see
+  [Validation](configuration.md#validation)). Rebind that action to a free
+  chord, or unbind the workspace action that takes the chord, e.g.
+  `rename-workspace = ""`.
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
-  stock defaults that includes all 13 leader-bound actions above, silently
+  stock defaults that includes all 27 leader-bound actions above, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g.
   `split-vertical-pane = "Ctrl+Shift+I"`.
@@ -168,7 +183,8 @@ layout. Key bindings match physical key positions, so on a non-US layout the
 `=` key on a US layout, and fires whether or not Shift is held — including
 when it is the leader. On a layout with a dedicated `+` key, such as German,
 that position is a different key, so bind the key you actually want by name
-instead.
+instead. `[` and `]` name physical key positions of a US layout; on a JIS
+keyboard they are the keys labelled `@` and `[`.
 
 ## Example
 
@@ -182,7 +198,7 @@ The stock `[shortcuts]` table, with the macOS defaults:
 # the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
 # tap the modifier with no other key, then the next key). Defaults to "Cmd" on
 # macOS and "Alt" elsewhere, and is active only when at least one action is
-# bound to "<Leader>..." — the stock defaults below already bind thirteen
+# bound to "<Leader>..." — the stock defaults below already bind 27
 # actions to "<Leader>...", so the tap leader is armed out of the box.
 # Set "" to disable it. "Shift" is not allowed as a tap.
 leader = "Cmd"
@@ -226,6 +242,22 @@ resize-left-pane      = "<Leader:r>Shift+H"  # resize-pane -L 5 (repeatable)
 resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
 resize-up-pane        = "<Leader:r>Shift+K"  # resize-pane -U 5 (repeatable)
 resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
+
+# --- workspace actions ---
+new-workspace         = "<Leader>c"        # new-window
+close-workspace       = "<Leader>Shift+X"  # kill-window
+next-workspace        = "<Leader>]"        # next-window
+previous-workspace    = "<Leader>["        # previous-window
+select-workspace-1    = "<Leader>1"
+select-workspace-2    = "<Leader>2"
+select-workspace-3    = "<Leader>3"
+select-workspace-4    = "<Leader>4"
+select-workspace-5    = "<Leader>5"
+select-workspace-6    = "<Leader>6"
+select-workspace-7    = "<Leader>7"
+select-workspace-8    = "<Leader>8"
+select-workspace-9    = "<Leader>9"
+rename-workspace      = "<Leader>r"        # rename-window
 
 # --- zoom actions ---
 increase-font-size    = "Cmd+Plus"   # Ctrl+Plus off macOS

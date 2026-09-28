@@ -37,7 +37,8 @@ fn ensure_shell_surface_ui(mut commands: Commands, ui_root: Query<Entity, With<U
         Name::new("Shell Surface UI"),
         Node {
             width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
+            flex_grow: 1.0,
+            min_height: Val::Px(0.0),
             overflow: Overflow::clip(),
             ..default()
         },
@@ -55,11 +56,11 @@ fn request_root_pane(mut commands: Commands, mut requested: Local<bool>) {
     }
     *requested = true;
     commands.trigger(PaneSpawnRequest {
-        at: NewPaneAt::Root,
+        at: NewPaneAt::Workspace,
     });
 }
 
-/// Despawns the pending entity; a failed root spawn (no pane at all) exits.
+/// Despawns the pending entity; a failed first spawn (no pane at all) exits.
 fn on_spawn_failed(
     ev: On<OrzmuxPaneSpawnFailed>,
     mut commands: Commands,
@@ -71,7 +72,7 @@ fn on_spawn_failed(
         tracing::error!(error = %ev.error, "root pane spawn failed, no pane left");
         exit.write(AppExit::Success);
     } else {
-        tracing::warn!(error = %ev.error, "pane split failed");
+        tracing::warn!(error = %ev.error, "pane spawn failed");
     }
 }
 

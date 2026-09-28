@@ -152,6 +152,9 @@ pub enum Refusal {
     /// The connection is closed or never completed its `hello`.
     #[error("the connection is closed")]
     ConnectionClosed,
+    /// The placement's pane is not on screen.
+    #[error("the placement's pane is not on screen")]
+    PaneHidden,
 }
 
 impl Refusal {

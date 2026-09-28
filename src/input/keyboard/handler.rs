@@ -13,6 +13,7 @@ use crate::input::shortcuts::{
     HeldRepeatKey, KeyEffectMessage, LeaderGate, LeaderPhase, ShortcutSet, Shortcuts,
     clear_leader_phase,
 };
+use crate::ui::tab_bar::rename::WorkspaceRename;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -52,11 +53,11 @@ struct ClassifyInputs<'w> {
 
 /// Resolves the frame's pressed keys and fans out `KeyEffectMessage` in
 /// press order. The sole `LeaderPhase`-stepping system: on a coarse guard
-/// (IME composition or an unfocused window) it clears the leader, drains
-/// the frame's keys, and writes no messages; otherwise it classifies the
-/// keys, applies `Quit` (`AppExit`) and `ReleaseWebviewFocus` (a
-/// `RequestWebviewFocus` release) inline, and writes every other effect to
-/// `KeyEffectMessage`.
+/// (IME composition, an unfocused window, or a tab rename in progress) it
+/// clears the leader, drains the frame's keys, and writes no messages;
+/// otherwise it classifies the keys, applies `Quit` (`AppExit`) and
+/// `ReleaseWebviewFocus` (a `RequestWebviewFocus` release) inline, and
+/// writes every other effect to `KeyEffectMessage`.
 fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
@@ -66,6 +67,7 @@ fn resolve_key_effects(
     mut held_repeat: ResMut<HeldRepeatKey>,
     mut messages: MessageWriter<KeyEffectMessage>,
     ime: Res<ImeState>,
+    rename: Option<Res<WorkspaceRename>>,
     focused_webview: Res<FocusedWebview>,
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -75,7 +77,8 @@ fn resolve_key_effects(
     forward_keys: Query<&ForwardKeys>,
 ) {
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    if ime.is_composing() || !focused_window {
+    let renaming = rename.as_deref().is_some_and(WorkspaceRename::is_active);
+    if ime.is_composing() || !focused_window || renaming {
         clear_leader_phase(&mut leader_phase);
         if held_repeat.0.is_some() {
             held_repeat.0 = None;
@@ -174,7 +177,8 @@ mod tests {
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
     use bevy_orzma_webview::{ChordKey, NormalizedChord};
-    use orzma_configs::shortcuts::{FontSizeStep, Modifiers};
+    use bevy_orzmux::prelude::WorkspaceId;
+    use orzma_configs::shortcuts::{FontSizeStep, Modifiers, PaneDirection};
     use orzma_vt::prelude::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
     use std::time::Duration;
 
@@ -333,6 +337,28 @@ mod tests {
             LeaderPhase::Idle,
             "the guard clears the leader phase"
         );
+    }
+
+    /// Asserts that while a rename is active no key effect is produced and
+    /// a pending leader is cleared.
+    ///
+    /// Case: the user types a tab name containing the letters of pane
+    /// shortcuts right after tapping the leader, and ends it with Enter.
+    #[test]
+    fn keys_produce_no_effects_while_renaming() {
+        let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyH,
+            Shortcut::SelectPane(PaneDirection::Left),
+            Duration::ZERO,
+        ));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
+        app.insert_resource(WorkspaceRename::active_for_test(WorkspaceId(1)));
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
+        press_key(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        press_key(&mut app, KeyCode::Enter, Key::Enter);
+        app.update();
+        assert_eq!(app.world().resource::<Captured>().message_count(), 0);
+        assert_eq!(*app.world().resource::<LeaderPhase>(), LeaderPhase::Idle);
     }
 
     fn meta_mods() -> Modifiers {

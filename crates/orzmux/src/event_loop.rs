@@ -4,8 +4,8 @@
 
 use crate::backend::queue_sample::QueueSampler;
 use crate::backend::{
-    Backend, CommandSeq, NewPaneAt, PaneDirection, PaneId, PaneTarget, RequestId, SplitId,
-    log_refused_write,
+    Backend, CloseTarget, CommandSeq, NewPaneAt, PaneDirection, PaneId, PaneTarget, RequestId,
+    SplitId, WorkspaceId, WorkspaceTarget, log_refused_write,
 };
 use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::{Receiver, Select, TryRecvError};
@@ -34,17 +34,19 @@ pub enum OrzmuxCommand {
     /// Spawn a pane. `env` is forwarded to the shell verbatim.
     ///
     /// A split with `cwd: None` starts in the target pane's working
-    /// directory: on Unix the directory of its foreground process or
-    /// shell when the OS reports one, else the directory it last
+    /// directory and a new workspace in the displayed active pane's,
+    /// found as follows: on Unix the directory of its foreground process
+    /// or shell when the OS reports one, else the directory it last
     /// reported through OSC 7 or OSC 9;9, else the directory it was
     /// spawned in; on Windows the report is preferred over the OS. Only
-    /// a directory that still exists and can be entered is used. A root
-    /// pane with `cwd: None`, or a split whose target has none of these,
-    /// starts in the user's home directory.
+    /// a directory that still exists and can be entered is used. When the
+    /// source pane has none of these, or there is no source pane, the
+    /// shell starts in the user's home directory.
     NewPane {
         /// The id the resulting `PaneOpened` / `SpawnFailed` correlates to.
         request: RequestId,
-        /// Where the new pane goes in the layout tree.
+        /// Where the new pane goes: into a split of an existing pane, or
+        /// as the first pane of a new workspace.
         at: NewPaneAt,
         /// The working directory to spawn the shell in, when given.
         cwd: Option<PathBuf>,
@@ -165,6 +167,36 @@ pub enum OrzmuxCommand {
     /// A report the GUI sends the webview host: a focus change, a first
     /// frame, or a page's call, event, or URL change.
     Webview(WebviewCommand),
+    /// Kill every pane of a workspace and remove it; its right neighbour,
+    /// else its left one, is displayed when it was displayed.
+    CloseWorkspace {
+        /// The workspace to close.
+        workspace: CloseTarget,
+    },
+    /// Display a workspace. Nothing is published when it already is, or
+    /// when the target names no workspace.
+    SelectWorkspace {
+        /// The workspace to display.
+        workspace: WorkspaceTarget,
+    },
+    /// Name a workspace, or restore its automatic name with `None`. The
+    /// name loses its control characters and surrounding whitespace and is
+    /// cut to 64 characters.
+    RenameWorkspace {
+        /// The workspace to name.
+        workspace: WorkspaceId,
+        /// The new name.
+        name: Option<String>,
+    },
+    /// Move a workspace to a zero-based position, clamped to the last.
+    /// Always answered with exactly one `Workspaces`, even when nothing
+    /// moves or the workspace is gone.
+    MoveWorkspace {
+        /// The workspace to move.
+        workspace: WorkspaceId,
+        /// Its new position.
+        index: u16,
+    },
 }
 
 impl OrzmuxCommand {
@@ -194,6 +226,10 @@ impl OrzmuxCommand {
             }
             Self::ResizeSplit { .. } => ("ResizeSplit", None),
             Self::Webview(_) => ("Webview", None),
+            Self::CloseWorkspace { .. } => ("CloseWorkspace", None),
+            Self::SelectWorkspace { .. } => ("SelectWorkspace", None),
+            Self::RenameWorkspace { .. } => ("RenameWorkspace", None),
+            Self::MoveWorkspace { .. } => ("MoveWorkspace", None),
         }
     }
 
@@ -426,6 +462,16 @@ impl EventLoop {
                 self.backend.vi_selection_toggle(pane, kind)
             }
             OrzmuxCommand::Webview(command) => self.backend.webview_command(command),
+            OrzmuxCommand::CloseWorkspace { workspace } => self.backend.close_workspace(workspace),
+            OrzmuxCommand::SelectWorkspace { workspace } => {
+                self.backend.select_workspace(workspace)
+            }
+            OrzmuxCommand::RenameWorkspace { workspace, name } => {
+                self.backend.rename_workspace(workspace, name)
+            }
+            OrzmuxCommand::MoveWorkspace { workspace, index } => {
+                self.backend.move_workspace(workspace, index)
+            }
         }
     }
 
@@ -507,9 +553,9 @@ impl EventLoop {
 
 /// Logs a command the backend refused, at the level its failure earns.
 ///
-/// An unresolvable target and a request the webview host turned down log
-/// at `DEBUG`, a refused PTY write goes through [`log_refused_write`] at
-/// `ERROR`, and every other failure logs at `WARN`.
+/// An unresolvable pane or workspace target and a request the webview
+/// host turned down log at `DEBUG`, a refused PTY write goes through
+/// [`log_refused_write`] at `ERROR`, and every other failure logs at `WARN`.
 fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
     match error {
         OrzmuxError::UnresolvedTarget => match target {
@@ -524,6 +570,12 @@ fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &O
                 tracing::debug!(command = name, "pane command dropped: no such pane");
             }
         },
+        OrzmuxError::UnresolvedWorkspace => {
+            tracing::debug!(
+                command = name,
+                "workspace command dropped: no such workspace"
+            );
+        }
         OrzmuxError::PtyWrite { pane, source } => {
             log_refused_write(*pane, name, source, Level::ERROR);
         }
@@ -563,6 +615,7 @@ const CONTROL_BATCH: usize = 64;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::layout::LayoutTree;
     use crate::backend::queue_sample::ChunkDepth;
     use crate::backend::{CloseReason, Layout, OrzmuxEvent, SplitOrientation};
     use crate::test_support::{FactoryLog, FakeFactory, FakePane, Harness};
@@ -674,8 +727,8 @@ mod tests {
         );
     }
 
-    /// Asserts that `NewPane { Root }` before any `Resize` fails instead
-    /// of guessing a size.
+    /// Asserts that `NewPane { Workspace }` before any `Resize` fails
+    /// instead of guessing a size.
     ///
     /// Case: a misordered GUI start-up spawns before the window metrics
     /// exist.
@@ -684,7 +737,7 @@ mod tests {
         let mut h = Harness::new();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(9),
-            at: NewPaneAt::Root,
+            at: NewPaneAt::Workspace,
             cwd: None,
             env: vec![],
         });
@@ -709,11 +762,11 @@ mod tests {
         h.drain();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(1),
-            at: NewPaneAt::Root,
+            at: NewPaneAt::Workspace,
             cwd: None,
             env: vec![],
         });
-        let mut events = h.drain();
+        let mut events = h.drain_skipping_workspaces();
         assert!(matches!(
             events.pop_front(),
             Some(OrzmuxEvent::PaneOpened {
@@ -757,8 +810,9 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(h.backend().tree().panes(), vec![root]);
-        assert_eq!(h.backend().tree().active(), Some(root));
+        let tree = displayed_tree(&h);
+        assert_eq!(tree.panes(), vec![root]);
+        assert_eq!(tree.active(), Some(root));
     }
 
     /// Asserts that a split whose target no longer exists is answered
@@ -791,7 +845,7 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(h.backend().tree().panes(), vec![root]);
+        assert_eq!(displayed_tree(&h).panes(), vec![root]);
         assert_eq!(h.backend().next_pane_id(), next_id);
     }
 
@@ -930,7 +984,7 @@ mod tests {
         let (_root, _pane) = h.open_root();
         split_active(&mut h, 2);
         let window = GridSize::new(80, 24).expect("a valid size");
-        let split = h.backend().tree().solve(window).separators[0].split;
+        let split = displayed_tree(&h).solve(window).separators[0].split;
         for position in [50, 55, 60] {
             h.queue(OrzmuxCommand::ResizeSplit { split, position });
         }
@@ -1056,13 +1110,22 @@ mod tests {
     // letter rather than `/`, so joining it to `file://localhost`
     // directly yields `file://localhostC:/…`, whose path the parser
     // reads as `/Users/…` — not drive-rooted, and rejected.
-    fn osc7(path: &Path) -> Vec<u8> {
+    pub(super) fn osc7(path: &Path) -> Vec<u8> {
         let forward = path.display().to_string().replace('\\', "/");
         format!(
             "\x1b]7;file://localhost/{}\x1b\\",
             forward.trim_start_matches('/')
         )
         .into_bytes()
+    }
+
+    /// The displayed workspace's tree.
+    fn displayed_tree(h: &Harness) -> &LayoutTree {
+        &h.backend()
+            .workspaces()
+            .active()
+            .expect("a displayed workspace")
+            .tree
     }
 
     /// Splits the active pane and returns the new pane's id and its
@@ -1086,7 +1149,7 @@ mod tests {
 
     /// Feeds `CSI ? 1004 h` through `pane`'s output stream and pumps it, so
     /// the pane's application has focus reporting enabled.
-    fn enable_focus_reporting(h: &mut Harness, id: PaneId, pane: &FakePane) {
+    pub(super) fn enable_focus_reporting(h: &mut Harness, id: PaneId, pane: &FakePane) {
         pane.print(b"\x1b[?1004h");
         h.pump_pane(id);
         h.drain();
@@ -1358,8 +1421,9 @@ mod tests {
                 reason: CloseReason::Killed
             } if *pane == new
         )));
-        assert_eq!(h.backend().tree().panes(), vec![root]);
-        assert_eq!(h.backend().tree().active(), Some(root));
+        let tree = displayed_tree(&h);
+        assert_eq!(tree.panes(), vec![root]);
+        assert_eq!(tree.active(), Some(root));
     }
 
     /// Asserts that a kill flushes the pane's pending output before
@@ -1429,7 +1493,7 @@ mod tests {
             panic!("Layout must be last");
         };
         assert!(layout.panes.is_empty());
-        assert!(h.backend().tree().is_empty());
+        assert!(h.backend().workspaces().entries().is_empty());
     }
 
     /// Asserts that keyboard input reaches the active pane's PTY and that
@@ -2027,3 +2091,6 @@ mod tests {
 
 #[cfg(test)]
 mod webview_tests;
+
+#[cfg(test)]
+mod workspace_tests;

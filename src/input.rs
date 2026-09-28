@@ -1,7 +1,7 @@
 //! Root of the host input pipeline, turning window input events into
 //! terminal input and UI focus state.
 
-mod bindings;
+pub(crate) mod bindings;
 pub(crate) mod focus;
 mod hyperlink;
 pub(crate) mod ime;

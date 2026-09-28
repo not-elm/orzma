@@ -102,6 +102,7 @@ bevy = { version = "0.19", default-features = false, features = [
   "bevy_ui",
   "bevy_ui_render",
   "bevy_input_focus",
+  "bevy_ui_widgets",
   "bevy_text",
   "default_font",
   "system_font_discovery",

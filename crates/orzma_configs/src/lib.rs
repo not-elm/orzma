@@ -328,13 +328,13 @@ mod validate_tests {
         assert!(parse_validated(toml_str).is_ok());
     }
 
-    /// Asserts that `<Leader>c` is free for a user binding under the stock
+    /// Asserts that `<Leader>e` is free for a user binding under the stock
     /// defaults.
     ///
-    /// Case: a user binds vi mode to `<Leader>c`.
+    /// Case: a user binds vi mode to `<Leader>e`.
     #[test]
-    fn validate_accepts_enter_vi_mode_on_leader_c() {
-        let toml_str = "[shortcuts]\nenter-vi-mode = \"<Leader>c\"\n";
+    fn validate_accepts_enter_vi_mode_on_leader_e() {
+        let toml_str = "[shortcuts]\nenter-vi-mode = \"<Leader>e\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 }

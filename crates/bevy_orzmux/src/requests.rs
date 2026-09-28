@@ -5,7 +5,7 @@ use crate::requests::{
     copy::CopyPlugin, key_input::KeyInputPlugin, pane::PaneActionPlugin, paste::PastePlugin,
     pointer::PointerPlugin, scroll::ScrollPlugin, selection::SelectionPlugin,
     split_resize::SplitResizePlugin, vi_mode::ViModePlugin, vi_motion::ViMotionPlugin,
-    wheel::WheelPlugin,
+    wheel::WheelPlugin, workspace::WorkspaceActionPlugin,
 };
 use crate::{OrzmuxConnection, OrzmuxPane};
 use bevy::ecs::system::SystemParam;
@@ -23,6 +23,7 @@ mod split_resize;
 mod vi_mode;
 mod vi_motion;
 mod wheel;
+mod workspace;
 
 pub use copy::RequestTtyCopySelection;
 pub use key_input::{RequestActiveKeyInput, RequestTtyKeyInput};
@@ -37,6 +38,7 @@ pub use split_resize::RequestSplitResize;
 pub use vi_mode::{RequestTtyViMode, ViModeSwitch};
 pub use vi_motion::{RequestTtyViMotion, ViMotion};
 pub use wheel::RequestTtyWheel;
+pub use workspace::{RequestWorkspaceAction, WorkspaceAction};
 
 pub(crate) struct OrzmaEventRequestPlugin;
 
@@ -54,6 +56,7 @@ impl Plugin for OrzmaEventRequestPlugin {
             ViModePlugin,
             ViMotionPlugin,
             WheelPlugin,
+            WorkspaceActionPlugin,
         ));
     }
 }
@@ -87,7 +90,12 @@ impl PaneSender<'_, '_> {
 /// Test-only fixtures shared by this crate's tests.
 #[cfg(test)]
 pub(crate) mod test_support {
-    use crate::{OrzmuxConnection, OrzmuxPane, layout::CurrentLayout, registry::PaneRegistry};
+    use crate::{
+        OrzmuxConnection, OrzmuxPane,
+        layout::CurrentLayout,
+        registry::PaneRegistry,
+        workspace::{CurrentWorkspaces, PendingWorkspaceMove},
+    };
     use bevy::prelude::*;
     use crossbeam_channel::{Receiver, Sender};
     use orzmux::prelude::{CommandSeq, OrzmuxClient, OrzmuxCommand, OrzmuxEvent, PaneId};
@@ -107,6 +115,8 @@ pub(crate) mod test_support {
             .add_plugins(plugin)
             .init_resource::<PaneRegistry>()
             .init_resource::<CurrentLayout>()
+            .init_resource::<CurrentWorkspaces>()
+            .init_resource::<PendingWorkspaceMove>()
             .insert_resource(OrzmuxConnection(client));
         (app, events, commands)
     }
@@ -144,7 +154,7 @@ mod tests {
         TerminalKey, TerminalModifiers, WheelInput, WheelModifiers,
     };
     use orzma_vt::prelude::Scroll;
-    use orzmux::prelude::{PaneId, SplitId};
+    use orzmux::prelude::{CloseTarget, PaneId, SplitId, WorkspaceId};
 
     /// Asserts that no request observer runs once the connection is
     /// removed, so none of them panics.
@@ -221,6 +231,9 @@ mod tests {
         world.trigger(RequestTtyViSelectionToggle {
             terminal: pane,
             kind: SelectionKind::Simple,
+        });
+        world.trigger(RequestWorkspaceAction {
+            action: WorkspaceAction::Close(CloseTarget::Id(WorkspaceId(1))),
         });
         app.update();
     }
