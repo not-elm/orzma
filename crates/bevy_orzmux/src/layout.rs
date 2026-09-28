@@ -40,6 +40,11 @@ impl PaneGeometry {
 #[derive(Component, Debug)]
 pub struct OrzmuxPaneContainer;
 
+/// Marks a pane absent from the current layout, whose node is
+/// `Display::None`.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct OrzmuxPaneHidden;
+
 /// A divider node between two panes.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrzmuxSeparator {
@@ -99,10 +104,16 @@ const SEPARATOR_COLOR: Color = Color::srgb(0.35, 0.35, 0.40);
 /// cell, before rounding to whole physical px (never below one).
 const SEPARATOR_THICKNESS_LOGICAL_PX: f32 = 1.0;
 
+/// Positions the panes in the latest layout, hides every other pane with
+/// `Display::None` and `OrzmuxPaneHidden`, reconciles the separators, and
+/// applies the active pane.
 fn apply_layout(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
-    mut nodes: Query<&mut Node, (With<OrzmuxPane>, Without<OrzmuxSeparator>)>,
+    mut nodes: Query<
+        (Entity, &OrzmuxPane, &mut Node, Has<OrzmuxPaneHidden>),
+        Without<OrzmuxSeparator>,
+    >,
     mut separators: Query<(Entity, &mut Node, &OrzmuxSeparator)>,
     current: Res<CurrentLayout>,
     geometry: Res<PaneGeometry>,
@@ -112,12 +123,22 @@ fn apply_layout(
         return;
     };
     let layout = &current.0;
-    for rect in &layout.panes {
-        let Some(entity) = registry.entity_of(rect.pane) else {
-            continue;
-        };
-        if let Ok(mut node) = nodes.get_mut(entity) {
-            node.set_if_neq(pane_node(rect, layout, &geometry));
+    for (entity, pane, mut node, hidden) in &mut nodes {
+        match layout.panes.iter().find(|rect| rect.pane == pane.0) {
+            Some(rect) => {
+                node.set_if_neq(pane_node(rect, layout, &geometry));
+                if hidden {
+                    commands.entity(entity).remove::<OrzmuxPaneHidden>();
+                }
+            }
+            None => {
+                if node.display != Display::None {
+                    node.display = Display::None;
+                }
+                if !hidden {
+                    commands.entity(entity).insert(OrzmuxPaneHidden);
+                }
+            }
         }
     }
     reconcile_separators(&mut commands, &mut separators, layout, &geometry, container);
@@ -345,6 +366,22 @@ mod tests {
                 y: 0,
                 len: 24,
             }],
+        };
+    }
+
+    fn show_only(app: &mut App, seq: u64, pane: PaneId) {
+        app.world_mut().resource_mut::<CurrentLayout>().0 = Layout {
+            seq: CommandSeq(seq),
+            size: GridSize { cols: 81, rows: 24 },
+            active: Some(pane),
+            panes: vec![PaneRect {
+                pane,
+                x: 0,
+                y: 0,
+                cols: 81,
+                rows: 24,
+            }],
+            separators: vec![],
         };
     }
 
@@ -724,5 +761,30 @@ mod tests {
         set_layout(&mut app, 1, PaneId(1));
         app.update();
         assert_eq!(app.world().resource::<ChangedPaneNodes>().0, 0);
+    }
+
+    /// Asserts that a pane absent from the layout is hidden with
+    /// `Display::None` and marked, and shown again when it returns.
+    ///
+    /// Case: the user switches to another workspace and back.
+    #[test]
+    fn panes_absent_from_the_layout_are_hidden_and_restored() {
+        let mut app = app();
+        let (a, b) = two_panes(&mut app);
+        show_only(&mut app, 1, PaneId(1));
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(b).map(|n| n.display),
+            Some(Display::None)
+        );
+        assert!(app.world().get::<OrzmuxPaneHidden>(b).is_some());
+        show_only(&mut app, 2, PaneId(2));
+        app.update();
+        assert_ne!(
+            app.world().get::<Node>(b).map(|n| n.display),
+            Some(Display::None)
+        );
+        assert!(app.world().get::<OrzmuxPaneHidden>(b).is_none());
+        assert!(app.world().get::<OrzmuxPaneHidden>(a).is_some());
     }
 }
