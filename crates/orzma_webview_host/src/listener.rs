@@ -726,81 +726,62 @@ mod tests {
     // TODO: temporary Windows diagnostic for the flaky disconnect test; remove before merge.
     #[cfg(windows)]
     #[test]
-    fn diag_windows_second_read_handle() {
+    fn diag_windows_timeout_retry() {
         use std::fmt::Write as _;
-        use std::sync::Arc;
-        #[derive(Clone, Copy, Debug)]
-        enum Handle {
-            Original,
-            OriginalWithDups,
-            Dup,
-            ArcShared,
-        }
         let mut report = String::from("\n");
-        for (variant, shutdown_first) in [
-            (Handle::Dup, true),
-            (Handle::Original, true),
-            (Handle::OriginalWithDups, true),
-            (Handle::ArcShared, true),
-            (Handle::Dup, false),
-            (Handle::ArcShared, false),
+        for (dup, shutdown_first, timeout_ms) in [
+            (false, true, 500u64),
+            (true, true, 500),
+            (true, false, 500),
+            (true, true, 0),
         ] {
             let dir = tempfile::tempdir().unwrap();
-            let sock = dir.path().join("second.sock");
+            let sock = dir.path().join("retry.sock");
             let listener = UnixListener::bind(&sock).unwrap();
-            let (mut ok, mut stuck) = (0, 0);
+            let (mut ok, mut stuck, mut via_retry) = (0, 0, 0);
+            let mut worst = Duration::ZERO;
             for _ in 0..300 {
                 let mut client = connect(&sock);
                 let (server, _) = listener.accept().unwrap();
                 let (hello_tx, hello_rx) = bounded::<()>(1);
                 let (answer_tx, answer_rx) = bounded::<()>(1);
-                let (eof_tx, eof_rx) = bounded::<()>(1);
+                let (eof_tx, eof_rx) = bounded::<u32>(1);
                 thread::spawn(move || {
-                    let mut buf = String::new();
-                    let second = |reader: &mut dyn BufRead, buf: &mut String| {
-                        buf.clear();
-                        let _ = reader.read_line(buf);
-                    };
-                    match variant {
-                        Handle::Original => {
-                            let mut lines = BufReader::new(server);
-                            let _ = lines.read_line(&mut buf);
-                            let _ = hello_tx.send(());
-                            let _ = answer_rx.recv();
-                            second(&mut lines, &mut buf);
-                        }
-                        Handle::OriginalWithDups => {
-                            let dup_a = server.try_clone().unwrap();
-                            let dup_b = server.try_clone().unwrap();
-                            let mut lines = BufReader::new(server);
-                            let _ = lines.read_line(&mut buf);
-                            let _ = hello_tx.send(());
-                            let _ = answer_rx.recv();
-                            second(&mut lines, &mut buf);
-                            drop((dup_a, dup_b));
-                        }
-                        Handle::Dup => {
-                            let read_half = server.try_clone().unwrap();
-                            let write_half = server.try_clone().unwrap();
-                            let mut lines = BufReader::new(read_half);
-                            let _ = lines.read_line(&mut buf);
-                            let _ = hello_tx.send(());
-                            let _ = answer_rx.recv();
-                            second(&mut lines, &mut buf);
-                            drop((server, write_half));
-                        }
-                        Handle::ArcShared => {
-                            let shared = Arc::new(server);
-                            let writer_side = Arc::clone(&shared);
-                            let mut lines = BufReader::new(&*shared);
-                            let _ = lines.read_line(&mut buf);
-                            let _ = hello_tx.send(());
-                            let _ = answer_rx.recv();
-                            second(&mut lines, &mut buf);
-                            drop(writer_side);
+                    fn read_retrying(lines: &mut BufReader<UnixStream>) -> u32 {
+                        let mut out = Vec::new();
+                        let mut retries = 0;
+                        loop {
+                            match lines.read_until(b'\n', &mut out) {
+                                Err(error)
+                                    if matches!(
+                                        error.kind(),
+                                        ErrorKind::WouldBlock | ErrorKind::TimedOut
+                                    ) =>
+                                {
+                                    retries += 1;
+                                }
+                                _ => return retries,
+                            }
                         }
                     }
-                    let _ = eof_tx.send(());
+                    let (kept, reader) = if dup {
+                        let clone = server.try_clone().unwrap();
+                        (Some(server), clone)
+                    } else {
+                        (None, server)
+                    };
+                    if timeout_ms > 0 {
+                        reader
+                            .set_read_timeout(Some(Duration::from_millis(timeout_ms)))
+                            .unwrap();
+                    }
+                    let mut lines = BufReader::new(reader);
+                    read_retrying(&mut lines);
+                    let _ = hello_tx.send(());
+                    let _ = answer_rx.recv();
+                    let retries = read_retrying(&mut lines);
+                    let _ = eof_tx.send(retries);
+                    drop(kept);
                 });
                 send_line(&mut client, r#"{"op":"hello","token":"tok"}"#);
                 hello_rx.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -808,20 +789,23 @@ mod tests {
                 if shutdown_first {
                     client.shutdown(Shutdown::Write).unwrap();
                 }
+                let closed = Instant::now();
                 drop(client);
                 match eof_rx.recv_timeout(Duration::from_secs(3)) {
-                    Ok(()) => ok += 1,
+                    Ok(retries) => {
+                        ok += 1;
+                        worst = worst.max(closed.elapsed());
+                        if retries > 0 {
+                            via_retry += 1;
+                        }
+                    }
                     Err(_) => stuck += 1,
                 }
                 if stuck >= 10 {
                     break;
                 }
             }
-            writeln!(
-                report,
-                "{variant:?} shutdown_first={shutdown_first}: ok={ok} stuck={stuck}"
-            )
-            .unwrap();
+            writeln!(report, "dup={dup} shutdown_first={shutdown_first} timeout_ms={timeout_ms}: ok={ok} stuck={stuck} eof_via_retry={via_retry} worst={worst:?}").unwrap();
         }
         panic!("{report}");
     }
