@@ -45,9 +45,11 @@ OPTIONAL_CEF_RESOURCES = ("gpu_shader_cache.bin",)
 MIN_MACOS = "11.0"
 DMG_FORMAT = "ULMO"
 DMG_FILESYSTEM = "HFS+"
-# NOTE: `hdiutil create` intermittently fails with "Resource busy" on GitHub's
-# macOS runners; without the retry a release build fails at random.
-HDIUTIL_CREATE_ATTEMPTS = 3
+# NOTE: on GitHub's macOS runners `hdiutil create` intermittently fails with
+# "Resource busy", and `hdiutil verify` with "Resource temporarily unavailable"
+# while the disk-image helper still locks the new image; without the retry a
+# release build fails at random.
+HDIUTIL_ATTEMPTS = 3
 HDIUTIL_RETRY_DELAY_SECONDS = 5
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -259,7 +261,7 @@ def verify_prerequisites(cfg: BundleConfig) -> None:
 
 def run(argv: list[str], redact: tuple[str, ...] = ()) -> None:
     shown = " ".join("***" if arg in redact else arg for arg in argv)
-    print(f"==> {shown}")
+    print(f"==> {shown}", flush=True)
     subprocess.run(argv, check=True)
 
 
@@ -507,17 +509,18 @@ def stage_dmg(app: Path, staging: Path) -> None:
     (staging / "Applications").symlink_to("/Applications")
 
 
-def create_dmg(argv: list[str]) -> None:
-    for attempt in range(1, HDIUTIL_CREATE_ATTEMPTS + 1):
+def run_hdiutil(argv: list[str]) -> None:
+    for attempt in range(1, HDIUTIL_ATTEMPTS + 1):
         try:
             run(argv)
             return
         except subprocess.CalledProcessError:
-            if attempt == HDIUTIL_CREATE_ATTEMPTS:
+            if attempt == HDIUTIL_ATTEMPTS:
                 raise
             print(
-                f"==> hdiutil create failed (attempt {attempt}/{HDIUTIL_CREATE_ATTEMPTS}); "
-                f"retrying in {HDIUTIL_RETRY_DELAY_SECONDS}s"
+                f"==> {' '.join(argv[:2])} failed (attempt {attempt}/{HDIUTIL_ATTEMPTS}); "
+                f"retrying in {HDIUTIL_RETRY_DELAY_SECONDS}s",
+                flush=True,
             )
             time.sleep(HDIUTIL_RETRY_DELAY_SECONDS)
 
@@ -530,8 +533,8 @@ def package(cfg: BundleConfig) -> str:
     try:
         with tempfile.TemporaryDirectory(prefix="dmg-staging-", dir=cfg.out_dir) as staging:
             stage_dmg(cfg.app_path, Path(staging))
-            create_dmg(hdiutil_create_argv(cfg.app_name, Path(staging), dest))
-        run(hdiutil_verify_argv(dest))
+            run_hdiutil(hdiutil_create_argv(cfg.app_name, Path(staging), dest))
+        run_hdiutil(hdiutil_verify_argv(dest))
     except BaseException:
         dest.unlink(missing_ok=True)
         raise

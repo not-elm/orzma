@@ -12,7 +12,7 @@ body:
     id: version
     attributes:
       label: orzma version
-      description: On macOS, run `brew info --cask orzma`. Elsewhere, use the version in the name of the file you downloaded (for the `.deb`, `apt show orzma` also shows it).
+      description: If you installed with Homebrew, run `brew info --cask orzma`. Otherwise, use the version in the name of the file you downloaded (for the `.deb`, `apt show orzma` also shows it).
       placeholder: e.g. 0.1.0
     validations:
       required: true
