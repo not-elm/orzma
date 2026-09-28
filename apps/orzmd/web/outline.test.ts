@@ -50,6 +50,43 @@ describe('OutlinePanel', () => {
     expect(b.classList.contains('selected')).toBe(true);
   });
 
+  it('scrolls to an unchanged selection once the panel is shown again', () => {
+    const { panel: p } = panel();
+    p.setItems([
+      { level: 1, text: 'A' },
+      { level: 1, text: 'B' },
+    ]);
+    const scrolled: string[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.textContent ?? '');
+    };
+    p.mark(1, null);
+    p.setOpen(false);
+    p.mark(1, null);
+    p.setOpen(true);
+    p.mark(1, null);
+    p.mark(1, null);
+    Element.prototype.scrollIntoView = () => {};
+    expect(scrolled).toEqual(['B', 'B']);
+  });
+
+  it('moves the marks off the entries marked before', () => {
+    const { root, panel: p } = panel();
+    p.setItems([
+      { level: 1, text: 'A' },
+      { level: 1, text: 'B' },
+      { level: 1, text: 'C' },
+    ]);
+    p.mark(0, 0);
+    p.mark(2, 1);
+    const marked = (cls: string) =>
+      Array.from(root.querySelectorAll(`.${cls}`)).map((li) => li.textContent);
+    expect(marked('selected')).toEqual(['C']);
+    expect(marked('current')).toEqual(['B']);
+    p.mark(2, null);
+    expect(marked('current')).toEqual([]);
+  });
+
   it('reports the clicked heading', () => {
     const jumps: number[] = [];
     const { root, panel: p } = panel((i) => jumps.push(i));

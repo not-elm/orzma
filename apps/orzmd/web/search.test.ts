@@ -1,12 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { findMatches, type HighlightPainter, isCaseSensitive, outsideBand, Search } from './search';
+import { __testables, type HighlightPainter, isCaseSensitive, Search } from './search';
+
+const { findMatches, outsideBand } = __testables;
 
 class RecordingPainter implements HighlightPainter {
   all: readonly AbstractRange[] = [];
   current: AbstractRange | null = null;
   cleared = 0;
+  fullPaints = 0;
   paint(all: readonly AbstractRange[], current: AbstractRange | null): void {
+    this.fullPaints++;
     this.all = all;
+    this.current = current;
+  }
+  paintCurrent(current: AbstractRange | null): void {
     this.current = current;
   }
   clear(): void {
@@ -108,6 +115,14 @@ describe('Search', () => {
     expect(search.navigate('next')).toEqual({ total: 3, current: 2, wrapped: false });
     expect(search.navigate('prev')).toEqual({ total: 3, current: 1, wrapped: false });
     expect(search.navigate('prev')).toEqual({ total: 3, current: 3, wrapped: true });
+  });
+
+  it('repaints only the current match when moving', () => {
+    const { search, painter } = newSearch();
+    search.run(container(three), 'x', 0);
+    search.navigate('next');
+    expect(painter.fullPaints).toBe(1);
+    expect(painter.current?.startContainer.parentElement?.dataset.y).toBe('100');
   });
 
   it('keeps the current number within a smaller total after a re-render', () => {

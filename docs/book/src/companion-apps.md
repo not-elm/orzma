@@ -73,7 +73,7 @@ copied otherwise; a copied image does not refresh until orzmd is restarted.
 | `gg` | Jump to the top |
 | `G` | Jump to the bottom |
 | `]]` / `[[` | Jump to the next / previous heading |
-| `o` / `Tab` | Toggle the outline panel |
+| `o` / `Tab` | Toggle the outline sidebar |
 | `/` | Start a search |
 | `n` / `N` | Next / previous match (after a search) |
 | `r` | Reload the file |
@@ -84,7 +84,7 @@ quitting; `q` still quits, because orzmd forwards it to the TUI even while
 the page is focused. The exception is typing a search query: then every key,
 `q` included, goes into the find box.
 
-#### Outline panel
+#### Outline sidebar
 
 | Key | Action |
 | --- | --- |
@@ -92,7 +92,7 @@ the page is focused. The exception is typing a search query: then every key,
 | `k` / `↑` | Move the selection up |
 | `Enter` | Jump to the selected heading |
 | Click a heading | Jump to that heading |
-| `o` / `Tab` / `Esc` | Close the panel |
+| `o` / `Tab` / `Esc` | Close the sidebar |
 | `q` | Quit |
 
 The outline opens with the section you are reading selected.
@@ -102,7 +102,7 @@ The outline opens with the section you are reading selected.
 | Key | Action |
 | --- | --- |
 | (type) | Build the query; matches highlight as you type |
-| `Enter` | Keep the matches and return to reading |
+| `Enter` | Keep the matches and return to reading; with no match, nothing happens |
 | `Esc` | Cancel the search and return to where it started |
 
 After `Enter`, use `n` / `N` in reading mode to move between matches, and

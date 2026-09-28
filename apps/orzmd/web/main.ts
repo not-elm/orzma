@@ -5,15 +5,26 @@ import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
 import { breadcrumb, type Chrome, type HeadingInfo, renderRail, renderToast } from './chrome';
-import { FindBox } from './find';
+import { FindBox, type SearchCause } from './find';
 import { collectLocalImages } from './images';
-import { applyLayoutVars, RAIL_HEIGHT, reachedTop } from './layout';
+import { applyLayoutVars, FIND_CLEARANCE, RAIL_HEIGHT, reachedTop } from './layout';
 import { classifyLink } from './links';
 import { OutlinePanel } from './outline';
 import { renderMarkdown } from './render';
 import { CssHighlightPainter, measureTop, revealRange, Search } from './search';
 
 mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
+
+/** A report to the controller (`page` event), tagged by `kind`. */
+type PageEvent =
+  | { kind: 'scrollState'; ratio: number; currentHeadingIndex: number | null; headingCount: number }
+  | { kind: 'searchSubmit' | 'searchEscape'; cause: SearchCause }
+  | { kind: 'searchClose' }
+  | { kind: 'outlineJump'; index: number };
+
+function emitPage(event: PageEvent): void {
+  orzma.emit('page', event);
+}
 
 const content = document.getElementById('content') as HTMLElement;
 const search = new Search(new CssHighlightPainter(), measureTop);
@@ -22,25 +33,24 @@ const findBox = new FindBox(
   document.getElementById('find') as HTMLElement,
   search,
   {
-    submit: (cause) => orzma.emit('searchSubmit', { cause }),
-    escape: (cause) => orzma.emit('searchEscape', { cause }),
-    close: () => orzma.emit('searchClose', {}),
+    submit: (cause) => emitPage({ kind: 'searchSubmit', cause }),
+    escape: (cause) => emitPage({ kind: 'searchEscape', cause }),
+    close: () => emitPage({ kind: 'searchClose' }),
   },
   {
     content,
     schedule: (task) => {
       requestAnimationFrame(task);
     },
-    reveal: (range, top) => revealRange(range, { top, bottom: window.innerHeight }),
+    reveal: (range) => revealRange(range, { top: FIND_CLEARANCE, bottom: window.innerHeight }),
     scrollY: () => window.scrollY,
     scrollTo: (y) => window.scrollTo({ top: y }),
   },
 );
 
-const outlineRoot = document.getElementById('outline') as HTMLElement;
-const outlinePanel = new OutlinePanel(outlineRoot, (index) => {
-  orzma.emit('outlineJump', { index });
-});
+const outlinePanel = new OutlinePanel(document.getElementById('outline') as HTMLElement, (index) =>
+  emitPage({ kind: 'outlineJump', index }),
+);
 
 function applyOutline(open: boolean): void {
   if (document.body.classList.contains('outline-open') === open) {
@@ -48,7 +58,7 @@ function applyOutline(open: boolean): void {
   }
   const anchor = captureScrollAnchor();
   document.body.classList.toggle('outline-open', open);
-  outlineRoot.hidden = !open;
+  outlinePanel.setOpen(open);
   restoreScrollAnchor(anchor);
 }
 
@@ -57,6 +67,7 @@ const toast = document.getElementById('toast') as HTMLElement;
 
 let chrome: Chrome | null = null;
 let currentHeading: number | null = null;
+let headings: HeadingInfo[] = [];
 
 applyLayoutVars(document.documentElement);
 
@@ -96,7 +107,7 @@ function renderChromeUi(): void {
   if (chrome === null) {
     return;
   }
-  renderRail(rail, chrome, breadcrumb(headingInfos(), currentHeading));
+  renderRail(rail, chrome, breadcrumb(headings, currentHeading));
   renderToast(toast, chrome.toast);
   applyOutline(chrome.outline.open);
   outlinePanel.mark(chrome.outline.selected, currentHeading);
@@ -179,7 +190,7 @@ function reportScrollState(): void {
       currentHeadingIndex = i;
     }
   }
-  orzma.emit('scrollState', { ratio, currentHeadingIndex, headingCount: heads.length });
+  emitPage({ kind: 'scrollState', ratio, currentHeadingIndex, headingCount: heads.length });
   if (currentHeadingIndex !== currentHeading) {
     currentHeading = currentHeadingIndex;
     renderChromeUi();
@@ -250,7 +261,8 @@ async function setContent(payload: ContentPayload): Promise<void> {
   const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
   installHeadingAnchors(content);
-  outlinePanel.setItems(headingInfos());
+  headings = headingInfos();
+  outlinePanel.setItems(headings);
   await renderMermaid();
   await stageLocalImages(content);
   // NOTE: a newer setContent superseded this one during the await (rapid reloads
@@ -309,9 +321,6 @@ orzma.on('scrollToHeading', (p: { index: number }) => {
 
 orzma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
   findBox.nav(p.dir);
-});
-orzma.on('clearSearch', () => {
-  findBox.clear();
 });
 orzma.on('searchType', (p: { text: string }) => {
   findBox.typeText(p.text);

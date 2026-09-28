@@ -12,15 +12,17 @@ export interface SearchResult {
 export interface HighlightPainter {
   /** Paints `all` as matches and `current` above them as the current match. */
   paint(all: readonly AbstractRange[], current: AbstractRange | null): void;
+  /** Moves the current-match paint to `current`, leaving the other matches as painted. */
+  paintCurrent(current: AbstractRange | null): void;
   /** Removes every painted match. */
   clear(): void;
 }
 
 /** Returns the top of `range` in document coordinates (CSS pixels from the page top). */
-export type MeasureTop = (range: AbstractRange) => number;
+type MeasureTop = (range: AbstractRange) => number;
 
 /** The vertical band of the viewport, in viewport coordinates, where a match counts as visible. */
-export interface VisibleBand {
+interface VisibleBand {
   top: number;
   bottom: number;
 }
@@ -36,7 +38,7 @@ export function isCaseSensitive(query: string): boolean {
  * Returns a StaticRange for every literal occurrence of `query` in the text nodes under `root`,
  * in document order. Text inside SVG is skipped; a match never spans two text nodes.
  */
-export function findMatches(root: Node, query: string): StaticRange[] {
+function findMatches(root: Node, query: string): StaticRange[] {
   if (query.length === 0) {
     return [];
   }
@@ -66,7 +68,7 @@ export function findMatches(root: Node, query: string): StaticRange[] {
 }
 
 /** A live Range over the same boundary points as `range`. */
-export function toLiveRange(range: AbstractRange): Range {
+function toLiveRange(range: AbstractRange): Range {
   const live = document.createRange();
   live.setStart(range.startContainer, range.startOffset);
   live.setEnd(range.endContainer, range.endOffset);
@@ -79,19 +81,24 @@ export function measureTop(range: AbstractRange): number {
 }
 
 /** Whether a match spanning viewport y `top`..`bottom` lies outside `band`. */
-export function outsideBand(top: number, bottom: number, band: VisibleBand): boolean {
+function outsideBand(top: number, bottom: number, band: VisibleBand): boolean {
   return top < band.top || bottom > band.bottom;
 }
 
 /**
- * Scrolls `range` into view. The window scrolls, putting the match a third of the way down,
- * only when the match lies outside `band`; the nearest horizontally scrolled ancestor scrolls
- * when the match lies outside its box.
+ * Scrolls `range` into view. The window scrolls, putting the match a third of the way down but
+ * never above `band`, only when the match lies outside `band`; the nearest horizontally scrolled
+ * ancestor scrolls when the match lies outside its box. A range that is not rendered, such as one
+ * in a closed `<details>` or in a replaced document, scrolls nothing.
  */
 export function revealRange(range: Range, band: VisibleBand): void {
   const rect = range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) {
+    return;
+  }
   if (outsideBand(rect.top, rect.bottom, band)) {
-    window.scrollTo({ top: window.scrollY + rect.top - window.innerHeight / 3 });
+    const stop = Math.max(band.top, window.innerHeight / 3);
+    window.scrollTo({ top: window.scrollY + rect.top - stop });
   }
   const scroller = horizontalScroller(range.startContainer.parentElement);
   if (scroller === null) {
@@ -110,13 +117,14 @@ export class CssHighlightPainter implements HighlightPainter {
     for (const range of all) {
       matches.add(range);
     }
-    const currentHighlight = new Highlight();
-    if (current !== null) {
-      currentHighlight.add(current);
-    }
-    currentHighlight.priority = 1;
     CSS.highlights.set('orzmd-match', matches);
-    CSS.highlights.set('orzmd-current', currentHighlight);
+    this.paintCurrent(current);
+  }
+
+  paintCurrent(current: AbstractRange | null): void {
+    const highlight = current === null ? new Highlight() : new Highlight(current);
+    highlight.priority = 1;
+    CSS.highlights.set('orzmd-current', highlight);
   }
 
   clear(): void {
@@ -177,7 +185,7 @@ export class Search {
     }
     const next = dir === 'next' ? this.index + 1 : this.index - 1;
     this.index = (next + n) % n;
-    this.paint();
+    this.painter.paintCurrent(this.ranges[this.index]);
     return this.result(next < 0 || next >= n);
   }
 
@@ -217,3 +225,6 @@ function horizontalScroller(from: Element | null): HTMLElement | null {
   }
   return null;
 }
+
+/** Test-only exports of the file-local helpers (see typescript.md visibility rule). */
+export const __testables = { findMatches, outsideBand };

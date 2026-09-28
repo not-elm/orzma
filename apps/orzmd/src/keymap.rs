@@ -3,7 +3,7 @@
 //! completes.
 
 use crate::protocol::SearchCause;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui_orzma::KeyChord;
 
 /// The current input mode.
@@ -38,7 +38,7 @@ pub(crate) enum Action {
     OutlineMoveDown,
     OutlineMoveUp,
     OutlineConfirm,
-    /// Jump to heading `n` clicked in the outline.
+    /// A click on the outline entry of the heading at this index.
     OutlineJump(usize),
     EnterSearch,
     SearchChar(char),
@@ -77,13 +77,9 @@ impl KeySet {
     }
 }
 
-/// Maps a key event in `mode` to an [`Action`].
-///
-/// A key release maps to [`Action::Ignore`].
+/// Maps a key press in `mode` to an [`Action`]. A release maps as its press
+/// would, so the caller passes presses and repeats only.
 pub(crate) fn map(mode: Mode, key: KeyEvent) -> Action {
-    if key.kind == KeyEventKind::Release {
-        return Action::Ignore;
-    }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match mode {
         Mode::Search => match key.code {
@@ -293,33 +289,6 @@ mod tests {
             ),
             Action::SearchBackspace
         );
-    }
-
-    /// Asserts that a key release drives no action in any mode, while a
-    /// repeat of the same key still does.
-    ///
-    /// Case: on Windows, ConPTY reports each keystroke as a press followed by
-    /// a release, and the user opens the search and types a query.
-    #[test]
-    fn a_key_release_drives_no_action() {
-        let codes = [
-            KeyCode::Char('/'),
-            KeyCode::Char('a'),
-            KeyCode::Char('o'),
-            KeyCode::Enter,
-            KeyCode::Backspace,
-            KeyCode::Esc,
-        ];
-        for mode in [Mode::Normal, Mode::Outline, Mode::Search] {
-            for code in codes {
-                let release =
-                    KeyEvent::new_with_kind(code, KeyModifiers::NONE, KeyEventKind::Release);
-                assert_eq!(map(mode, release), Action::Ignore, "{mode:?} {code:?}");
-            }
-        }
-        let repeat =
-            KeyEvent::new_with_kind(KeyCode::Char('a'), KeyModifiers::NONE, KeyEventKind::Repeat);
-        assert_eq!(map(Mode::Search, repeat), Action::SearchChar('a'));
     }
 
     /// Asserts that every forwarded chord drives an action in Normal or

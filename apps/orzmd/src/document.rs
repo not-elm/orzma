@@ -21,13 +21,6 @@ pub(crate) struct Fingerprint {
     mtime: Option<SystemTime>,
 }
 
-impl Document {
-    /// Builds a document from source text and the file's parent directory.
-    fn from_source(text: String, base_dir: PathBuf) -> Self {
-        Self { text, base_dir }
-    }
-}
-
 /// Resolves a user-supplied path to an absolute, canonical regular-file path.
 ///
 /// # Errors
@@ -36,11 +29,11 @@ pub(crate) fn resolve_path(arg: &str) -> io::Result<PathBuf> {
     require_regular_file(arg)
 }
 
-/// Reads and parses the Markdown file at `path` into a [`Document`].
+/// Reads the Markdown file at `path` into a [`Document`].
 pub(crate) fn load(path: &Path) -> io::Result<Document> {
     let text = fs::read_to_string(path)?;
     let base_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    Ok(Document::from_source(text, base_dir))
+    Ok(Document { text, base_dir })
 }
 
 /// Resolves a link `target` (relative or absolute) against `base_dir` to an

@@ -9,35 +9,33 @@ use std::mem;
 /// A side effect for `main.rs` to perform after `on_action`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Cmd {
-    /// Scroll the page.
+    /// Scrolls the page.
     Scroll(ScrollAction),
-    /// Scroll heading `index` (the `id="h{index}"` anchor) into view.
+    /// Scrolls heading `index` (the `id="h{index}"` anchor) into view.
     ScrollToHeading(usize),
-    /// Navigate to the next/previous search match.
+    /// Moves to the next or previous search match.
     SearchNav(SearchDir),
-    /// Clear the in-page search highlight.
-    ClearSearch,
-    /// Put a character into the page's search input, replacing its selection.
+    /// Puts a character into the page's search input, replacing its selection.
     SearchType(char),
-    /// Delete backwards in the page's search input.
+    /// Deletes backwards in the page's search input.
     SearchBackspace,
-    /// Handle an Enter the TUI received as Enter in the page's search input.
+    /// Relays an Enter the TUI received to the page's search input.
     SearchEnter,
-    /// Ask the page to end the typed search by its match count.
+    /// Asks the page to end the typed search by its match count.
     SearchResolve,
-    /// Abandon the typed search and return to where it started.
+    /// Abandons the typed search and returns to where it started.
     SearchCancel,
-    /// Replace the page's forward keys with the given set.
+    /// Replaces the page's forward keys with the given set.
     SetForwardKeys(KeySet),
-    /// Re-read the file from disk and push new content.
+    /// Re-reads the file from disk and pushes new content.
     Reload,
-    /// Pop the navigation back stack.
+    /// Pops the navigation back stack.
     Back,
-    /// Exit the app.
+    /// Exits the app.
     Quit,
-    /// Give the page keyboard focus.
+    /// Gives the page keyboard focus.
     Focus,
-    /// Take keyboard focus back from the page to the TUI.
+    /// Takes keyboard focus back from the page to the TUI.
     Blur,
 }
 
@@ -53,7 +51,6 @@ pub(crate) struct App {
     search_active: bool,
     page_focused: bool,
     blur_after_search: bool,
-    key_set: KeySet,
 }
 
 impl App {
@@ -104,6 +101,7 @@ impl App {
 
     /// Processes an [`Action`], returning the side effects to perform.
     pub fn on_action(&mut self, action: Action) -> Vec<Cmd> {
+        let key_set = KeySet::of(self.mode);
         if let Some(prefix) = self.pending_prefix.take()
             && let Action::Prefix(c) = action
             && c == prefix
@@ -180,11 +178,12 @@ impl App {
                 self.cancel_search(cause)
             }
             Action::PageSearchSubmit(_) | Action::PageSearchEscape(_) => vec![],
-            Action::PageSearchClose if self.mode == Mode::Normal && self.search_active => {
-                self.search_active = false;
-                vec![Cmd::ClearSearch]
+            Action::PageSearchClose => {
+                if self.search_stage() == SearchStage::Active {
+                    self.search_active = false;
+                }
+                vec![]
             }
-            Action::PageSearchClose => vec![],
             Action::SearchNext if self.search_active => vec![Cmd::SearchNav(SearchDir::Next)],
             Action::SearchPrev if self.search_active => vec![Cmd::SearchNav(SearchDir::Prev)],
             Action::SearchNext | Action::SearchPrev => vec![],
@@ -192,27 +191,24 @@ impl App {
             Action::Escape => {
                 self.outline_open = false;
                 self.mode = Mode::Normal;
-                if self.search_active {
-                    self.search_active = false;
-                    vec![Cmd::ClearSearch]
-                } else {
-                    vec![]
-                }
+                self.search_active = false;
+                vec![]
             }
             Action::Ignore => vec![],
         };
-        self.with_key_set(cmds)
+        self.with_key_set(key_set, cmds)
     }
 
     /// Clears search state when the viewed document changes, returning the
     /// forward-key change that leaving a typed search needs.
     pub fn clear_search_state(&mut self) -> Vec<Cmd> {
+        let key_set = KeySet::of(self.mode);
         self.search_active = false;
         if self.mode == Mode::Search {
             self.mode = Mode::Normal;
             self.blur_after_search = false;
         }
-        self.with_key_set(vec![])
+        self.with_key_set(key_set, vec![])
     }
 
     /// Records a focus change the host reported for the page. Losing focus
@@ -220,12 +216,11 @@ impl App {
     /// changes nothing else.
     pub fn on_focus_change(&mut self, focused: bool) -> Vec<Cmd> {
         self.page_focused = focused;
-        let cmds = if !focused && self.mode == Mode::Search {
+        if !focused && self.mode == Mode::Search {
             vec![Cmd::SearchResolve]
         } else {
             vec![]
-        };
-        self.with_key_set(cmds)
+        }
     }
 
     fn cancel_search(&mut self, cause: SearchCause) -> Vec<Cmd> {
@@ -242,12 +237,11 @@ impl App {
         (blur && cause == SearchCause::Key).then_some(Cmd::Blur)
     }
 
-    /// Puts `SetForwardKeys` first in `cmds` when the mode needs a different
-    /// forward-key set than the page carries.
-    fn with_key_set(&mut self, mut cmds: Vec<Cmd>) -> Vec<Cmd> {
+    /// Puts `SetForwardKeys` first in `cmds` when the mode now needs a
+    /// different forward-key set than `before`, the set the page carried.
+    fn with_key_set(&self, before: KeySet, mut cmds: Vec<Cmd>) -> Vec<Cmd> {
         let wanted = KeySet::of(self.mode);
-        if wanted != self.key_set {
-            self.key_set = wanted;
+        if wanted != before {
             cmds.insert(0, Cmd::SetForwardKeys(wanted));
         }
         cmds
@@ -282,8 +276,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keymap::KeySet;
-    use crate::protocol::SearchCause;
 
     fn app_with_outline(n: usize) -> App {
         let mut app = App::default();
@@ -584,7 +576,7 @@ mod tests {
     fn escape_clears_an_active_search() {
         let mut app = App::default();
         submitted(&mut app);
-        assert_eq!(app.on_action(Action::Escape), vec![Cmd::ClearSearch]);
+        assert_eq!(app.on_action(Action::Escape), vec![]);
         assert_eq!(app.search_stage(), SearchStage::Closed);
     }
 
@@ -609,12 +601,25 @@ mod tests {
         let mut app = App::default();
         app.on_action(Action::EnterSearch);
         assert_eq!(app.on_action(Action::PageSearchClose), vec![]);
+        assert_eq!(app.search_stage(), SearchStage::Typing);
         app.on_action(Action::PageSearchSubmit(SearchCause::Key));
-        assert_eq!(
-            app.on_action(Action::PageSearchClose),
-            vec![Cmd::ClearSearch]
-        );
+        app.on_action(Action::PageSearchClose);
         assert_eq!(app.search_stage(), SearchStage::Closed);
+    }
+
+    /// Asserts that the close button clears a confirmed search while the outline is
+    /// open, leaving the outline open.
+    ///
+    /// Case: the user confirms a search, opens the outline with `o`, and clicks the
+    /// find box's close button.
+    #[test]
+    fn the_close_button_works_with_the_outline_open() {
+        let mut app = app_with_outline(2);
+        submitted(&mut app);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.on_action(Action::PageSearchClose), vec![]);
+        assert_eq!(app.search_stage(), SearchStage::Closed);
+        assert_eq!(app.mode(), Mode::Outline);
     }
 
     /// Asserts that a search abandoned by a blur is cancelled without blurring the page.

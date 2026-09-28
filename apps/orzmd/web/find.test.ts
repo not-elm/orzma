@@ -12,7 +12,7 @@ function setup(html = '<p data-y="100">foo</p><p data-y="200">foo</p>') {
   document.body.innerHTML = `${BOX}<div id="content">${html}</div>`;
   const root = document.getElementById('find') as HTMLElement;
   const content = document.getElementById('content') as HTMLElement;
-  const search = new Search({ paint: () => {}, clear: () => {} }, (range) =>
+  const search = new Search({ paint: () => {}, paintCurrent: () => {}, clear: () => {} }, (range) =>
     Number((range.startContainer.parentElement as HTMLElement).dataset.y ?? 0),
   );
   const sent: string[] = [];
@@ -195,6 +195,24 @@ describe('FindBox', () => {
     t.box.setStage('active');
     (t.root.querySelector('[data-act="close"]') as HTMLElement).click();
     expect(t.sent).toEqual(['close']);
+  });
+
+  it('takes no input and sends no second report once it reported the end', () => {
+    const t = setup();
+    t.box.setStage('typing');
+    t.type('foo');
+    t.key('Enter');
+    t.type('foon');
+    t.box.typeText('x');
+    t.box.resolve();
+    t.key('Escape');
+    t.flush();
+    expect(t.sent).toEqual(['submit:key']);
+    expect(t.count()).toBe('1 / 2');
+    expect(t.input.readOnly).toBe(true);
+    t.box.setStage('active');
+    t.box.setStage('typing');
+    expect(t.input.readOnly).toBe(false);
   });
 
   it('keeps the input read-only outside typing', () => {

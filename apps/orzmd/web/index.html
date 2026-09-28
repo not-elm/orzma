@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <link rel="stylesheet" href="bundle.css" />
     <style>
-      :root { color-scheme: dark; }
+      :root { color-scheme: dark; --outline-w: min(260px, 40vw); }
       body { margin: 0; padding: calc(var(--rail-h) + 24px) 24px 24px; background: #0d1117; color: #c9d1d9;
              font: 16px/1.6 -apple-system, system-ui, sans-serif; }
       img { max-width: 100%; height: auto; }
@@ -12,7 +12,6 @@
       code { font-family: ui-monospace, monospace; }
       ::highlight(orzmd-match) { background-color: #ffd33d55; }
       ::highlight(orzmd-current) { background-color: #ffd33d; color: #000; }
-      .orzmd-anchor { display: inline; }
       table { border-collapse: collapse; }
       th, td { border: 1px solid #30363d; padding: 6px 12px; }
       .markdown-alert { border-left: 4px solid var(--alert-accent);
@@ -41,23 +40,19 @@
               border-bottom-width: 2px; border-radius: 4px; padding: 2px 6px; }
       #rail .rail-missing { color: #ff7b72; font-weight: 600; border: 1px solid #f8514966;
               border-radius: 999px; padding: 3px 8px; }
-      #toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 10;
-               align-items: center; gap: 8px; max-width: 80vw; padding: 8px 12px;
-               background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-               box-shadow: 0 10px 28px rgba(1, 4, 9, .6); color: #e6edf3;
+      #toast, #find { position: fixed; z-index: 10; align-items: center; gap: 8px;
+              background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+              box-shadow: 0 10px 28px rgba(1, 4, 9, .6); color: #e6edf3; }
+      #toast:not([hidden]), #find:not([hidden]) { display: flex; }
+      #toast { left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 80vw; padding: 8px 12px;
                font: 12.5px/1.4 -apple-system, system-ui, sans-serif; }
-      #toast:not([hidden]) { display: flex; }
       #toast.toast-error { border-color: #f8514966; }
       #toast.toast-info { color: #9198a1; }
       #toast .toast-icon { flex: none; width: 14px; height: 14px; color: #ff7b72; }
       #toast.toast-info .toast-icon { display: none; }
-      #find { position: fixed; top: calc(var(--rail-h) + 8px); right: 16px; z-index: 10;
-              box-sizing: border-box; width: min(320px, 100vw - 32px); height: 32px;
-              align-items: center; gap: 8px; padding: 0 6px 0 10px;
-              background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-              box-shadow: 0 10px 28px rgba(1, 4, 9, .6); color: #e6edf3;
+      #find { top: var(--find-top); right: 16px; box-sizing: border-box;
+              width: min(320px, 100vw - 32px); height: var(--find-h); padding: 0 6px 0 10px;
               font: 12.5px/1 -apple-system, system-ui, sans-serif; }
-      #find:not([hidden]) { display: flex; }
       #find.no-results { border-color: #f85149aa; }
       #find .find-icon { flex: none; width: 14px; height: 14px; color: #9198a1; }
       #find .find-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; background: transparent;
@@ -73,7 +68,6 @@
               padding: 0; border: 0; border-radius: 5px; background: transparent; color: #c9d1d9; }
       #find button:disabled { color: #484f58; }
       #find button svg { width: 14px; height: 14px; }
-      :root { --outline-w: min(260px, 40vw); }
       body.outline-open { padding-left: calc(var(--outline-w) + 24px); }
       #outline { position: fixed; top: var(--rail-h); left: 0; bottom: 0; z-index: 5;
                  box-sizing: border-box; width: var(--outline-w); overflow-y: auto;

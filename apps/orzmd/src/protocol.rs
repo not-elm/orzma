@@ -105,24 +105,6 @@ pub(crate) enum SearchCause {
     Blur,
 }
 
-/// A page report that the typed search was confirmed (`searchSubmit` event).
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub(crate) struct SearchSubmit {
-    /// What ended the typing.
-    pub(crate) cause: SearchCause,
-}
-
-/// A page report that the typed search was abandoned (`searchEscape` event).
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub(crate) struct SearchEscape {
-    /// What ended the typing.
-    pub(crate) cause: SearchCause,
-}
-
-/// A page request to close a confirmed search (`searchClose` event).
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub(crate) struct SearchClose {}
-
 /// Text for the page's search input (`searchType` emit).
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct SearchType {
@@ -130,7 +112,7 @@ pub(crate) struct SearchType {
     pub(crate) text: String,
 }
 
-/// Viewport state the page reports back (`scrollState` event).
+/// Viewport state the page reports after a scroll or a render.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ScrollState {
@@ -139,15 +121,33 @@ pub(crate) struct ScrollState {
     /// Index of the `id="h{n}"` anchor nearest the top, or `None`.
     pub(crate) current_heading_index: Option<usize>,
     /// Number of `id="h{n}"` headings in the rendered page.
-    #[serde(default)]
     pub(crate) heading_count: usize,
 }
 
-/// A page request to jump to a heading clicked in the outline (`outlineJump` event).
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub(crate) struct OutlineJump {
-    /// Index of the clicked `id="h{n}"` heading.
-    pub(crate) index: usize,
+/// A report about the page's viewport or a user action on it (`page` event),
+/// tagged by `kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum PageEvent {
+    /// The viewport moved or a document was rendered.
+    ScrollState(ScrollState),
+    /// The typed search was confirmed.
+    SearchSubmit {
+        /// What ended the typing.
+        cause: SearchCause,
+    },
+    /// The typed search was abandoned.
+    SearchEscape {
+        /// What ended the typing.
+        cause: SearchCause,
+    },
+    /// The close button of a confirmed search was clicked.
+    SearchClose,
+    /// An outline entry was clicked.
+    OutlineJump {
+        /// Index of the clicked `id="h{n}"` heading.
+        index: usize,
+    },
 }
 
 /// A scroll command payload (`scroll` emit).
@@ -194,38 +194,41 @@ mod tests {
         );
     }
 
-    #[test]
-    fn scroll_state_reads_camel_case_and_null_index() {
-        let s: ScrollState =
-            serde_json::from_value(json!({"ratio": 0.5, "currentHeadingIndex": null})).unwrap();
-        assert_eq!(s.ratio, 0.5);
-        assert_eq!(s.current_heading_index, None);
+    fn page_event(value: serde_json::Value) -> PageEvent {
+        serde_json::from_value(value).expect("page event parses")
     }
 
-    /// Asserts that the scroll state reads the heading count, defaulting to zero.
+    /// Asserts that a scroll-state report reads its camelCase fields, including a
+    /// null heading index.
     ///
-    /// Case: the page reports its scroll state after rendering a document, and an
-    /// older page reports it without a count.
+    /// Case: the page reports its viewport after rendering a document scrolled
+    /// above its first heading.
     #[test]
-    fn scroll_state_reads_the_heading_count() {
-        let s: ScrollState = serde_json::from_value(
-            json!({"ratio": 0.0, "currentHeadingIndex": 1, "headingCount": 4}),
-        )
-        .expect("scroll state parses");
-        assert_eq!(s.heading_count, 4);
-        let old: ScrollState =
-            serde_json::from_value(json!({"ratio": 0.0, "currentHeadingIndex": null}))
-                .expect("scroll state parses");
-        assert_eq!(old.heading_count, 0);
+    fn a_scroll_state_report_reads_camel_case() {
+        assert_eq!(
+            page_event(json!({
+                "kind": "scrollState",
+                "ratio": 0.5,
+                "currentHeadingIndex": null,
+                "headingCount": 4
+            })),
+            PageEvent::ScrollState(ScrollState {
+                ratio: 0.5,
+                current_heading_index: None,
+                heading_count: 4,
+            })
+        );
     }
 
     /// Asserts that an outline jump reads its index.
     ///
     /// Case: the user clicks the third heading in the outline sidebar.
     #[test]
-    fn outline_jump_reads_its_index() {
-        let j: OutlineJump = serde_json::from_value(json!({"index": 2})).expect("parses");
-        assert_eq!(j.index, 2);
+    fn an_outline_jump_reads_its_index() {
+        assert_eq!(
+            page_event(json!({"kind": "outlineJump", "index": 2})),
+            PageEvent::OutlineJump { index: 2 }
+        );
     }
 
     /// Asserts that the search-ending reports parse, reading their cause from camelCase strings.
@@ -234,13 +237,22 @@ mod tests {
     /// click on the close button of a confirmed search.
     #[test]
     fn search_reports_read_their_cause() {
-        let submit: SearchSubmit =
-            serde_json::from_value(json!({"cause": "key"})).expect("submit parses");
-        assert_eq!(submit.cause, SearchCause::Key);
-        let escape: SearchEscape =
-            serde_json::from_value(json!({"cause": "blur"})).expect("escape parses");
-        assert_eq!(escape.cause, SearchCause::Blur);
-        let _close: SearchClose = serde_json::from_value(json!({})).expect("close parses");
+        assert_eq!(
+            page_event(json!({"kind": "searchSubmit", "cause": "key"})),
+            PageEvent::SearchSubmit {
+                cause: SearchCause::Key
+            }
+        );
+        assert_eq!(
+            page_event(json!({"kind": "searchEscape", "cause": "blur"})),
+            PageEvent::SearchEscape {
+                cause: SearchCause::Blur
+            }
+        );
+        assert_eq!(
+            page_event(json!({"kind": "searchClose"})),
+            PageEvent::SearchClose
+        );
     }
 
     /// Asserts that a relayed character serializes as a `text` field.

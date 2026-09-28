@@ -1,5 +1,5 @@
 /** Severity of a toast message. */
-export type ToastKind = 'error' | 'info';
+type ToastKind = 'error' | 'info';
 
 /** Stage of the in-page search. */
 export type SearchStage = 'closed' | 'typing' | 'active';
