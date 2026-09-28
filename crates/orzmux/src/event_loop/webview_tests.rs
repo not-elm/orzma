@@ -517,3 +517,38 @@ fn a_refused_webview_command_changes_nothing() {
             if *m == page.mount && *s == seq
     )));
 }
+
+/// Asserts that a socket focus from a program whose pane sits in a hidden
+/// workspace neither switches workspaces nor emits a focus change.
+///
+/// Case: a background tab's program asks for keyboard focus while the
+/// user works in another tab.
+#[test]
+fn a_hidden_pane_program_cannot_take_focus() {
+    let (mut h, control) = Harness::with_control();
+    let (pane, fake) = h.open_root();
+    let _lines = connect(&mut h, &control, 1);
+    let instance = register_inline(&mut h, &control, 1);
+    h.drain();
+    print_mounts(&fake, &[instance], 2);
+    h.pump_pane(pane);
+    h.drain();
+    let _second = h.open_workspace(RequestId(2));
+    control
+        .send(ControlEvent::Focus {
+            connection: ConnectionId::new(1),
+            instance: Some(instance.to_string()),
+        })
+        .expect("the harness holds the control receiver");
+    h.drain_control();
+    let events = h.drain();
+    assert!(
+        !webview_events(&events)
+            .iter()
+            .any(|e| matches!(e, WebviewEvent::FocusChanged { focused: Some(_) }))
+    );
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        OrzmuxEvent::Workspaces { .. } | OrzmuxEvent::Layout { .. }
+    )));
+}

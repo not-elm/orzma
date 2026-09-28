@@ -1159,9 +1159,16 @@ impl Backend {
             .map_err(|source| OrzmuxError::PtyWrite { pane: id, source })
     }
 
-    /// Tells the webview host which pane is active, so it releases a focus
+    /// Tells the webview host which panes are on screen and which pane is
+    /// active, so it refuses focus in hidden panes and releases a focus
     /// held in any other pane.
     fn sync_webview_active(&mut self) {
+        let visible = self
+            .workspaces
+            .active()
+            .map(|w| w.tree.panes())
+            .unwrap_or_default();
+        self.webview.visible_panes_changed(visible);
         let output = self.webview.active_pane_changed(self.visible_active());
         self.apply_webview(output);
     }
