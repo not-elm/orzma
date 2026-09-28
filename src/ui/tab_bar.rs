@@ -8,20 +8,9 @@ use bevy::window::{PrimaryWindow, WindowScaleFactorChanged};
 /// The tab bar's height in logical px before rounding to physical pixels.
 pub(crate) const TAB_BAR_HEIGHT_PX: f32 = 28.0;
 
-/// The bar's background.
-const BAR_BG: Color = Color::srgb_u8(0x14, 0x15, 0x18);
-/// The line under the bar and between inactive tabs.
-const BAR_LINE: Color = Color::srgb_u8(0x59, 0x59, 0x66);
-
 /// The workspace tab bar's root node, the first child of `UiRoot`.
 #[derive(Component)]
 pub(crate) struct TabBar;
-
-/// The 1 px line along the bar's bottom edge. It is the bar's first child,
-/// so the tabs paint over it and the displayed tab's opaque background
-/// hides it under that tab.
-#[derive(Component)]
-struct TabBarLine;
 
 /// Spawns the tab bar and keeps its height on whole physical pixels.
 pub(crate) struct TabBarPlugin;
@@ -42,6 +31,17 @@ impl Plugin for TabBarPlugin {
 pub(crate) fn tab_bar_height_phys(scale_factor: f32) -> u32 {
     (TAB_BAR_HEIGHT_PX * scale_factor).round().max(0.0) as u32
 }
+
+/// The bar's background.
+const BAR_BG: Color = Color::srgb_u8(0x14, 0x15, 0x18);
+/// The line under the bar and between inactive tabs.
+const BAR_LINE: Color = Color::srgb_u8(0x59, 0x59, 0x66);
+
+/// The 1 px line along the bar's bottom edge. It is the bar's first child,
+/// so the tabs paint over it and the displayed tab's opaque background
+/// hides it under that tab.
+#[derive(Component)]
+struct TabBarLine;
 
 /// The bar's height in logical px that lands on whole physical pixels.
 fn tab_bar_height_logical(scale_factor: f32) -> f32 {
