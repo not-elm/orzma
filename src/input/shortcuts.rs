@@ -243,13 +243,33 @@ pub(crate) struct Shortcuts {
     leader: Option<ResolvedLeader>,
     tap_timeout: Duration,
     repeat_time: Duration,
+    direct_chords_over_webview: bool,
 }
 
 impl Shortcuts {
     /// Returns the GUI action bound to `(keycode, mods)` in the direct table, if
     /// any.
-    pub(crate) fn match_gui_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
+    pub fn match_gui_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
         Self::find_entry(&self.direct, keycode, mods).map(|s| s.action)
+    }
+
+    /// Returns the direct-table action bound to `(keycode, mods)` when it
+    /// fires while a webview holds keyboard focus: `ReleaseWebviewFocus`
+    /// always does, `Copy` and `Paste` never do, and any other action does
+    /// only while `direct-chords-over-webview` is on.
+    pub fn match_over_webview(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
+        self.match_gui_action(keycode, mods)
+            .filter(|action| match action {
+                Shortcut::ReleaseWebviewFocus => true,
+                Shortcut::Copy | Shortcut::Paste => false,
+                Shortcut::FontSize(_)
+                | Shortcut::Quit
+                | Shortcut::EnterViMode
+                | Shortcut::SelectPane(_)
+                | Shortcut::SplitPane(_)
+                | Shortcut::KillPane
+                | Shortcut::ResizePane(_) => self.direct_chords_over_webview,
+            })
     }
 
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
@@ -412,6 +432,7 @@ pub(crate) fn test_shortcuts_with_repeat_prefix(
         ))),
         tap_timeout: Duration::from_millis(300),
         repeat_time,
+        direct_chords_over_webview: true,
     }
 }
 
@@ -434,6 +455,18 @@ pub(crate) fn test_shortcuts_with_direct_chord(
         leader: None,
         tap_timeout: Duration::from_millis(300),
         repeat_time: Duration::from_millis(500),
+        direct_chords_over_webview: true,
+    }
+}
+
+#[cfg(test)]
+impl Shortcuts {
+    /// Returns this table with `direct-chords-over-webview` set to `enabled`.
+    pub fn with_direct_chords_over_webview(self, enabled: bool) -> Self {
+        Self {
+            direct_chords_over_webview: enabled,
+            ..self
+        }
     }
 }
 
@@ -538,6 +571,7 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OrzmaConfigsRes
     duplicate_physical_chords(&resolved.prefix);
     resolved.tap_timeout = Duration::from_millis(sc.leader_tap_timeout_ms);
     resolved.repeat_time = Duration::from_millis(sc.repeat_time_ms);
+    resolved.direct_chords_over_webview = sc.direct_chords_over_webview;
     // The leader (default Cmd tap) is only meaningful when there are
     // `<Leader>`-scoped bindings to reach; with none it stays inert, so a
     // default tap never swallows a key for users who bind no leader action.
@@ -828,6 +862,7 @@ mod tests {
             ))),
             tap_timeout: ms(300),
             repeat_time: ms(500),
+            direct_chords_over_webview: true,
         }
     }
 
@@ -1035,6 +1070,7 @@ mod tests {
             leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
+            direct_chords_over_webview: true,
         };
         assert_eq!(s.tap_modifier(), Some(TapModifier::Meta));
     }
@@ -1047,6 +1083,7 @@ mod tests {
             leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
+            direct_chords_over_webview: true,
         };
         assert!(!s.is_leader(KeyCode::SuperLeft, mods(false, false, false, true)));
         assert!(!s.is_leader(KeyCode::SuperLeft, mods(false, false, false, false)));
@@ -1070,6 +1107,7 @@ mod tests {
             leader: None,
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
+            direct_chords_over_webview: true,
         }
     }
 
@@ -1084,6 +1122,7 @@ mod tests {
             ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
+            direct_chords_over_webview: true,
         };
         assert!(s.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
         assert!(!s.is_leader(KeyCode::KeyA, mods(false, false, false, false)));
@@ -1106,6 +1145,7 @@ mod tests {
             ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
+            direct_chords_over_webview: true,
         };
         assert_eq!(
             s.match_prefix_entry(KeyCode::KeyR, mods(false, false, false, false))
@@ -1135,6 +1175,7 @@ mod tests {
             ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
+            direct_chords_over_webview: true,
         };
         let mut phase = LeaderPhase::Idle;
         assert!(matches!(
@@ -1211,6 +1252,7 @@ mod tests {
             ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
+            direct_chords_over_webview: true,
         };
         assert_eq!(
             s.match_prefix_entry(KeyCode::KeyS, mods(false, false, false, false))
@@ -1391,6 +1433,7 @@ mod tests {
             ))),
             tap_timeout: Duration::from_millis(300),
             repeat_time: Duration::from_millis(500),
+            direct_chords_over_webview: true,
         }
     }
 
@@ -1506,6 +1549,7 @@ mod tests {
                 leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
                 tap_timeout: Duration::from_millis(300),
                 repeat_time: Duration::from_millis(500),
+                direct_chords_over_webview: true,
             })
             .add_systems(Update, detect_modifier_tap);
         app.world_mut().spawn((
@@ -1656,6 +1700,17 @@ mod tests {
         };
         let resolved = resolved_shortcuts(config);
         assert_eq!(resolved.repeat_time, Duration::from_millis(250));
+    }
+
+    /// Asserts that the default `direct-chords-over-webview = true` reaches
+    /// the runtime table.
+    ///
+    /// Case: a user with no `[shortcuts]` table launches orzma and later
+    /// clicks into a webview.
+    #[test]
+    fn build_shortcuts_resolves_direct_chords_over_webview() {
+        let resolved = resolved_shortcuts(OrzmaConfigs::default());
+        assert!(resolved.direct_chords_over_webview);
     }
 
     /// Asserts that the stock resize bindings repeat: after the leader,

@@ -81,9 +81,10 @@ impl BatchContext<'_> {
 
 /// The result of classifying one frame's pressed keys: the per-key
 /// `KeyEffect`s, plus the physical keys withheld from the focused webview —
-/// those the leader claimed and those that matched a forward chord. The
-/// caller applies the frame's modifier snapshot when withholding them from
-/// CEF via `CefKeyboardFilter`; it is empty on the non-webview path.
+/// those the leader claimed, the direct chords that fired, and those that
+/// matched a forward chord. The caller applies the frame's modifier snapshot
+/// when withholding them from CEF via `CefKeyboardFilter`; it is empty on the
+/// non-webview path.
 pub(crate) struct ClassifiedKeys {
     pub(crate) effects: Vec<KeyEffect>,
     pub(crate) webview_suppressed: Vec<KeyCode>,
@@ -120,12 +121,13 @@ pub(crate) fn classify_key_batch<'a>(
     let mut webview_suppressed = Vec::new();
     for ev in events.filter(|ev| ev.state == ButtonState::Pressed) {
         if ctx.webview_focused {
-            // NOTE: the leader runs even while a webview owns the keyboard, so
-            // `<Leader>` shortcuts work regardless of focus. Keys the leader
-            // claims (the leader chord itself, an abandoned second key, or a
-            // fired binding) and the chords the webview declared as forward
-            // keys are recorded in `webview_suppressed` so the caller withholds
-            // them from CEF; any other key still reaches the page.
+            // NOTE: the leader, and the direct chords `match_over_webview`
+            // admits, run even while a webview owns the keyboard, ahead of the
+            // chords the webview declared as forward keys. Every key they claim
+            // (the leader chord itself, an abandoned second key, a fired
+            // binding, or a forwarded chord) is recorded in `webview_suppressed`
+            // so the caller withholds it from CEF; any other key still reaches
+            // the page.
             match step_with_repeat(leader_phase, held_repeat, shortcuts, ev, ctx.mods, ctx.now) {
                 LeaderStep::Swallow => {
                     webview_suppressed.push(ev.key_code);
@@ -138,9 +140,8 @@ pub(crate) fn classify_key_batch<'a>(
                     });
                 }
                 LeaderStep::Passthrough => {
-                    if let Some(action @ Shortcut::ReleaseWebviewFocus) =
-                        shortcuts.match_gui_action(ev.key_code, ctx.mods)
-                    {
+                    if let Some(action) = shortcuts.match_over_webview(ev.key_code, ctx.mods) {
+                        webview_suppressed.push(ev.key_code);
                         effects.push(KeyEffect::Shortcut {
                             action,
                             via_leader: false,
@@ -267,6 +268,7 @@ mod tests {
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
     use bevy::prelude::Entity;
+    use orzma_configs::shortcuts::FontSizeStep;
     use orzma_configs::vi_mode::ViModeSelection;
 
     fn ms(n: u64) -> Duration {
@@ -1362,6 +1364,235 @@ mod tests {
             }],
             "with a webview focused the release chord resolves as a normal action"
         );
+    }
+
+    fn meta() -> Modifiers {
+        mods(false, false, false, true)
+    }
+
+    fn zoom_in_shortcuts() -> Shortcuts {
+        test_shortcuts_with_direct_chord(
+            KeyCode::Equal,
+            meta(),
+            Shortcut::FontSize(FontSizeStep::Increase),
+        )
+    }
+
+    fn zoom_in_effect() -> KeyEffect {
+        KeyEffect::Shortcut {
+            action: Shortcut::FontSize(FontSizeStep::Increase),
+            via_leader: false,
+        }
+    }
+
+    fn press_equal() -> KeyboardInput {
+        press(KeyCode::Equal, Key::Character("=".into()))
+    }
+
+    fn meta_equal_chord() -> NormalizedChord {
+        NormalizedChord {
+            key: ChordKey::Code(KeyCode::Equal),
+            alt: false,
+            ctrl: false,
+            shift: false,
+            logo: true,
+        }
+    }
+
+    /// Asserts that a direct chord fires while a webview holds keyboard
+    /// focus, and that its key is withheld from the page.
+    ///
+    /// Case: the user has clicked into a markdown page and presses `Cmd+=`
+    /// to enlarge the terminal font.
+    #[test]
+    fn a_direct_chord_fires_over_a_focused_webview() {
+        let sc = zoom_in_shortcuts();
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let events = [press_equal()];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&[], meta()),
+        );
+        assert_eq!(out.effects, vec![zoom_in_effect()]);
+        assert_eq!(out.webview_suppressed, vec![KeyCode::Equal]);
+    }
+
+    /// Asserts that with `direct-chords-over-webview` off, a direct chord
+    /// under webview focus emits nothing and still reaches the page.
+    ///
+    /// Case: a user who turned the priority off presses `Cmd+=` in a page
+    /// that zooms its own content.
+    #[test]
+    fn a_direct_chord_reaches_the_page_when_the_priority_is_off() {
+        let sc = zoom_in_shortcuts().with_direct_chords_over_webview(false);
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let events = [press_equal()];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&[], meta()),
+        );
+        assert_eq!(out.effects, vec![]);
+        assert!(out.webview_suppressed.is_empty());
+    }
+
+    /// Asserts that direct copy and paste chords do not fire while a webview
+    /// holds keyboard focus, and that their keys still reach the page.
+    ///
+    /// Case: the user selects text in a focused page, presses `Cmd+C`, and
+    /// then presses `Cmd+V` in one of the page's inputs.
+    #[test]
+    fn copy_and_paste_chords_stay_with_a_focused_webview() {
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        for (key_code, text, action) in [
+            (KeyCode::KeyC, "c", Shortcut::Copy),
+            (KeyCode::KeyV, "v", Shortcut::Paste),
+        ] {
+            let sc = test_shortcuts_with_direct_chord(key_code, meta(), action);
+            let mut phase = LeaderPhase::Idle;
+            let events = [press(key_code, Key::Character(text.into()))];
+            let out = run_full(
+                &mut phase,
+                &sc,
+                &resolved_vi_mode,
+                &events,
+                forward_ctx(&[], meta()),
+            );
+            assert_eq!(out.effects, vec![], "{action:?} must not fire");
+            assert!(
+                out.webview_suppressed.is_empty(),
+                "{action:?} must reach the page"
+            );
+        }
+    }
+
+    /// Asserts that a direct chord the focused page also forwards fires as
+    /// the shortcut rather than reaching the PTY.
+    ///
+    /// Case: a TUI viewer forwards `Cmd+=`, and the user presses it while the
+    /// viewer's page has focus.
+    #[test]
+    fn a_direct_chord_wins_over_a_forward_chord() {
+        let sc = zoom_in_shortcuts();
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let chords = [meta_equal_chord()];
+        let mut phase = LeaderPhase::Idle;
+        let events = [press_equal()];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&chords, meta()),
+        );
+        assert_eq!(out.effects, vec![zoom_in_effect()]);
+        assert_eq!(out.webview_suppressed, vec![KeyCode::Equal]);
+    }
+
+    /// Asserts that a copy chord the focused page forwards reaches the PTY.
+    ///
+    /// Case: on Linux, where copy is bound to `Ctrl+C`, a ratatui app
+    /// forwards `Ctrl+C` to quit, and the user presses it while the app's
+    /// page has focus.
+    #[test]
+    fn a_copy_chord_the_page_forwards_reaches_the_pty() {
+        let ctrl = mods(true, false, false, false);
+        let sc = test_shortcuts_with_direct_chord(KeyCode::KeyC, ctrl, Shortcut::Copy);
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let chords = [NormalizedChord {
+            key: ChordKey::Code(KeyCode::KeyC),
+            alt: false,
+            ctrl: true,
+            shift: false,
+            logo: false,
+        }];
+        let mut phase = LeaderPhase::Idle;
+        let events = [press(KeyCode::KeyC, Key::Character("c".into()))];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&chords, ctrl),
+        );
+        assert_eq!(
+            out.effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("c".into()),
+                key_code: KeyCode::KeyC,
+            }]
+        );
+        assert_eq!(out.webview_suppressed, vec![KeyCode::KeyC]);
+    }
+
+    /// Asserts that with `direct-chords-over-webview` off, a direct chord
+    /// the focused page forwards reaches the PTY.
+    ///
+    /// Case: a user who turned the priority off presses `Cmd+=` in a TUI
+    /// viewer that forwards it.
+    #[test]
+    fn a_forwarded_direct_chord_reaches_the_pty_when_the_priority_is_off() {
+        let sc = zoom_in_shortcuts().with_direct_chords_over_webview(false);
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let chords = [meta_equal_chord()];
+        let mut phase = LeaderPhase::Idle;
+        let events = [press_equal()];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&chords, meta()),
+        );
+        assert_eq!(
+            out.effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("=".into()),
+                key_code: KeyCode::Equal,
+            }]
+        );
+        assert_eq!(out.webview_suppressed, vec![KeyCode::Equal]);
+    }
+
+    /// Asserts that a direct release chord fires and is withheld from the
+    /// page even with `direct-chords-over-webview` off.
+    ///
+    /// Case: a user who turned the priority off presses their direct
+    /// release chord to leave a focused page.
+    #[test]
+    fn the_release_chord_fires_when_the_priority_is_off() {
+        let ctrl_shift = mods(true, true, false, false);
+        let sc = test_shortcuts_with_direct_chord(
+            KeyCode::Escape,
+            ctrl_shift,
+            Shortcut::ReleaseWebviewFocus,
+        )
+        .with_direct_chords_over_webview(false);
+        let resolved_vi_mode = ResolvedViModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let events = [press(KeyCode::Escape, Key::Escape)];
+        let out = run_full(
+            &mut phase,
+            &sc,
+            &resolved_vi_mode,
+            &events,
+            forward_ctx(&[], ctrl_shift),
+        );
+        assert_eq!(
+            out.effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::ReleaseWebviewFocus,
+                via_leader: false,
+            }]
+        );
+        assert_eq!(out.webview_suppressed, vec![KeyCode::Escape]);
     }
 
     #[test]

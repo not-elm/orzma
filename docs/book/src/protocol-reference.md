@@ -182,9 +182,12 @@ the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
 Outside vi mode, a pointer press inside a mounted interactive view's rect
 gives that view keyboard focus and makes its pane the active pane, and a press
 on the terminal outside every view's rect gives the keyboard back to the
-terminal. While a view holds focus, the host delivers keys to the page, except
-the view's [forward keys](#forward-keys), which go to the pane's PTY instead,
-and orzma's `<Leader>` shortcuts and release-focus shortcut, which still run.
+terminal. While a view holds focus, the host delivers keys to the page, with
+two exceptions. orzma's own shortcuts run first: its `<Leader>` shortcuts and
+release-focus shortcut always, and its other direct-chord shortcuts except
+copy and paste while the user's `direct-chords-over-webview` setting is on,
+which it is by default. Then the view's [forward keys](#forward-keys) go to
+the pane's PTY instead.
 
 A `focus` op moves focus to a mounted, interactive placement this connection
 owns, or, with `null`, takes it back from whichever view in this connection's
@@ -202,7 +205,9 @@ again when it ends.
 
 `forward_keys` lists key chords the host passes through to the pane's PTY
 instead of letting the focused webview consume them: a matching key reaches
-the program and never the page. `register` carries the initial list;
+the program and never the page. A chord that also runs one of orzma's
+shortcuts runs the shortcut instead (see [Focus](#focus)). `register` carries
+the initial list;
 `set_forward_keys` replaces it wholesale. Each chord is:
 
 ```json

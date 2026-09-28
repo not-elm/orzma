@@ -196,7 +196,8 @@ while the page is focused.
 | `Esc` | Return to Normal mode |
 
 In Insert mode every other key goes to the page, so you can type into focused
-inputs.
+inputs. orzma's own shortcuts still run first (see
+[Key Bindings](key-bindings.md#shortcuts-while-a-webview-has-focus)).
 
 #### Help
 
