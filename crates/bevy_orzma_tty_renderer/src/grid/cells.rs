@@ -3,7 +3,9 @@
 
 use crate::error::RendererResult;
 use bevy::prelude::Component;
-use orzma_vt::prelude::{Cell, CellWidth, Frame, HyperlinkId, HyperlinkUri, Palette, Run};
+use orzma_vt::prelude::{
+    Cell, CellWidth, DetectedUrl, Frame, HyperlinkId, HyperlinkUri, Palette, Run,
+};
 use std::collections::HashMap;
 
 /// The painted contents of one terminal, materialized into cells from
@@ -46,6 +48,19 @@ impl TerminalCells {
             .get(usize::from(col))?
             .hyperlink_id?;
         Some((id, self.hyperlinks.get(&id)?))
+    }
+
+    /// The URL shown in plain text at the visible cell (`row`, `col`),
+    /// found by [`DetectedUrl::at`] over these cells, their wraps and
+    /// `continues_from_above`; `None` when the cell shows no URL.
+    pub fn detected_url_at(&self, row: u16, col: u16) -> Option<DetectedUrl> {
+        DetectedUrl::at(
+            &self.cells,
+            &self.wraps,
+            self.continues_from_above,
+            row,
+            col,
+        )
     }
 
     /// Whether applying `frame` would change these cells.
