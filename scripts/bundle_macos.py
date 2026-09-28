@@ -27,6 +27,19 @@ COMPANION_BINS = ("orzbrowser", "orzmd")
 # render process instead, so this copy is dead weight (~41 MiB) and, being a
 # non-dylib executable, is also skipped by the Libraries/ signing loop.
 DEV_ONLY_CEF_LIBRARIES = ("bevy_cef_debug_render_process",)
+# NOTE: on macOS CEF resolves its locale from the OUTER app bundle's advertised
+# localizations, not from CefSettings.locale -- Chromium's
+# OverrideLocaleWithCocoaLocale() takes precedence over the pref, and maps "en"
+# to "en-US" whose pack is on disk as en.lproj. Shipping any other pack is dead
+# weight, and dropping the one CEF resolves is fatal rather than degraded: the
+# empty lookup becomes `CHECK failed: !loaded_locale.empty()` during startup.
+SHIPPED_CEF_LOCALES = ("en",)
+# NOTE: CEF's macOS redistribution README marks these optional. Dropping
+# SwiftShader stays safe only while no switch enables software rendering --
+# `disable-gpu` or `--enable-unsafe-swiftshader` would make canvas, 3D CSS and
+# WebGL fail outright instead of falling back.
+OPTIONAL_CEF_LIBRARIES = ("libvk_swiftshader.dylib", "vk_swiftshader_icd.json")
+OPTIONAL_CEF_RESOURCES = ("gpu_shader_cache.bin",)
 MIN_MACOS = "11.0"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -263,6 +276,72 @@ def assemble_app(cfg: BundleConfig) -> None:
     print(f"Assembled {app}")
 
 
+def is_cef_locale_dir(name: str, locales: tuple[str, ...]) -> bool:
+    return any(name == f"{locale}.lproj" for locale in locales)
+
+
+def missing_cef_locale_dirs(names: list[str], locales: tuple[str, ...]) -> list[str]:
+    present = set(names)
+    return [locale for locale in locales if f"{locale}.lproj" not in present]
+
+
+def app_advertised_localizations(plist: dict, resource_names: list[str]) -> set[str]:
+    advertised = set(plist.get("CFBundleLocalizations") or ())
+    advertised |= {
+        name.removesuffix(".lproj") for name in resource_names if name.endswith(".lproj")
+    }
+    # NOTE: the development region is unioned in even when the bundle advertises
+    # localizations explicitly, which over-reports what NSBundle would resolve.
+    # Narrowing it to the empty-advertisement case reopens the startup abort this
+    # guard exists to prevent, and a false build failure is the cheaper error.
+    region = plist.get("CFBundleDevelopmentRegion")
+    if region:
+        advertised.add(str(region))
+    return advertised
+
+
+def dir_entry_names(path: Path) -> list[str]:
+    return sorted(p.name for p in path.iterdir()) if path.is_dir() else []
+
+
+def verify_cef_locales(cfg: BundleConfig, plist: dict) -> None:
+    source = cfg.cef_framework / "Resources"
+    absent = missing_cef_locale_dirs(dir_entry_names(source), SHIPPED_CEF_LOCALES)
+    if absent:
+        raise SystemExit(
+            f"missing CEF locale packs in {source}: "
+            f"{', '.join(f'{name}.lproj' for name in absent)}"
+        )
+    advertised = app_advertised_localizations(
+        plist, dir_entry_names(cfg.app_path / "Contents" / "Resources")
+    )
+    unshipped = sorted(advertised - set(SHIPPED_CEF_LOCALES))
+    if unshipped:
+        raise SystemExit(
+            f"{cfg.app_name}.app advertises localizations with no CEF locale pack: "
+            f"{', '.join(unshipped)} (shipped: {', '.join(SHIPPED_CEF_LOCALES)}); "
+            "CEF would abort at startup on a system preferring one of them"
+        )
+
+
+def prune_cef_framework(framework: Path) -> None:
+    resources = framework / "Resources"
+    for lproj in sorted(resources.glob("*.lproj")):
+        if not is_cef_locale_dir(lproj.name, SHIPPED_CEF_LOCALES):
+            shutil.rmtree(lproj)
+    print(f"  Kept CEF locale packs: {', '.join(SHIPPED_CEF_LOCALES)}")
+    for name in OPTIONAL_CEF_LIBRARIES:
+        optional = framework / "Libraries" / name
+        if optional.exists():
+            optional.unlink()
+            print(f"  Removed optional {name}")
+    for name in OPTIONAL_CEF_RESOURCES:
+        optional = resources / name
+        if optional.exists():
+            optional.unlink()
+            print(f"  Removed optional {name}")
+
+
 def embed_cef(cfg: BundleConfig) -> None:
     contents = cfg.app_path / "Contents"
     plist_path = contents / "Info.plist"
@@ -271,6 +350,8 @@ def embed_cef(cfg: BundleConfig) -> None:
     merge_cef_keys(plist)
     with open(plist_path, "wb") as f:
         plistlib.dump(plist, f)
+
+    verify_cef_locales(cfg, plist)
 
     main_bin = contents / "MacOS" / cfg.bin_name
     cef_bin = cfg.cef_framework / "Chromium Embedded Framework"
@@ -296,6 +377,7 @@ def embed_cef(cfg: BundleConfig) -> None:
         if dev_only.exists():
             dev_only.unlink()
             print(f"  Removed dev-only {name}")
+    prune_cef_framework(old_cef)
 
     for suffix in HELPER_SUFFIXES:
         helper_name = f"{cfg.bin_name} Helper{suffix}"
