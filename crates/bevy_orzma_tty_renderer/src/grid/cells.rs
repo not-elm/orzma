@@ -24,6 +24,14 @@ pub struct TerminalCells {
     /// The live palette set by the last frame that carried one;
     /// symbolic cell colors resolve against it.
     pub palette: Palette,
+    /// For each row, how many leading cells belong to a logical line that
+    /// continues on the next row; `None` when the row ends its line. Every
+    /// frame that changes the list carries it whole, so after the first
+    /// frame it holds one entry per row.
+    pub wraps: Vec<Option<u16>>,
+    /// Whether row 0 continues a logical line from above the viewport, as
+    /// the last applied frame reported.
+    pub continues_from_above: bool,
 }
 
 impl TerminalCells {
@@ -44,8 +52,8 @@ impl TerminalCells {
     ///
     /// An absent row and a `None` section mean "unchanged", so this
     /// counts only a row inside the frame's own size, a size the rows do
-    /// not hold yet, a listed palette that differs, or a hyperlink id
-    /// the table lacks.
+    /// not hold yet, a listed palette or wrap list that differs, a changed
+    /// `continues_from_above`, or a hyperlink id the table lacks.
     ///
     /// # Invariants
     ///
@@ -63,14 +71,16 @@ impl TerminalCells {
             placements: _,
             palette,
             hyperlinks,
-            wraps: _,
-            continues_from_above: _,
+            wraps,
+            continues_from_above,
         } = frame;
         self.size_differs(size.cols, size.rows)
             || rows.iter().any(|row| row.line.0 < size.rows)
             || palette
                 .as_ref()
                 .is_some_and(|palette| *palette != self.palette)
+            || wraps.as_ref().is_some_and(|wraps| *wraps != self.wraps)
+            || *continues_from_above != self.continues_from_above
             || hyperlinks
                 .iter()
                 .any(|link| !self.hyperlinks.contains_key(&link.id))
@@ -81,7 +91,8 @@ impl TerminalCells {
     /// Every row the frame carries inside its size replaces the cells at
     /// that line, resolving its hyperlink ids against the table, into
     /// which this frame's own definitions are merged first; the `None`
-    /// sections are left alone.
+    /// sections are left alone. A listed wrap list replaces the retained
+    /// one, and `continues_from_above` is taken from every frame.
     ///
     /// # Errors
     ///
@@ -109,8 +120,8 @@ impl TerminalCells {
             placements: _,
             palette,
             hyperlinks,
-            wraps: _,
-            continues_from_above: _,
+            wraps,
+            continues_from_above,
         } = frame;
         rows.iter()
             .flat_map(|row| row.contents.iter())
@@ -138,6 +149,10 @@ impl TerminalCells {
         if let Some(palette) = palette {
             self.palette.clone_from(palette);
         }
+        if let Some(wraps) = wraps {
+            self.wraps.clone_from(wraps);
+        }
+        self.continues_from_above = *continues_from_above;
         Ok(())
     }
 

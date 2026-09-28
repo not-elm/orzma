@@ -360,6 +360,7 @@ fn a_cells_that_reports_no_difference_is_not_mutated_by_apply() {
             background: Rgb { r: 9, g: 8, b: 7 },
             ..Palette::default()
         },
+        ..Default::default()
     };
     let frame = quiet_frame();
     assert!(!cells.differs_from(&frame));
@@ -406,4 +407,55 @@ fn a_frame_with_a_malformed_run_is_rejected_and_leaves_the_cells_untouched() {
     ));
     assert_eq!(cells.cells, vec![vec![Cell::default()]]);
     assert!(cells.hyperlinks.is_empty());
+}
+
+/// Asserts that a frame carrying a wrap list replaces the retained list
+/// and counts as a change, while re-sending the same list does not.
+///
+/// Case: a long line wraps onto the next row, and a later frame repeats
+/// the list after an unrelated change.
+#[test]
+fn a_carried_wrap_list_replaces_the_retained_one() {
+    let mut cells = TerminalCells::settled();
+    let wrapped = Frame {
+        wraps: Some(vec![Some(1)]),
+        ..quiet_frame()
+    };
+    assert!(cells.differs_from(&wrapped));
+    cells.apply(&wrapped).expect("a valid frame");
+    assert_eq!(cells.wraps, vec![Some(1)]);
+    assert!(!cells.differs_from(&wrapped));
+}
+
+/// Asserts that a frame omitting the wrap list keeps the retained one and
+/// is not a change on that account.
+///
+/// Case: the caret blinks while a wrapped line stays on screen.
+#[test]
+fn a_frame_without_a_wrap_list_keeps_the_retained_one() {
+    let mut cells = TerminalCells {
+        wraps: vec![Some(1)],
+        ..TerminalCells::settled()
+    };
+    assert!(!cells.differs_from(&quiet_frame()));
+    cells.apply(&quiet_frame()).expect("a valid frame");
+    assert_eq!(cells.wraps, vec![Some(1)]);
+}
+
+/// Asserts that a changed top-row continuation counts as a change and is
+/// taken from the frame.
+///
+/// Case: the user scrolls back until the top row of the pane is the
+/// second half of a wrapped line.
+#[test]
+fn a_changed_top_row_continuation_is_applied() {
+    let mut cells = TerminalCells::settled();
+    let continued = Frame {
+        continues_from_above: true,
+        ..quiet_frame()
+    };
+    assert!(cells.differs_from(&continued));
+    cells.apply(&continued).expect("a valid frame");
+    assert!(cells.continues_from_above);
+    assert!(!cells.differs_from(&continued));
 }

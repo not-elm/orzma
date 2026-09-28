@@ -23,6 +23,7 @@ impl TerminalCells {
     pub(crate) fn settled() -> Self {
         Self {
             cells: vec![vec![Cell::default()]],
+            wraps: vec![None],
             ..Default::default()
         }
     }
