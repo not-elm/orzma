@@ -295,7 +295,7 @@ impl<P: PaneKey> WebviewHost<P> {
 
     /// Records which panes are on screen. From the first call on, a focus
     /// of a mount in any other pane is refused with
-    /// [`Refusal::PaneHidden`](crate::error::Refusal::PaneHidden).
+    /// [`Refusal::PaneHidden`].
     pub fn visible_panes_changed(&mut self, visible: impl IntoIterator<Item = P>) {
         self.visible = Some(visible.into_iter().collect());
     }
