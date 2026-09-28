@@ -70,7 +70,7 @@ resolver = "2"
 members = ["crates/*", "sdk/ratatui_orzma", "apps/orzmd", "apps/orzbrowser", "apps/cef_render_process"]
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0-dev"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
