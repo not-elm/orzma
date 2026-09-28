@@ -8,7 +8,7 @@ use crate::host::ValidatedRegistration;
 use crate::protocol::{ClientMsg, ServerMsg};
 use crate::uds::{UnixListener, UnixStream};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::Shutdown;
 use std::ops::ControlFlow;
 #[cfg(unix)]
@@ -26,6 +26,11 @@ const MAX_HELLO_LINE: u64 = 4 * 1024;
 
 /// The longest request line a connection may send, newline included.
 const MAX_REQUEST_LINE: u64 = 32 * 1024 * 1024;
+
+/// How long a connection's reader waits on a silent peer before it reads
+/// again, which bounds how late it notices the peer closing.
+#[cfg(windows)]
+const EOF_RECHECK: Duration = Duration::from_millis(500);
 
 /// Binds `sock_path` (replacing a stale socket file there), spawns the
 /// accept loop, and returns the receiver of the events its connections
@@ -95,6 +100,14 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
     let Ok(write_half) = stream.try_clone() else {
         return;
     };
+    // NOTE: on Windows, a blocking AF_UNIX read issued while the peer's close
+    // is arriving can miss the end of the stream and wait for good, while a
+    // read issued after it sees the end at once. The read timeout makes each
+    // read return periodically so `read_capped_line` issues a fresh one.
+    #[cfg(windows)]
+    if let Err(error) = read_half.set_read_timeout(Some(EOF_RECHECK)) {
+        tracing::warn!(%error, ?connection, "a control connection may not notice its peer closing");
+    }
     let mut lines = BufReader::new(read_half);
     let Some(token) = read_hello(&mut lines) else {
         return;
@@ -197,13 +210,30 @@ fn read_requests(
     }
 }
 
-/// Reads one line of at most `limit` bytes into `buf`. Returns `false` at
-/// the end of the stream, on a read error, and when the line reaches `limit`
-/// bytes without ending.
+/// Reads one line of at most `limit` bytes into `buf`. A read that times out
+/// is issued again, keeping the bytes read so far. Returns `false` at the end
+/// of the stream, on any other read error, when the line reaches `limit`
+/// bytes without ending, and when it is not UTF-8.
 fn read_capped_line(lines: &mut BufReader<UnixStream>, buf: &mut String, limit: u64) -> bool {
-    match lines.by_ref().take(limit).read_line(buf) {
-        Ok(0) | Err(_) => false,
-        Ok(read) => buf.ends_with('\n') || u64::try_from(read).is_ok_and(|read| read < limit),
+    let mut line = Vec::new();
+    loop {
+        let room = u64::try_from(line.len()).map_or(0, |read| limit.saturating_sub(read));
+        match lines.by_ref().take(room).read_until(b'\n', &mut line) {
+            Ok(_) => break,
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            Err(_) => return false,
+        }
+    }
+    let ended = line.ends_with(b"\n") || u64::try_from(line.len()).is_ok_and(|read| read < limit);
+    if line.is_empty() || !ended {
+        return false;
+    }
+    match String::from_utf8(line) {
+        Ok(text) => {
+            buf.push_str(&text);
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -516,6 +546,36 @@ mod tests {
         let _ = client.flush();
         assert!(events.recv_timeout(Duration::from_millis(300)).is_err());
         assert!(read_until_closed(&mut client).is_empty());
+    }
+
+    /// Asserts that a line whose bytes arrive across a read timeout is read
+    /// whole, including a character the timeout splits.
+    ///
+    /// Case: a program writes a request naming a page "日本" in two pieces,
+    /// pausing between them longer than the reader's read timeout.
+    #[test]
+    fn a_line_split_across_a_read_timeout_is_read_whole() {
+        const LINE: &str = "{\"op\":\"emit\",\"event\":\"日本\"}\n";
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("split.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let mut client = UnixStream::connect(&sock).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        server
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let split = LINE.find('日').unwrap() + 1;
+        client.write_all(&LINE.as_bytes()[..split]).unwrap();
+        let rest = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            client.write_all(&LINE.as_bytes()[split..]).unwrap();
+            client
+        });
+        let mut lines = BufReader::new(server);
+        let mut buf = String::new();
+        assert!(read_capped_line(&mut lines, &mut buf, MAX_REQUEST_LINE));
+        assert_eq!(buf, LINE);
+        drop(rest.join().unwrap());
     }
 
     /// Asserts that a first line other than `hello` closes the connection
