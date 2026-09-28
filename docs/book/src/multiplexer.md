@@ -37,9 +37,10 @@ the other workspaces keep running, and pages shown in them keep their state.
 | Leader, then `r` | Rename the workspace on screen. |
 
 Click a tab to show its workspace, click its `×` to close it, and click `+` to
-open a new one. A workspace you have not named is called `Workspace n`, where
-`n` is its position in the tab bar. A new workspace starts in the working
-directory of the active pane, like a split.
+open a new one. When the tabs do not fit in the window, turn the mouse wheel
+over the tab bar to scroll through them. A workspace you have not named is
+called `Workspace n`, where `n` is its position in the tab bar. A new workspace
+starts in the working directory of the active pane, like a split.
 
 Double-click a tab, or press the leader and then `r`, to rename its workspace
 in place. Enter or a click anywhere else keeps the new name, and Esc keeps the
