@@ -21,9 +21,6 @@ use std::collections::HashMap;
 mod drag;
 pub(crate) mod rename;
 
-/// The tab bar's height in logical px before rounding to physical pixels.
-pub(crate) const TAB_BAR_HEIGHT_PX: f32 = 28.0;
-
 /// Ordering slots for the tab bar's `Update` systems: `Reconcile` runs
 /// before `Style`, and both run after `OrzmuxSystems::Drain`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -129,6 +126,8 @@ pub(crate) fn tab_order(
     order
 }
 
+/// The tab bar's height in logical px before rounding to physical pixels.
+const TAB_BAR_HEIGHT_PX: f32 = 28.0;
 /// The bar's background.
 const BAR_BG: Color = Color::srgb_u8(0x14, 0x15, 0x18);
 /// The line under the bar and between inactive tabs.
@@ -614,16 +613,23 @@ fn scroll_strip_vertically(
     }
 }
 
-/// Scrolls the strip so the displayed workspace's tab is fully visible.
+/// Scrolls the strip so the displayed workspace's tab is fully visible
+/// when the displayed workspace changes; a list change that keeps the same
+/// workspace displayed leaves the scroll position alone.
 fn scroll_active_tab_into_view(
     mut commands: Commands,
+    mut scrolled_to: Local<Option<WorkspaceId>>,
     workspaces: Res<CurrentWorkspaces>,
     tabs: Query<(Entity, &WorkspaceTab)>,
 ) {
     let Some(active) = workspaces.active else {
         return;
     };
+    if *scrolled_to == Some(active) {
+        return;
+    }
     if let Some((entity, _)) = tabs.iter().find(|(_, tab)| tab.workspace == active) {
+        *scrolled_to = Some(active);
         commands.trigger(ScrollIntoView { entity });
     }
 }
@@ -763,6 +769,17 @@ mod tests {
             .add_observer(|ev: On<PaneSpawnRequest>, mut sent: ResMut<SentRequests>| {
                 sent.0.push(Sent::Spawn(ev.at));
             });
+    }
+
+    #[derive(Resource, Default)]
+    struct ScrolledIntoView(Vec<Entity>);
+
+    fn record_scrolls_into_view(app: &mut App) {
+        app.init_resource::<ScrolledIntoView>().add_observer(
+            |ev: On<ScrollIntoView>, mut scrolled: ResMut<ScrolledIntoView>| {
+                scrolled.0.push(ev.entity);
+            },
+        );
     }
 
     fn strip_of(app: &mut App) -> Entity {
@@ -1248,6 +1265,33 @@ mod tests {
                 workspace: WorkspaceId(1),
                 index: 2,
             })]
+        );
+    }
+
+    /// Asserts that a tab is scrolled into view when the displayed
+    /// workspace changes, and not when the list changes while the same
+    /// workspace stays displayed.
+    ///
+    /// Case: with the second of three workspaces on screen, the user closes
+    /// the hidden first one from its tab and then switches to the third.
+    #[test]
+    fn only_a_display_change_scrolls_a_tab_into_view() {
+        let mut app = app_with_tab_bar();
+        record_scrolls_into_view(&mut app);
+        app.update();
+        set_workspaces(&mut app, &[1, 2, 3], 2);
+        app.update();
+        let second = tab_of(&mut app, 2);
+        let third = tab_of(&mut app, 3);
+
+        set_workspaces(&mut app, &[2, 3], 2);
+        app.update();
+        set_workspaces(&mut app, &[2, 3], 3);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<ScrolledIntoView>().0,
+            vec![second, third]
         );
     }
 }
