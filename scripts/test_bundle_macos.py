@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -39,8 +40,8 @@ def _write_fake_cef_swiftshader(fw: Path) -> None:
 
 
 class PureHelpers(unittest.TestCase):
-    def test_zip_name(self):
-        self.assertEqual(bm.zip_name("orzma", "0.1.0", "arm64"), "orzma-0.1.0-arm64.zip")
+    def test_dmg_name(self):
+        self.assertEqual(bm.dmg_name("orzma", "0.1.0", "arm64"), "orzma-0.1.0-arm64.dmg")
 
     def test_version_less_than(self):
         self.assertTrue(bm.version_less_than("10.15", "11.0"))
@@ -64,7 +65,7 @@ class PureHelpers(unittest.TestCase):
             sign_identity="-", no_sign=False, notarize=False,
         )
         self.assertEqual(cfg.app_path, Path("/tmp/out/orzma.app"))
-        self.assertEqual(cfg.zip_path, Path("/tmp/out/orzma-1.2.3-arm64.zip"))
+        self.assertEqual(cfg.dmg_path, Path("/tmp/out/orzma-1.2.3-arm64.dmg"))
 
 
 class CaskTemplate(unittest.TestCase):
@@ -73,6 +74,14 @@ class CaskTemplate(unittest.TestCase):
         self.assertIn('app "orzma.app"', tmpl)
         for name in bm.COMPANION_BINS:
             self.assertIn(f'binary "#{{appdir}}/orzma.app/Contents/Resources/{name}"', tmpl)
+
+    def test_template_downloads_the_dmg_the_bundler_writes(self):
+        tmpl = (bm.REPO_ROOT / "build" / "macos" / "homebrew" / "orzma.rb.tmpl").read_text()
+        name = bm.dmg_name(bm.APP_NAME, "#{version}", bm.ARCH)
+        self.assertIn(
+            f'url "https://github.com/not-elm/orzma/releases/download/v#{{version}}/{name}"',
+            tmpl,
+        )
 
 
 class PlistLogic(unittest.TestCase):
@@ -184,6 +193,164 @@ class CommandBuilders(unittest.TestCase):
             )
         finally:
             os.unlink(name)
+
+    def test_ditto_copy_argv(self):
+        self.assertEqual(
+            bm.ditto_copy_argv(Path("/tmp/a.app"), Path("/tmp/stage/a.app")),
+            ["ditto", "/tmp/a.app", "/tmp/stage/a.app"],
+        )
+
+    def test_hdiutil_create_argv(self):
+        self.assertEqual(
+            bm.hdiutil_create_argv("orzma", Path("/tmp/stage"), Path("/tmp/a.dmg")),
+            ["hdiutil", "create", "-volname", "orzma", "-srcfolder", "/tmp/stage",
+             "-fs", "HFS+", "-format", "ULMO", "-ov", "/tmp/a.dmg"],
+        )
+
+    def test_hdiutil_create_argv_keeps_a_spaced_path_as_one_argument(self):
+        argv = bm.hdiutil_create_argv(
+            "orzma", Path("/tmp/My Projects/stage"), Path("/tmp/My Projects/a.dmg")
+        )
+        self.assertEqual(argv[argv.index("-srcfolder") + 1], "/tmp/My Projects/stage")
+        self.assertEqual(argv[-1], "/tmp/My Projects/a.dmg")
+
+    def test_hdiutil_verify_argv(self):
+        self.assertEqual(
+            bm.hdiutil_verify_argv(Path("/tmp/a.dmg")), ["hdiutil", "verify", "/tmp/a.dmg"]
+        )
+
+
+class HdiutilRetry(unittest.TestCase):
+    ARGV = ["hdiutil", "create", "/tmp/a.dmg"]
+    FAILURE = subprocess.CalledProcessError(1, ARGV)
+
+    def test_a_first_try_success_does_not_wait(self):
+        with mock.patch.object(bm, "run") as run, mock.patch.object(bm.time, "sleep") as sleep:
+            bm.run_hdiutil(self.ARGV)
+        run.assert_called_once_with(self.ARGV)
+        sleep.assert_not_called()
+
+    def test_a_transient_failure_is_retried_until_it_succeeds(self):
+        outcomes = [self.FAILURE, self.FAILURE, None]
+        with mock.patch.object(bm, "run", side_effect=outcomes) as run, \
+                mock.patch.object(bm.time, "sleep") as sleep:
+            bm.run_hdiutil(self.ARGV)
+        self.assertEqual(run.call_args_list, [mock.call(self.ARGV)] * 3)
+        self.assertEqual(sleep.call_args_list, [mock.call(bm.HDIUTIL_RETRY_DELAY_SECONDS)] * 2)
+
+    def test_the_last_failure_is_raised_without_a_final_wait(self):
+        with mock.patch.object(bm, "run", side_effect=self.FAILURE) as run, \
+                mock.patch.object(bm.time, "sleep") as sleep:
+            with self.assertRaises(subprocess.CalledProcessError):
+                bm.run_hdiutil(self.ARGV)
+        self.assertEqual(run.call_count, bm.HDIUTIL_ATTEMPTS)
+        self.assertEqual(sleep.call_count, bm.HDIUTIL_ATTEMPTS - 1)
+
+
+class PackageDmg(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "out"
+        self.out.mkdir()
+        self.cfg = bm.BundleConfig(
+            version="9.9.9", app_name="orzma", bin_name="orzma",
+            bundle_id_base="not.elm.orzma", arch="arm64", target_triple="aarch64-apple-darwin",
+            bin_source=self.out / "orzma", cef_framework=self.out / "cef",
+            helper_bin=self.out / "helper", out_dir=self.out,
+            sign_identity="-", no_sign=False, notarize=False,
+        )
+        self.dmg = self.out / "orzma-9.9.9-arm64.dmg"
+        self.sidecar = self.out / "orzma-9.9.9-arm64.dmg.sha256"
+        self.staged = []
+        self.calls = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _fake_run(self, fail_on=None, error=None, times=None):
+        failures = 0
+
+        def fake_run(argv, redact=()):
+            nonlocal failures
+            self.calls.append(argv)
+            if argv[0] == "ditto":
+                Path(argv[-1]).mkdir()
+            if argv[:2] == ["hdiutil", "create"]:
+                srcfolder = Path(argv[argv.index("-srcfolder") + 1])
+                self.staged.append({
+                    "entries": sorted(p.name for p in srcfolder.iterdir()),
+                    "link": os.readlink(srcfolder / "Applications"),
+                    "mode": srcfolder.stat().st_mode & 0o777,
+                })
+                Path(argv[-1]).write_bytes(b"new dmg")
+            failing = fail_on is not None and argv[:2] == fail_on
+            if failing and (times is None or failures < times):
+                failures += 1
+                raise error if error is not None else subprocess.CalledProcessError(1, argv)
+
+        return fake_run
+
+    def test_package_replaces_stale_files_with_a_dmg_and_its_sidecar(self):
+        self.dmg.write_bytes(b"old dmg")
+        self.sidecar.write_text("stale\n")
+        with mock.patch.object(bm, "run", self._fake_run()):
+            digest = bm.package(self.cfg)
+        self.assertEqual(digest, bm.compute_sha256(self.dmg))
+        self.assertEqual(self.dmg.read_bytes(), b"new dmg")
+        self.assertEqual(self.sidecar.read_text(), f"{digest}  orzma-9.9.9-arm64.dmg\n")
+        staging = Path(self.calls[0][-1]).parent
+        self.assertEqual(staging.parent, self.out)
+        self.assertEqual(self.calls, [
+            bm.ditto_copy_argv(self.out / "orzma.app", staging / "orzma.app"),
+            bm.hdiutil_create_argv("orzma", staging, self.dmg),
+            bm.hdiutil_verify_argv(self.dmg),
+        ])
+        self.assertEqual(
+            self.staged,
+            [{"entries": ["Applications", "orzma.app"], "link": "/Applications", "mode": 0o755}],
+        )
+        self.assertEqual(sorted(os.listdir(self.out)), [self.dmg.name, self.sidecar.name])
+
+    def test_a_transient_verify_failure_keeps_the_dmg_and_its_sidecar(self):
+        fake = self._fake_run(fail_on=["hdiutil", "verify"], times=1)
+        with mock.patch.object(bm, "run", fake), mock.patch.object(bm.time, "sleep"):
+            digest = bm.package(self.cfg)
+        self.assertEqual(self.calls.count(bm.hdiutil_verify_argv(self.dmg)), 2)
+        self.assertEqual(self.sidecar.read_text(), f"{digest}  orzma-9.9.9-arm64.dmg\n")
+        self.assertEqual(sorted(os.listdir(self.out)), [self.dmg.name, self.sidecar.name])
+
+    def test_a_verify_that_fails_every_attempt_leaves_neither_dmg_nor_sidecar(self):
+        self.sidecar.write_text("stale\n")
+        with mock.patch.object(bm, "run", self._fake_run(fail_on=["hdiutil", "verify"])), \
+                mock.patch.object(bm.time, "sleep"):
+            with self.assertRaises(subprocess.CalledProcessError):
+                bm.package(self.cfg)
+        self.assertEqual(
+            self.calls.count(bm.hdiutil_verify_argv(self.dmg)), bm.HDIUTIL_ATTEMPTS
+        )
+        self.assertFalse(self.dmg.exists())
+        self.assertFalse(self.sidecar.exists())
+        self.assertEqual(os.listdir(self.out), [])
+
+    def test_a_create_that_fails_every_attempt_leaves_neither_dmg_nor_sidecar(self):
+        self.sidecar.write_text("stale\n")
+        with mock.patch.object(bm, "run", self._fake_run(fail_on=["hdiutil", "create"])), \
+                mock.patch.object(bm.time, "sleep"):
+            with self.assertRaises(subprocess.CalledProcessError):
+                bm.package(self.cfg)
+        self.assertEqual(len(self.staged), bm.HDIUTIL_ATTEMPTS)
+        self.assertFalse(self.dmg.exists())
+        self.assertFalse(self.sidecar.exists())
+        self.assertEqual(os.listdir(self.out), [])
+
+    def test_an_interrupted_create_removes_the_partial_dmg(self):
+        fake = self._fake_run(fail_on=["hdiutil", "create"], error=KeyboardInterrupt())
+        with mock.patch.object(bm, "run", fake):
+            with self.assertRaises(KeyboardInterrupt):
+                bm.package(self.cfg)
+        self.assertFalse(self.dmg.exists())
+        self.assertFalse(self.sidecar.exists())
+        self.assertEqual(os.listdir(self.out), [])
 
 
 class ConfigResolution(unittest.TestCase):
@@ -549,6 +716,18 @@ class EndToEnd(unittest.TestCase):
         _write_fake_cef_resources(fw)
         return fw
 
+    def _verify_signed(self, app: Path) -> None:
+        # ad-hoc signature must verify deep+strict on the outer bundle
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
+        # NOTE: codesign --verify --deep --strict on the outer bundle does not descend into
+        # plain executables inside Contents/Resources (only into sub-bundles). We must
+        # explicitly verify each companion so the test fails if the signing loop is removed.
+        for name in bm.COMPANION_BINS:
+            subprocess.run(
+                ["codesign", "--verify", str(app / "Contents" / "Resources" / name)],
+                check=True,
+            )
+
     def test_main_adhoc_end_to_end(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
@@ -567,29 +746,44 @@ class EndToEnd(unittest.TestCase):
                 "--orzmd-bin", str(d / "orzmd"),
                 "--out-dir", str(out),
             ])
-            zip_path = out / "orzma-9.9.9-arm64.zip"
-            self.assertTrue(zip_path.is_file())
-            sha_file = out / "orzma-9.9.9-arm64.zip.sha256"
+            dmg_path = out / "orzma-9.9.9-arm64.dmg"
+            self.assertTrue(dmg_path.is_file())
+            sha_file = out / "orzma-9.9.9-arm64.dmg.sha256"
             self.assertTrue(sha_file.is_file())
-            self.assertEqual(bm.compute_sha256(zip_path), sha_file.read_text().split()[0])
+            self.assertEqual(
+                sha_file.read_text(),
+                f"{bm.compute_sha256(dmg_path)}  orzma-9.9.9-arm64.dmg\n",
+            )
+            self.assertEqual(
+                sorted(os.listdir(out)),
+                ["orzma-9.9.9-arm64.dmg", "orzma-9.9.9-arm64.dmg.sha256", "orzma.app"],
+            )
             resources = out / "orzma.app" / "Contents" / "Resources"
             self.assertTrue((resources / "orzbrowser").is_file())
             self.assertTrue((resources / "orzmd").is_file())
             self.assertTrue((resources / "THIRD-PARTY-LICENSES.md").is_file())
             self.assertTrue((resources / "CREDITS.html").is_file())
-            # ad-hoc signature must verify deep+strict on the outer bundle
+            self._verify_signed(out / "orzma.app")
+            mount = d / "mnt"
+            mount.mkdir()
             subprocess.run(
-                ["codesign", "--verify", "--deep", "--strict", str(out / "orzma.app")],
+                ["hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", str(mount),
+                 str(dmg_path)],
                 check=True,
             )
-            # NOTE: codesign --verify --deep --strict on the outer bundle does not descend into
-            # plain executables inside Contents/Resources (only into sub-bundles). We must
-            # explicitly verify each companion so the test fails if the signing loop is removed.
-            for name in ("orzbrowser", "orzmd"):
-                subprocess.run(
-                    ["codesign", "--verify", str(resources / name)],
-                    check=True,
-                )
+            try:
+                mounted_app = mount / "orzma.app"
+                self.assertEqual(mount.stat().st_mode & 0o777, 0o755)
+                self.assertTrue(mounted_app.is_dir())
+                link = mount / "Applications"
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(os.readlink(link), "/Applications")
+                self._verify_signed(mounted_app)
+            finally:
+                # NOTE: a plain detach fails with "Resource busy" while Spotlight or XProtect
+                # still reads the volume; raising here would hide the test's own result and
+                # leave the image mounted inside the temporary directory.
+                subprocess.run(["hdiutil", "detach", "-force", str(mount)], check=True)
 
 
 class CompanionSigning(unittest.TestCase):

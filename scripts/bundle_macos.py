@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bundle orzma into a CEF-embedded macOS .app and package it for Homebrew."""
+"""Bundle orzma into a CEF-embedded macOS .app and package it as a release dmg."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,12 +43,20 @@ SHIPPED_CEF_LOCALES = ("en",)
 OPTIONAL_CEF_LIBRARIES = ("libvk_swiftshader.dylib", "vk_swiftshader_icd.json")
 OPTIONAL_CEF_RESOURCES = ("gpu_shader_cache.bin",)
 MIN_MACOS = "11.0"
+DMG_FORMAT = "ULMO"
+DMG_FILESYSTEM = "HFS+"
+# NOTE: on GitHub's macOS runners `hdiutil create` intermittently fails with
+# "Resource busy", and `hdiutil verify` with "Resource temporarily unavailable"
+# while the disk-image helper still locks the new image; without the retry a
+# release build fails at random.
+HDIUTIL_ATTEMPTS = 3
+HDIUTIL_RETRY_DELAY_SECONDS = 5
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def zip_name(app_name: str, version: str, arch: str) -> str:
-    return f"{app_name}-{version}-{arch}.zip"
+def dmg_name(app_name: str, version: str, arch: str) -> str:
+    return f"{app_name}-{version}-{arch}.dmg"
 
 
 def version_less_than(a: str, b: str) -> bool:
@@ -134,6 +144,21 @@ def xattr_strip_argv(path: Path) -> list[str]:
 
 def ditto_zip_argv(app: Path, dest: Path) -> list[str]:
     return ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(dest)]
+
+
+def ditto_copy_argv(src: Path, dest: Path) -> list[str]:
+    return ["ditto", str(src), str(dest)]
+
+
+def hdiutil_create_argv(volname: str, srcfolder: Path, dest: Path) -> list[str]:
+    return [
+        "hdiutil", "create", "-volname", volname, "-srcfolder", str(srcfolder),
+        "-fs", DMG_FILESYSTEM, "-format", DMG_FORMAT, "-ov", str(dest),
+    ]
+
+
+def hdiutil_verify_argv(dmg: Path) -> list[str]:
+    return ["hdiutil", "verify", str(dmg)]
 
 
 def notarytool_submit_argv(zip_path: Path, apple_id: str, team_id: str, password: str) -> list[str]:
@@ -478,13 +503,43 @@ def notarize(cfg: BundleConfig) -> None:
     tmp_zip.unlink(missing_ok=True)
 
 
+def stage_dmg(app: Path, staging: Path) -> None:
+    staging.chmod(0o755)
+    run(ditto_copy_argv(app, staging / app.name))
+    (staging / "Applications").symlink_to("/Applications")
+
+
+def run_hdiutil(argv: list[str]) -> None:
+    for attempt in range(1, HDIUTIL_ATTEMPTS + 1):
+        try:
+            run(argv)
+            return
+        except subprocess.CalledProcessError:
+            if attempt == HDIUTIL_ATTEMPTS:
+                raise
+            print(
+                f"==> {' '.join(argv[:2])} failed (attempt {attempt}/{HDIUTIL_ATTEMPTS}); "
+                f"retrying in {HDIUTIL_RETRY_DELAY_SECONDS}s"
+            )
+            time.sleep(HDIUTIL_RETRY_DELAY_SECONDS)
+
+
 def package(cfg: BundleConfig) -> str:
-    dest = cfg.zip_path
-    if dest.exists():
-        dest.unlink()
-    run(ditto_zip_argv(cfg.app_path, dest))
+    dest = cfg.dmg_path
+    sidecar = dest.with_name(dest.name + ".sha256")
+    dest.unlink(missing_ok=True)
+    sidecar.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix="dmg-staging-", dir=cfg.out_dir) as tmp:
+            staging = Path(tmp)
+            stage_dmg(cfg.app_path, staging)
+            run_hdiutil(hdiutil_create_argv(cfg.app_name, staging, dest))
+        run_hdiutil(hdiutil_verify_argv(dest))
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
     digest = compute_sha256(dest)
-    (dest.parent / (dest.name + ".sha256")).write_text(f"{digest}  {dest.name}\n")
+    sidecar.write_text(f"{digest}  {dest.name}\n")
     return digest
 
 
@@ -509,6 +564,10 @@ def cargo_build(cfg: BundleConfig) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    # NOTE: CI pipes stdout, which Python then block-buffers; without line
+    # buffering the "==>" progress lines land far from the subprocess output
+    # they describe, including the hdiutil retry notices.
+    sys.stdout.reconfigure(line_buffering=True)
     args = build_arg_parser().parse_args(argv)
     cfg = resolve_config(args)
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
@@ -529,7 +588,7 @@ def main(argv: list[str] | None = None) -> None:
 
     print(f"version={cfg.version}")
     print(f"sha256={digest}")
-    print(f"artifact={cfg.zip_path}")
+    print(f"artifact={cfg.dmg_path}")
 
 
 @dataclass
@@ -554,8 +613,8 @@ class BundleConfig:
         return self.out_dir / f"{self.app_name}.app"
 
     @property
-    def zip_path(self) -> Path:
-        return self.out_dir / zip_name(self.app_name, self.version, self.arch)
+    def dmg_path(self) -> Path:
+        return self.out_dir / dmg_name(self.app_name, self.version, self.arch)
 
     @property
     def resources_path(self) -> Path:

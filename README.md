@@ -28,6 +28,12 @@ macOS 11 or later on Apple Silicon, with Homebrew:
 brew install --cask not-elm/orzma/orzma
 ```
 
+Or download `orzma-<version>-arm64.dmg` from the
+[latest release](https://github.com/not-elm/orzma/releases/latest), open it, and drag
+`orzma.app` into `Applications`. orzma is not notarized, so see
+[First launch](https://not-elm.github.io/orzma/getting-started.html#first-launch)
+before opening it.
+
 Windows 10 1809 or later, and Windows 11 (x64): download `orzma-<version>-x64.msi` from the
 [latest release](https://github.com/not-elm/orzma/releases/latest) and run it.
 
