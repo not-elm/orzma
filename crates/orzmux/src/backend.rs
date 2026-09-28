@@ -29,6 +29,7 @@ use tracing::Level;
 pub(crate) mod layout;
 pub(crate) mod pane;
 pub(crate) mod queue_sample;
+pub(crate) mod workspace;
 pub(crate) use pane::ShellFactory;
 
 /// A pane the backend minted. Never reused within one backend.
@@ -50,6 +51,45 @@ impl RequestId {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Self(NEXT.fetch_add(1, Ordering::Relaxed))
     }
+}
+
+/// A workspace the backend minted. Never reused within one backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkspaceId(pub u32);
+
+/// Which workspace a selection addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceTarget {
+    /// The displayed workspace.
+    Active,
+    /// A specific workspace.
+    Id(WorkspaceId),
+    /// The workspace at this zero-based position in display order.
+    Index(u16),
+    /// The workspace right of the displayed one; the last wraps to the
+    /// first.
+    Next,
+    /// The workspace left of the displayed one; the first wraps to the
+    /// last.
+    Previous,
+}
+
+/// Which workspace a close addresses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseTarget {
+    /// The displayed workspace.
+    Active,
+    /// A specific workspace.
+    Id(WorkspaceId),
+}
+
+/// One workspace as the GUI lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceEntry {
+    /// The workspace.
+    pub id: WorkspaceId,
+    /// The name the user gave it, or `None` for the automatic name.
+    pub name: Option<String>,
 }
 
 /// The position of a command in the GUI's send order; `Layout.seq`

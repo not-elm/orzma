@@ -10,9 +10,11 @@ pub(crate) mod event_loop;
 pub(crate) mod test_support;
 
 pub mod prelude {
+    pub use crate::backend::workspace::MAX_NAME_CHARS as MAX_WORKSPACE_NAME_CHARS;
     pub use crate::backend::{
-        CloseReason, CommandSeq, Layout, NewPaneAt, OrzmuxEvent, PaneDirection, PaneId, PaneRect,
-        PaneTarget, RequestId, Separator, SplitId, SplitOrientation,
+        CloseReason, CloseTarget, CommandSeq, Layout, NewPaneAt, OrzmuxEvent, PaneDirection,
+        PaneId, PaneRect, PaneTarget, RequestId, Separator, SplitId, SplitOrientation,
+        WorkspaceEntry, WorkspaceId, WorkspaceTarget,
     };
     pub use crate::client::{OrzmuxClient, OrzmuxConfig};
     pub use crate::error::{OrzmuxError, OrzmuxResult};

@@ -20,6 +20,9 @@ pub enum OrzmuxError {
     /// No live pane matches the target a command named.
     #[error("no pane matches the target")]
     UnresolvedTarget,
+    /// No workspace matches the target.
+    #[error("no workspace matches the target")]
+    UnresolvedWorkspace,
     /// A root pane was requested while the tree already holds one.
     #[error("the tree already holds a root pane")]
     RootOccupied,
