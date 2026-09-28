@@ -1053,6 +1053,51 @@ mod tests {
         );
     }
 
+    /// Asserts that a tab dragged past the threshold stacks above every
+    /// other child of the strip, and drops back to their stacking at the
+    /// end of the drag; a press under the threshold is not raised.
+    ///
+    /// Case: the user presses the first of three tabs, nudges it, then
+    /// drags it over the third tab and releases it there.
+    #[test]
+    fn a_dragged_tab_stacks_above_its_neighbours_until_released() {
+        let mut app = app_with_tab_bar();
+        set_workspaces(&mut app, &[1, 2, 3], 1);
+        app.update();
+        app.update();
+        lay_out_strip(&mut app, &[1, 2, 3]);
+        let first = tab_of(&mut app, 1);
+        let z_of = |app: &App, entity: Entity| {
+            *app.world()
+                .get::<ZIndex>(entity)
+                .expect("a strip child has a z-index")
+        };
+
+        app.world_mut().trigger(drag_start(first, 50.0));
+        app.world_mut().trigger(drag_to(first, 52.0, 2.0));
+        app.update();
+
+        assert_eq!(z_of(&app, first), ZIndex::default());
+
+        app.world_mut().trigger(drag_to(first, 190.0, 140.0));
+        app.update();
+
+        let raised = z_of(&app, first);
+        for sibling in strip_children(&mut app) {
+            if sibling != first {
+                assert!(
+                    raised.0 > z_of(&app, sibling).0,
+                    "the dragged tab stacks above {sibling:?}"
+                );
+            }
+        }
+
+        app.world_mut().trigger(drag_end(first, 190.0, 140.0));
+        app.update();
+
+        assert_eq!(z_of(&app, first), ZIndex::default());
+    }
+
     /// Asserts that a press moved less than the threshold stays a click
     /// that selects the tab and sends no move.
     ///

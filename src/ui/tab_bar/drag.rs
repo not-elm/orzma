@@ -153,6 +153,9 @@ const DRAG_THRESHOLD_PX: f32 = 4.0;
 const EDGE_SCROLL_ZONE_PX: f32 = 24.0;
 /// How far the strip scrolls per pointer move near its edge, in logical px.
 const EDGE_SCROLL_STEP_PX: f32 = 12.0;
+/// The stacking of a tab dragged past the threshold among the strip's
+/// children, above the other tabs and the new-workspace button.
+const DRAGGED_TAB_Z: ZIndex = ZIndex(1);
 
 /// A press on a tab, followed from its first movement until its release.
 #[derive(Debug, Clone, Copy)]
@@ -196,12 +199,12 @@ fn on_drag_start(
 }
 
 /// Follows the pointer: updates the target slot, keeps the tab under the
-/// pointer, and, once the press is a drag, scrolls the strip near its
-/// edges.
+/// pointer, and, once the press is a drag, draws the tab above its
+/// neighbours and scrolls the strip near its edges.
 fn on_drag(
     ev: On<Pointer<Drag>>,
     mut drag: ResMut<TabDrag>,
-    mut transforms: Query<&mut UiTransform, With<WorkspaceTab>>,
+    mut placements: Query<(&mut UiTransform, &mut ZIndex), With<WorkspaceTab>>,
     mut strips: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<TabStrip>>,
     tabs: Query<(&WorkspaceTab, &ComputedNode)>,
     workspaces: Res<CurrentWorkspaces>,
@@ -243,21 +246,28 @@ fn on_drag(
             scroll.x = next;
         }
     }
-    if let Ok(mut transform) = transforms.get_mut(ev.entity) {
+    if let Ok((mut transform, mut z_index)) = placements.get_mut(ev.entity) {
         let offset = Val::Px(drag.visual_offset(dx, tab_width, scroll.x));
         if transform.translation.x != offset {
             transform.translation.x = offset;
         }
+        let stacking = if drag.is_dragging(tab.workspace) {
+            DRAGGED_TAB_Z
+        } else {
+            ZIndex::default()
+        };
+        z_index.set_if_neq(stacking);
     }
 }
 
-/// Ends a primary press on a tab: puts the tab back in the flow and sends
-/// the move when the press was a drag to another slot.
+/// Ends a primary press on a tab: puts the tab back in the flow and in the
+/// strip's stacking, and sends the move when the press was a drag to
+/// another slot.
 fn on_drag_end(
     ev: On<Pointer<DragEnd>>,
     mut commands: Commands,
     mut drag: ResMut<TabDrag>,
-    mut transforms: Query<&mut UiTransform, With<WorkspaceTab>>,
+    mut placements: Query<(&mut UiTransform, &mut ZIndex), With<WorkspaceTab>>,
     tabs: Query<&WorkspaceTab>,
 ) {
     if ev.button != PointerButton::Primary {
@@ -266,10 +276,9 @@ fn on_drag_end(
     let Ok(tab) = tabs.get(ev.entity) else {
         return;
     };
-    if let Ok(mut transform) = transforms.get_mut(ev.entity)
-        && *transform != UiTransform::default()
-    {
-        *transform = UiTransform::default();
+    if let Ok((mut transform, mut z_index)) = placements.get_mut(ev.entity) {
+        transform.set_if_neq(UiTransform::default());
+        z_index.set_if_neq(ZIndex::default());
     }
     if !drag.tracks(tab.workspace) {
         return;
