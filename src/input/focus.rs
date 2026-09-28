@@ -16,7 +16,9 @@ use bevy_orzma_tty_renderer::prelude::{
     PaneInactiveStyle, TerminalCellMetricsResource, TerminalOverlays,
 };
 use bevy_orzma_webview::{NonInteractive, RequestWebviewFocus, Webview, webview_hit_at};
-use bevy_orzmux::prelude::{OrzmuxActivePaneChanged, OrzmuxPane, PaneAction, RequestPaneAction};
+use bevy_orzmux::prelude::{
+    OrzmuxActivePaneChanged, OrzmuxPane, OrzmuxPaneHidden, PaneAction, RequestPaneAction,
+};
 use orzma_configs::inactive_pane::InactivePaneConfig;
 
 /// When present on an `OrzmaTerminal` entity, the crate's default keyboard
@@ -103,7 +105,9 @@ pub(in crate::input) struct WebviewClaimParams<'w, 's> {
 /// the cursor: inserts or removes `KeyboardDisabled`,
 /// `TerminalMouseDisabled`, `WebviewMouseDisabled`, and
 /// `MouseClaimedByWebview` so each marker is present exactly while its
-/// condition holds. The markers apply at the next command flush.
+/// condition holds. The markers apply at the next command flush. A pane
+/// hidden with its workspace gets both mouse gates and never claims the
+/// mouse for a webview.
 pub(in crate::input) fn maintain_input_gates(
     mut commands: Commands,
     ime: Res<ImeState>,
@@ -117,6 +121,7 @@ pub(in crate::input) fn maintain_input_gates(
             Has<WebviewMouseDisabled>,
             Has<MouseClaimedByWebview>,
             Has<ViModeState>,
+            Has<OrzmuxPaneHidden>,
         ),
         With<OrzmaTerminal>,
     >,
@@ -138,7 +143,8 @@ pub(in crate::input) fn maintain_input_gates(
     let mouse_modal = ime.is_composing() || !focused;
     let webview_modal = !focused || (ime.is_composing() && focused_webview.0.is_none());
     let claimed = window.and_then(|w| cursor_claims_webview(w, &claim));
-    for (entity, has_keyboard, has_terminal, has_webview, has_claim, in_vi_mode) in terminals.iter()
+    for (entity, has_keyboard, has_terminal, has_webview, has_claim, in_vi_mode, hidden) in
+        terminals.iter()
     {
         set_marker(
             &mut commands,
@@ -151,21 +157,21 @@ pub(in crate::input) fn maintain_input_gates(
             &mut commands,
             entity,
             TerminalMouseDisabled,
-            mouse_modal,
+            mouse_modal || hidden,
             has_terminal,
         );
         set_marker(
             &mut commands,
             entity,
             WebviewMouseDisabled,
-            webview_modal || in_vi_mode,
+            webview_modal || in_vi_mode || hidden,
             has_webview,
         );
         set_marker(
             &mut commands,
             entity,
             MouseClaimedByWebview,
-            Some(entity) == claimed && !in_vi_mode,
+            Some(entity) == claimed && !in_vi_mode && !hidden,
             has_claim,
         );
     }
@@ -678,6 +684,39 @@ mod tests {
                 .entity(shell)
                 .contains::<MouseClaimedByWebview>()
         );
+    }
+
+    /// Asserts that a hidden pane gets both mouse gates, so a gesture held
+    /// in it is cancelled and a pressed webview in it is released.
+    ///
+    /// Case: the user presses the switch-workspace key while dragging a
+    /// selection in a pane.
+    #[test]
+    fn a_hidden_pane_gets_both_mouse_gates() {
+        let (mut app, shell) = make_gate_app();
+        app.world_mut().entity_mut(shell).insert(OrzmuxPaneHidden);
+        app.update();
+        assert!(
+            app.world()
+                .entity(shell)
+                .contains::<TerminalMouseDisabled>()
+        );
+        assert!(app.world().entity(shell).contains::<WebviewMouseDisabled>());
+        assert!(
+            !app.world()
+                .entity(shell)
+                .contains::<MouseClaimedByWebview>()
+        );
+        app.world_mut()
+            .entity_mut(shell)
+            .remove::<OrzmuxPaneHidden>();
+        app.update();
+        assert!(
+            !app.world()
+                .entity(shell)
+                .contains::<TerminalMouseDisabled>()
+        );
+        assert!(!app.world().entity(shell).contains::<WebviewMouseDisabled>());
     }
 
     #[derive(Resource, Default)]
