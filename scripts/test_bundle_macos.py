@@ -40,9 +40,6 @@ def _write_fake_cef_swiftshader(fw: Path) -> None:
 
 
 class PureHelpers(unittest.TestCase):
-    def test_zip_name(self):
-        self.assertEqual(bm.zip_name("orzma", "0.1.0", "arm64"), "orzma-0.1.0-arm64.zip")
-
     def test_version_less_than(self):
         self.assertTrue(bm.version_less_than("10.15", "11.0"))
         self.assertFalse(bm.version_less_than("11.0", "11.0"))
@@ -65,7 +62,7 @@ class PureHelpers(unittest.TestCase):
             sign_identity="-", no_sign=False, notarize=False,
         )
         self.assertEqual(cfg.app_path, Path("/tmp/out/orzma.app"))
-        self.assertEqual(cfg.zip_path, Path("/tmp/out/orzma-1.2.3-arm64.zip"))
+        self.assertEqual(cfg.dmg_path, Path("/tmp/out/orzma-1.2.3-arm64.dmg"))
 
 
 class CaskTemplate(unittest.TestCase):
@@ -252,6 +249,87 @@ class CreateDmgRetry(unittest.TestCase):
                 bm.create_dmg(self.ARGV)
         self.assertEqual(len(calls), 3)
         self.assertEqual(sleep.call_count, 2)
+
+
+class PackageDmg(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self.tmp.name) / "out"
+        self.out.mkdir()
+        self.cfg = bm.BundleConfig(
+            version="9.9.9", app_name="orzma", bin_name="orzma",
+            bundle_id_base="not.elm.orzma", arch="arm64", target_triple="aarch64-apple-darwin",
+            bin_source=self.out / "orzma", cef_framework=self.out / "cef",
+            helper_bin=self.out / "helper", out_dir=self.out,
+            sign_identity="-", no_sign=False, notarize=False,
+        )
+        self.dmg = self.out / "orzma-9.9.9-arm64.dmg"
+        self.sidecar = self.out / "orzma-9.9.9-arm64.dmg.sha256"
+        self.staged = []
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _fake_run(self, fail_on=None, error=None):
+        def fake_run(argv, redact=()):
+            if argv[0] == "ditto":
+                Path(argv[-1]).mkdir()
+            if argv[:2] == ["hdiutil", "create"]:
+                srcfolder = Path(argv[argv.index("-srcfolder") + 1])
+                self.staged.append({
+                    "entries": sorted(p.name for p in srcfolder.iterdir()),
+                    "link": os.readlink(srcfolder / "Applications"),
+                })
+                Path(argv[-1]).write_bytes(b"new dmg")
+            if fail_on is not None and argv[:2] == fail_on:
+                raise error if error is not None else subprocess.CalledProcessError(1, argv)
+
+        return fake_run
+
+    def _staging_dirs(self):
+        return list(self.out.glob("dmg-staging-*"))
+
+    def test_package_replaces_stale_files_with_a_dmg_and_its_sidecar(self):
+        self.dmg.write_bytes(b"old dmg")
+        self.sidecar.write_text("stale\n")
+        with mock.patch.object(bm, "run", self._fake_run()):
+            digest = bm.package(self.cfg)
+        self.assertEqual(digest, bm.compute_sha256(self.dmg))
+        self.assertEqual(self.dmg.read_bytes(), b"new dmg")
+        self.assertEqual(self.sidecar.read_text(), f"{digest}  orzma-9.9.9-arm64.dmg\n")
+        self.assertEqual(
+            self.staged, [{"entries": ["Applications", "orzma.app"], "link": "/Applications"}]
+        )
+        self.assertEqual(self._staging_dirs(), [])
+
+    def test_a_failed_verify_leaves_neither_dmg_nor_sidecar(self):
+        self.sidecar.write_text("stale\n")
+        with mock.patch.object(bm, "run", self._fake_run(fail_on=["hdiutil", "verify"])):
+            with self.assertRaises(subprocess.CalledProcessError):
+                bm.package(self.cfg)
+        self.assertFalse(self.dmg.exists())
+        self.assertFalse(self.sidecar.exists())
+        self.assertEqual(self._staging_dirs(), [])
+
+    def test_a_create_that_fails_every_attempt_leaves_neither_dmg_nor_sidecar(self):
+        self.sidecar.write_text("stale\n")
+        with mock.patch.object(bm, "run", self._fake_run(fail_on=["hdiutil", "create"])), \
+                mock.patch.object(bm.time, "sleep"):
+            with self.assertRaises(subprocess.CalledProcessError):
+                bm.package(self.cfg)
+        self.assertEqual(len(self.staged), bm.HDIUTIL_CREATE_ATTEMPTS)
+        self.assertFalse(self.dmg.exists())
+        self.assertFalse(self.sidecar.exists())
+        self.assertEqual(self._staging_dirs(), [])
+
+    def test_an_interrupted_create_removes_the_partial_dmg(self):
+        fake = self._fake_run(fail_on=["hdiutil", "create"], error=KeyboardInterrupt())
+        with mock.patch.object(bm, "run", fake):
+            with self.assertRaises(KeyboardInterrupt):
+                bm.package(self.cfg)
+        self.assertFalse(self.dmg.exists())
+        self.assertFalse(self.sidecar.exists())
+        self.assertEqual(self._staging_dirs(), [])
 
 
 class ConfigResolution(unittest.TestCase):
@@ -635,11 +713,16 @@ class EndToEnd(unittest.TestCase):
                 "--orzmd-bin", str(d / "orzmd"),
                 "--out-dir", str(out),
             ])
-            zip_path = out / "orzma-9.9.9-arm64.zip"
-            self.assertTrue(zip_path.is_file())
-            sha_file = out / "orzma-9.9.9-arm64.zip.sha256"
+            dmg_path = out / "orzma-9.9.9-arm64.dmg"
+            self.assertTrue(dmg_path.is_file())
+            sha_file = out / "orzma-9.9.9-arm64.dmg.sha256"
             self.assertTrue(sha_file.is_file())
-            self.assertEqual(bm.compute_sha256(zip_path), sha_file.read_text().split()[0])
+            self.assertEqual(
+                sha_file.read_text(),
+                f"{bm.compute_sha256(dmg_path)}  orzma-9.9.9-arm64.dmg\n",
+            )
+            self.assertEqual(list(out.glob("dmg-staging-*")), [])
+            self.assertFalse((out / "orzma-9.9.9-arm64.zip").exists())
             resources = out / "orzma.app" / "Contents" / "Resources"
             self.assertTrue((resources / "orzbrowser").is_file())
             self.assertTrue((resources / "orzmd").is_file())
@@ -658,6 +741,31 @@ class EndToEnd(unittest.TestCase):
                     ["codesign", "--verify", str(resources / name)],
                     check=True,
                 )
+            mount = d / "mnt"
+            mount.mkdir()
+            subprocess.run(
+                ["hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", str(mount),
+                 str(dmg_path)],
+                check=True,
+            )
+            try:
+                mounted_app = mount / "orzma.app"
+                self.assertTrue(mounted_app.is_dir())
+                link = mount / "Applications"
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(os.readlink(link), "/Applications")
+                subprocess.run(
+                    ["codesign", "--verify", "--deep", "--strict", str(mounted_app)],
+                    check=True,
+                )
+                for name in ("orzbrowser", "orzmd"):
+                    subprocess.run(
+                        ["codesign", "--verify",
+                         str(mounted_app / "Contents" / "Resources" / name)],
+                        check=True,
+                    )
+            finally:
+                subprocess.run(["hdiutil", "detach", str(mount)], check=True)
 
 
 class CompanionSigning(unittest.TestCase):

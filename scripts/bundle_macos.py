@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bundle orzma into a CEF-embedded macOS .app and package it for Homebrew."""
+"""Bundle orzma into a CEF-embedded macOS .app and package it as a release dmg."""
 
 from __future__ import annotations
 
@@ -51,10 +51,6 @@ HDIUTIL_CREATE_ATTEMPTS = 3
 HDIUTIL_RETRY_DELAY_SECONDS = 5
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def zip_name(app_name: str, version: str, arch: str) -> str:
-    return f"{app_name}-{version}-{arch}.zip"
 
 
 def dmg_name(app_name: str, version: str, arch: str) -> str:
@@ -505,6 +501,11 @@ def notarize(cfg: BundleConfig) -> None:
     tmp_zip.unlink(missing_ok=True)
 
 
+def stage_dmg(app: Path, staging: Path) -> None:
+    run(ditto_copy_argv(app, staging / app.name))
+    (staging / "Applications").symlink_to("/Applications")
+
+
 def create_dmg(argv: list[str]) -> None:
     for attempt in range(1, HDIUTIL_CREATE_ATTEMPTS + 1):
         try:
@@ -521,12 +522,20 @@ def create_dmg(argv: list[str]) -> None:
 
 
 def package(cfg: BundleConfig) -> str:
-    dest = cfg.zip_path
-    if dest.exists():
-        dest.unlink()
-    run(ditto_zip_argv(cfg.app_path, dest))
+    dest = cfg.dmg_path
+    sidecar = dest.with_name(dest.name + ".sha256")
+    dest.unlink(missing_ok=True)
+    sidecar.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(prefix="dmg-staging-", dir=cfg.out_dir) as staging:
+            stage_dmg(cfg.app_path, Path(staging))
+            create_dmg(hdiutil_create_argv(cfg.app_name, Path(staging), dest))
+        run(hdiutil_verify_argv(dest))
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
     digest = compute_sha256(dest)
-    (dest.parent / (dest.name + ".sha256")).write_text(f"{digest}  {dest.name}\n")
+    sidecar.write_text(f"{digest}  {dest.name}\n")
     return digest
 
 
@@ -571,7 +580,7 @@ def main(argv: list[str] | None = None) -> None:
 
     print(f"version={cfg.version}")
     print(f"sha256={digest}")
-    print(f"artifact={cfg.zip_path}")
+    print(f"artifact={cfg.dmg_path}")
 
 
 @dataclass
@@ -596,8 +605,8 @@ class BundleConfig:
         return self.out_dir / f"{self.app_name}.app"
 
     @property
-    def zip_path(self) -> Path:
-        return self.out_dir / zip_name(self.app_name, self.version, self.arch)
+    def dmg_path(self) -> Path:
+        return self.out_dir / dmg_name(self.app_name, self.version, self.arch)
 
     @property
     def resources_path(self) -> Path:
