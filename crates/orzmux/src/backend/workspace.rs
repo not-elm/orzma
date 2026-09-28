@@ -8,9 +8,6 @@ use crate::backend::{
 use crate::error::{OrzmuxError, OrzmuxResult};
 use orzma_vt::prelude::GridSize;
 
-/// The longest workspace name kept, in `char`s.
-pub const MAX_NAME_CHARS: usize = 64;
-
 /// One workspace: its name and the tree its panes tile.
 #[derive(Debug)]
 pub struct Workspace {
@@ -20,6 +17,11 @@ pub struct Workspace {
     pub name: Option<String>,
     /// The panes it tiles.
     pub tree: LayoutTree,
+}
+
+impl Workspace {
+    /// The longest workspace name kept, in `char`s.
+    pub const MAX_NAME_CHARS: usize = 64;
 }
 
 /// Every workspace in display order, the displayed one, and the split-id
@@ -124,9 +126,10 @@ impl Workspaces {
     }
 
     /// Names `id` after `name` with control characters removed, the
-    /// surrounding whitespace trimmed, and at most [`MAX_NAME_CHARS`]
-    /// characters kept. A name that ends up empty, or `None`, restores the
-    /// automatic name. Returns whether the name changed.
+    /// surrounding whitespace trimmed, and at most
+    /// [`Workspace::MAX_NAME_CHARS`] characters kept. A name that ends up
+    /// empty, or `None`, restores the automatic name. Returns whether the
+    /// name changed.
     ///
     /// # Errors
     ///
@@ -226,10 +229,14 @@ impl Workspaces {
 }
 
 /// `name` without control characters, trimmed, and cut to
-/// [`MAX_NAME_CHARS`] characters; `None` when nothing is left.
+/// [`Workspace::MAX_NAME_CHARS`] characters; `None` when nothing is left.
 fn sanitized_name(name: &str) -> Option<String> {
     let kept: String = name.chars().filter(|c| !c.is_control()).collect();
-    let cut: String = kept.trim().chars().take(MAX_NAME_CHARS).collect();
+    let cut: String = kept
+        .trim()
+        .chars()
+        .take(Workspace::MAX_NAME_CHARS)
+        .collect();
     let trimmed = cut.trim_end();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
@@ -331,7 +338,7 @@ mod tests {
             set.get(a)
                 .and_then(|w| w.name.clone())
                 .map(|n| n.chars().count()),
-            Some(MAX_NAME_CHARS)
+            Some(Workspace::MAX_NAME_CHARS)
         );
         assert_eq!(set.rename(a, Some("   ".into())).ok(), Some(true));
         assert_eq!(set.get(a).and_then(|w| w.name.clone()), None);
