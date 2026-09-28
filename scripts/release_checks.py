@@ -56,7 +56,7 @@ def version_problems(tag: str, versions: dict[str, str | None]) -> list[str]:
 def expected_assets(version: str) -> list[str]:
     """The eight files every release carries: four packages and their .sha256 sidecars."""
     packages = [
-        f"orzma-{version}-arm64.zip",
+        f"orzma-{version}-arm64.dmg",
         f"orzma-{version}-x64.msi",
         f"orzma-{version}-x86_64-linux.tar.gz",
         f"orzma_{version}_amd64.deb",

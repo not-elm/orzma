@@ -92,9 +92,9 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          ZIP="target/bundle/orzma-${VERSION}-arm64.zip"
-          test -f "$ZIP" || { echo "Bundle not found: $ZIP"; exit 1; }
-          test -f "${ZIP}.sha256" || { echo "Missing sidecar: ${ZIP}.sha256"; exit 1; }
+          DMG="target/bundle/orzma-${VERSION}-arm64.dmg"
+          test -f "$DMG" || { echo "Bundle not found: $DMG"; exit 1; }
+          test -f "${DMG}.sha256" || { echo "Missing sidecar: ${DMG}.sha256"; exit 1; }
 
       # Uploaded on every run, so a manual dry run can be downloaded too; the draft job
       # in release.yml releases exactly these files.
@@ -106,5 +106,5 @@ jobs:
           if-no-files-found: error
           overwrite: true
           path: |
-            target/bundle/orzma-${{ steps.ver.outputs.version }}-arm64.zip
-            target/bundle/orzma-${{ steps.ver.outputs.version }}-arm64.zip.sha256
+            target/bundle/orzma-${{ steps.ver.outputs.version }}-arm64.dmg
+            target/bundle/orzma-${{ steps.ver.outputs.version }}-arm64.dmg.sha256

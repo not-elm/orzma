@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import bundle_macos as bm
 import release_checks as rc
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -142,7 +143,7 @@ def _uploaded_assets(dist: Path, version: str = "0.2.2") -> list[dict]:
 class ExpectedAssets(unittest.TestCase):
     def test_lists_four_packages_and_their_sidecars(self):
         packages = [
-            "orzma-0.2.2-arm64.zip",
+            "orzma-0.2.2-arm64.dmg",
             "orzma-0.2.2-x64.msi",
             "orzma-0.2.2-x86_64-linux.tar.gz",
             "orzma_0.2.2_amd64.deb",
@@ -151,6 +152,9 @@ class ExpectedAssets(unittest.TestCase):
             rc.expected_assets("0.2.2"),
             sorted(packages + [f"{p}.sha256" for p in packages]),
         )
+
+    def test_the_macos_package_is_the_dmg_the_bundler_writes(self):
+        self.assertIn(bm.dmg_name(bm.APP_NAME, "0.2.2", bm.ARCH), rc.expected_assets("0.2.2"))
 
 
 class Dist(unittest.TestCase):
@@ -183,9 +187,9 @@ class Dist(unittest.TestCase):
         )
 
     def test_sidecar_naming_another_file_is_reported(self):
-        name = "orzma-0.2.2-arm64.zip"
+        name = "orzma-0.2.2-arm64.dmg"
         digest = hashlib.sha256(name.encode()).hexdigest()
-        (self.dist / f"{name}.sha256").write_text(f"{digest}  orzma.zip\n", encoding="utf-8")
+        (self.dist / f"{name}.sha256").write_text(f"{digest}  orzma.dmg\n", encoding="utf-8")
         self.assertEqual(
             rc.dist_problems(self.dist, "0.2.2"),
             [f"{name}.sha256 does not match {name}."],
@@ -232,10 +236,10 @@ class Uploaded(unittest.TestCase):
         )
 
     def test_missing_asset_is_reported(self):
-        self.assets.remove(self._asset("orzma-0.2.2-arm64.zip.sha256"))
+        self.assets.remove(self._asset("orzma-0.2.2-arm64.dmg.sha256"))
         self.assertEqual(
             rc.uploaded_problems(self.assets, "0.2.2", self.dist),
-            ["Asset orzma-0.2.2-arm64.zip.sha256 is missing."],
+            ["Asset orzma-0.2.2-arm64.dmg.sha256 is missing."],
         )
 
     def test_unexpected_asset_is_reported(self):

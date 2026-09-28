@@ -72,6 +72,14 @@ class CaskTemplate(unittest.TestCase):
         for name in bm.COMPANION_BINS:
             self.assertIn(f'binary "#{{appdir}}/orzma.app/Contents/Resources/{name}"', tmpl)
 
+    def test_template_downloads_the_dmg_the_bundler_writes(self):
+        tmpl = (bm.REPO_ROOT / "build" / "macos" / "homebrew" / "orzma.rb.tmpl").read_text()
+        name = bm.dmg_name(bm.APP_NAME, "#{version}", bm.ARCH)
+        self.assertIn(
+            f'url "https://github.com/not-elm/orzma/releases/download/v#{{version}}/{name}"',
+            tmpl,
+        )
+
 
 class PlistLogic(unittest.TestCase):
     def test_merge_cef_keys_into_empty(self):
