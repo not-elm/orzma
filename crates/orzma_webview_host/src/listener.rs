@@ -694,6 +694,141 @@ mod tests {
         drop(writer);
     }
 
+    // TODO: temporary Windows diagnostic for the flaky disconnect test; remove before merge.
+    #[cfg(windows)]
+    #[test]
+    fn diag_windows_disconnect_latency() {
+        use std::fmt::Write as _;
+        const WAIT: Duration = Duration::from_secs(3);
+        fn summary(lat: &mut [Duration]) -> String {
+            lat.sort();
+            let n = lat.len();
+            let at = |q: f64| {
+                lat.get(((n as f64) * q) as usize)
+                    .copied()
+                    .unwrap_or_default()
+            };
+            format!(
+                "n={n} p50={:?} p99={:?} max={:?} over100ms={} over1s={}",
+                at(0.5),
+                at(0.99),
+                lat.last().copied().unwrap_or_default(),
+                lat.iter()
+                    .filter(|d| **d > Duration::from_millis(100))
+                    .count(),
+                lat.iter().filter(|d| **d > Duration::from_secs(1)).count()
+            )
+        }
+        let mut report = String::from("\n");
+        for (name, via_clone) in [("raw-original", false), ("raw-clone", true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let sock = dir.path().join("raw.sock");
+            let listener = UnixListener::bind(&sock).unwrap();
+            let mut lat = Vec::new();
+            let mut stuck = 0;
+            for _ in 0..300 {
+                let client = UnixStream::connect(&sock).unwrap();
+                let (server, _) = listener.accept().unwrap();
+                let (keep, reader) = if via_clone {
+                    let clone = server.try_clone().unwrap();
+                    (Some(server), clone)
+                } else {
+                    (None, server)
+                };
+                let (tx, rx) = bounded::<Instant>(1);
+                thread::spawn(move || {
+                    let mut reader = reader;
+                    let mut buf = [0u8; 16];
+                    let _ = reader.read(&mut buf);
+                    let _ = tx.send(Instant::now());
+                });
+                thread::sleep(Duration::from_millis(2));
+                let dropped = Instant::now();
+                drop(client);
+                match rx.recv_timeout(WAIT) {
+                    Ok(done) => lat.push(done.saturating_duration_since(dropped)),
+                    Err(_) => stuck += 1,
+                }
+                drop(keep);
+                if stuck >= 5 {
+                    break;
+                }
+            }
+            writeln!(report, "{name}: stuck={stuck} {}", summary(&mut lat)).unwrap();
+        }
+        let listener_run = |shutdown_first: bool,
+                            iterations: usize|
+         -> (Vec<Duration>, Vec<Duration>, usize, usize) {
+            let (_dir, sock, events) = listen();
+            let (mut hellos, mut disconnects) = (Vec::new(), Vec::new());
+            let (mut hello_stuck, mut disconnect_stuck) = (0, 0);
+            for _ in 0..iterations {
+                let mut client = connect(&sock);
+                let sent = Instant::now();
+                send_line(&mut client, r#"{"op":"hello","token":"tok"}"#);
+                let writer = match events.recv_timeout(WAIT) {
+                    Ok(ControlEvent::Hello { writer, reply, .. }) => {
+                        hellos.push(sent.elapsed());
+                        reply.send(true).unwrap();
+                        writer
+                    }
+                    Ok(other) => panic!("expected Hello, got {other:?}"),
+                    Err(_) => {
+                        hello_stuck += 1;
+                        if hello_stuck >= 5 {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+                if shutdown_first {
+                    client.shutdown(Shutdown::Write).unwrap();
+                }
+                let dropped = Instant::now();
+                drop(client);
+                match events.recv_timeout(WAIT) {
+                    Ok(ControlEvent::Disconnect { .. }) => disconnects.push(dropped.elapsed()),
+                    Ok(other) => panic!("expected Disconnect, got {other:?}"),
+                    Err(_) => disconnect_stuck += 1,
+                }
+                drop(writer);
+                if disconnect_stuck >= 5 {
+                    break;
+                }
+            }
+            (hellos, disconnects, hello_stuck, disconnect_stuck)
+        };
+        for (name, shutdown_first) in [("listener-drop", false), ("listener-shutdown-drop", true)] {
+            let (mut h, mut d, hs, ds) = listener_run(shutdown_first, 200);
+            writeln!(
+                report,
+                "{name}: hello_stuck={hs} [{}] disconnect_stuck={ds} [{}]",
+                summary(&mut h),
+                summary(&mut d)
+            )
+            .unwrap();
+        }
+        let parallel: Vec<_> = (0..8)
+            .map(|_| thread::spawn(move || listener_run(false, 40)))
+            .collect();
+        let (mut h, mut d, mut hs, mut ds) = (Vec::new(), Vec::new(), 0, 0);
+        for handle in parallel {
+            let (ph, pd, phs, pds) = handle.join().unwrap();
+            h.extend(ph);
+            d.extend(pd);
+            hs += phs;
+            ds += pds;
+        }
+        writeln!(
+            report,
+            "listener-drop-parallel8: hello_stuck={hs} [{}] disconnect_stuck={ds} [{}]",
+            summary(&mut h),
+            summary(&mut d)
+        )
+        .unwrap();
+        panic!("{report}");
+    }
+
     /// Asserts that the bound socket file inherits the runtime directory's
     /// current-user restriction.
     ///
