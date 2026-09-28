@@ -3,13 +3,14 @@
 
 use crate::font::TerminalUiFont;
 use crate::input::bindings::OrzmaMouseConfig;
-use crate::ui::tab_bar::{ACTIVE_TEXT, TabLabel, WorkspaceTab, tab_font, tab_label};
+use crate::ui::tab_bar::{ACTIVE_TEXT, TabLabel, TabLabelText, WorkspaceTab, tab_font, tab_label};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input_focus::{AutoFocus, FocusedInput, InputFocus};
 use bevy::picking::PickingSettings;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems, TextCursorStyle};
+use bevy::ui::widget::measure_text_system;
 use bevy::ui_widgets::SelectAllOnFocus;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_webview::RequestWebviewFocus;
@@ -92,7 +93,8 @@ impl WorkspaceRename {
 }
 
 /// The `PostUpdate` slot where an ending rename is committed or discarded,
-/// after the field's edits of the frame are applied.
+/// after the field's edits of the frame are applied and before the UI
+/// measures text, so the tab shows the committed name in the same frame.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum RenameSystems {
     /// Committing or discarding the ending rename.
@@ -172,7 +174,12 @@ pub(crate) struct TabRenamePlugin;
 impl Plugin for TabRenamePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WorkspaceRename>()
-            .configure_sets(PostUpdate, RenameSystems::Finish.after(EditableTextSystems))
+            .configure_sets(
+                PostUpdate,
+                RenameSystems::Finish
+                    .after(EditableTextSystems)
+                    .before(measure_text_system),
+            )
             .add_observer(start_rename)
             .add_observer(commit_on_outside_press)
             .add_systems(
@@ -330,36 +337,55 @@ fn commit_on_webview_focus(mut rename: ResMut<WorkspaceRename>, focused: Res<Foc
 }
 
 /// Commits or discards the ending rename, restores the label, removes the
-/// field, and takes the keyboard focus off it.
+/// field, and takes the keyboard focus off it. A committed name is written
+/// into the label at once, before the backend answers the rename.
 fn finish_rename(
     mut commands: Commands,
     mut rename: ResMut<WorkspaceRename>,
     mut input_focus: ResMut<InputFocus>,
-    mut labels: Query<&mut Node, With<TabLabel>>,
+    mut labels: Query<(&mut Node, Option<&Children>), With<TabLabel>>,
+    mut label_texts: Query<&mut Text, With<TabLabelText>>,
     fields: Query<&EditableText>,
 ) {
     let Some(session) = rename.0.take() else {
         return;
     };
-    if session.ending == Some(true)
-        && let Ok(field) = fields.get(session.field)
-        && let RenameOutcome::Set(name) = RenameOutcome::decide(
-            &field.value().to_string(),
-            session.name.as_deref(),
-            &session.auto_label,
-        )
-    {
+    let committed = fields
+        .get(session.field)
+        .ok()
+        .filter(|_| session.ending == Some(true))
+        .and_then(|field| {
+            match RenameOutcome::decide(
+                &field.value().to_string(),
+                session.name.as_deref(),
+                &session.auto_label,
+            ) {
+                RenameOutcome::Set(name) => Some(name),
+                RenameOutcome::Keep => None,
+            }
+        });
+    if let Ok((mut node, parts)) = labels.get_mut(session.label) {
+        if let Some(name) = &committed {
+            let shown = name.as_deref().unwrap_or(&session.auto_label);
+            for part in parts.into_iter().flatten() {
+                if let Ok(mut text) = label_texts.get_mut(*part)
+                    && text.0 != shown
+                {
+                    text.0 = shown.to_string();
+                }
+            }
+        }
+        if node.display == Display::None {
+            node.display = Display::Flex;
+        }
+    }
+    if let Some(name) = committed {
         commands.trigger(RequestWorkspaceAction {
             action: WorkspaceAction::Rename {
                 workspace: session.workspace,
                 name,
             },
         });
-    }
-    if let Ok(mut node) = labels.get_mut(session.label)
-        && node.display == Display::None
-    {
-        node.display = Display::Flex;
     }
     commands.entity(session.field).try_despawn();
     if input_focus.get() == Some(session.field) {
@@ -484,6 +510,72 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct Requested(Vec<WorkspaceAction>);
+
+    fn labelled(app: &mut App, shown: &str) -> (Entity, Entity) {
+        let label = app
+            .world_mut()
+            .spawn((
+                TabLabel,
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+            ))
+            .id();
+        let text = app
+            .world_mut()
+            .spawn((TabLabelText, Text::new(shown), ChildOf(label)))
+            .id();
+        (label, text)
+    }
+
+    /// Asserts that a committed rename writes the new name into the tab's
+    /// label in the same update that restores the label, before any answer
+    /// from the backend.
+    ///
+    /// Case: the user renames "Workspace 1" to "logs" and presses Enter.
+    #[test]
+    fn a_committed_name_is_in_the_label_at_once() {
+        let mut app = finish_app();
+        let (label, text) = labelled(&mut app, "Workspace 1");
+        let field = app.world_mut().spawn(EditableText::new("logs")).id();
+        app.insert_resource(WorkspaceRename::ending_for_test(
+            WorkspaceId(1),
+            field,
+            label,
+            true,
+        ));
+        app.update();
+        assert_eq!(
+            app.world().get::<Text>(text).map(|t| t.0.as_str()),
+            Some("logs")
+        );
+        assert_eq!(
+            app.world().get::<Node>(label).map(|n| n.display),
+            Some(Display::Flex)
+        );
+    }
+
+    /// Asserts that a cancelled rename leaves the label's text as it was.
+    ///
+    /// Case: the user types "logs" into the rename field and presses Esc.
+    #[test]
+    fn a_cancelled_rename_keeps_the_label_text() {
+        let mut app = finish_app();
+        let (label, text) = labelled(&mut app, "Workspace 1");
+        let field = app.world_mut().spawn(EditableText::new("logs")).id();
+        app.insert_resource(WorkspaceRename::ending_for_test(
+            WorkspaceId(1),
+            field,
+            label,
+            false,
+        ));
+        app.update();
+        assert_eq!(
+            app.world().get::<Text>(text).map(|t| t.0.as_str()),
+            Some("Workspace 1")
+        );
+    }
 
     fn finish_app() -> App {
         let mut app = App::new();
