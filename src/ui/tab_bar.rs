@@ -5,6 +5,7 @@ use crate::font::TerminalUiFont;
 use crate::session::spawn::PaneSpawnRequest;
 use crate::ui::UiRoot;
 use crate::ui::tab_bar::drag::{TabDrag, TabDragPlugin};
+use crate::ui::tab_bar::rename::{StartWorkspaceRename, TabRenamePlugin, WorkspaceRename};
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
@@ -18,6 +19,7 @@ use orzmux::prelude::NewPaneAt;
 use std::collections::HashMap;
 
 mod drag;
+pub(crate) mod rename;
 
 /// The tab bar's height in logical px before rounding to physical pixels.
 pub(crate) const TAB_BAR_HEIGHT_PX: f32 = 28.0;
@@ -58,7 +60,7 @@ pub(crate) struct TabBarPlugin;
 
 impl Plugin for TabBarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(TabDragPlugin)
+        app.add_plugins((TabDragPlugin, TabRenamePlugin))
             .add_message::<WindowScaleFactorChanged>()
             .configure_sets(
                 Update,
@@ -511,13 +513,15 @@ fn style_tabs(
     }
 }
 
-/// A primary click on a tab requests that its workspace be displayed,
-/// unless the click ends a drag of that tab.
+/// A primary click on a tab requests that its workspace be displayed, and
+/// a primary double-click starts renaming it instead; a click that ends a
+/// drag of that tab, or lands on a tab being renamed, does nothing.
 fn on_tab_click(
     ev: On<Pointer<Click>>,
     mut commands: Commands,
     tabs: Query<&WorkspaceTab>,
     drag: Res<TabDrag>,
+    rename: Res<WorkspaceRename>,
 ) {
     if ev.button != PointerButton::Primary {
         return;
@@ -525,7 +529,13 @@ fn on_tab_click(
     let Ok(tab) = tabs.get(ev.entity) else {
         return;
     };
-    if drag.is_dragging(tab.workspace) {
+    if drag.is_dragging(tab.workspace) || rename.workspace() == Some(tab.workspace) {
+        return;
+    }
+    if ev.count == 2 {
+        commands.trigger(StartWorkspaceRename {
+            workspace: Some(tab.workspace),
+        });
         return;
     }
     commands.trigger(RequestWorkspaceAction {
@@ -623,9 +633,11 @@ mod tests {
     use super::*;
     use bevy::camera::NormalizedRenderTarget;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::input_focus::InputFocus;
     use bevy::math::Affine2;
     use bevy::picking::backend::HitData;
     use bevy::picking::pointer::{Location, PointerId};
+    use bevy::text::EditableText;
     use bevy::ui::CalculatedClip;
     use bevy::ui::update::update_clipping_system;
     use bevy_orzmux::prelude::PendingWorkspaceMove;
@@ -646,7 +658,8 @@ mod tests {
     fn app_with_tab_bar() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TabBarPlugin))
-            .init_resource::<CurrentWorkspaces>();
+            .init_resource::<CurrentWorkspaces>()
+            .init_resource::<InputFocus>();
         app.world_mut().spawn((Node::default(), UiRoot));
         app
     }
@@ -820,11 +833,15 @@ mod tests {
     }
 
     fn click(entity: Entity) -> Pointer<Click> {
+        clicks(entity, 1)
+    }
+
+    fn clicks(entity: Entity, count: u8) -> Pointer<Click> {
         let event = Click {
             button: PointerButton::Primary,
             hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
             duration: Duration::ZERO,
-            count: 1,
+            count,
         };
         pointer_at(entity, 0.0, event)
     }
@@ -911,6 +928,79 @@ mod tests {
                 Sent::Spawn(NewPaneAt::Workspace),
             ]
         );
+    }
+
+    /// Asserts that a double-click on a tab replaces its label with a
+    /// focused rename field holding the label, in the label's place, and
+    /// selects nothing; a further click on that tab is ignored.
+    ///
+    /// Case: the user double-clicks the second of two tabs, then clicks
+    /// inside the rename field that appears.
+    #[test]
+    fn a_double_click_opens_the_rename_field_in_place_of_the_label() {
+        let mut app = app_with_tab_bar();
+        record_requests(&mut app);
+        set_workspaces(&mut app, &[1, 2], 2);
+        app.update();
+        app.update();
+        let second = tab_of(&mut app, 2);
+        let label_box = label_box_in(app.world(), second);
+
+        app.world_mut().trigger(clicks(second, 2));
+        app.update();
+        let field = app
+            .world()
+            .get::<Children>(second)
+            .expect("the tab has parts")[0];
+        app.world_mut().trigger(clicks(field, 3));
+        app.update();
+
+        let world = app.world();
+        let parts = world.get::<Children>(second).expect("the tab has parts");
+        assert_eq!(parts[0], field);
+        assert_eq!(
+            world
+                .get::<EditableText>(field)
+                .map(|text| text.value().to_string()),
+            Some("Workspace 2".to_string())
+        );
+        assert_eq!(parts[1], label_box);
+        assert_eq!(
+            world.get::<Node>(label_box).map(|node| node.display),
+            Some(Display::None)
+        );
+        assert_eq!(world.resource::<InputFocus>().get(), Some(field));
+        assert_eq!(
+            world.resource::<WorkspaceRename>().workspace(),
+            Some(WorkspaceId(2))
+        );
+        assert!(world.resource::<SentRequests>().0.is_empty());
+    }
+
+    /// Asserts that a drag begun inside a rename field follows no tab.
+    ///
+    /// Case: the user drags across the text in the rename field to select
+    /// part of the name.
+    #[test]
+    fn a_drag_inside_the_rename_field_moves_no_tab() {
+        let mut app = app_with_tab_bar();
+        set_workspaces(&mut app, &[1, 2], 2);
+        app.update();
+        app.update();
+        lay_out_strip(&mut app, &[1, 2]);
+        let second = tab_of(&mut app, 2);
+        app.world_mut().trigger(clicks(second, 2));
+        app.update();
+        let field = app
+            .world()
+            .get::<Children>(second)
+            .expect("the tab has parts")[0];
+
+        app.world_mut().trigger(drag_start(field, 130.0));
+        app.world_mut().trigger(drag_to(field, 190.0, 60.0));
+        app.update();
+
+        assert!(!app.world().resource::<TabDrag>().tracks(WorkspaceId(2)));
     }
 
     /// Asserts that a tab's label text is clipped horizontally at the edges

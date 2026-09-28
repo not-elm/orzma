@@ -1,5 +1,6 @@
 //! Dragging a tab along the strip to reorder workspaces.
 
+use crate::ui::tab_bar::rename::WorkspaceRename;
 use crate::ui::tab_bar::{TabBarSystems, TabStrip, WorkspaceTab};
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{
@@ -177,13 +178,15 @@ fn passes_threshold(dx: f32) -> bool {
     dx.abs() >= DRAG_THRESHOLD_PX
 }
 
-/// Starts following a primary press on a tab once the pointer moves.
+/// Starts following a primary press on a tab once the pointer moves,
+/// unless the tab is being renamed.
 fn on_drag_start(
     ev: On<Pointer<DragStart>>,
     mut drag: ResMut<TabDrag>,
     tabs: Query<&WorkspaceTab>,
     strips: Query<&ScrollPosition, With<TabStrip>>,
     workspaces: Res<CurrentWorkspaces>,
+    rename: Res<WorkspaceRename>,
 ) {
     if ev.button != PointerButton::Primary {
         return;
@@ -191,6 +194,9 @@ fn on_drag_start(
     let Ok(tab) = tabs.get(ev.entity) else {
         return;
     };
+    if rename.workspace() == Some(tab.workspace) {
+        return;
+    }
     let Some(origin) = workspaces.position_of(tab.workspace) else {
         return;
     };
