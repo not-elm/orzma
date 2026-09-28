@@ -1,0 +1,121 @@
+name: release
+
+# Builds every platform for a vX.Y.Z tag and collects the results into one draft
+# release. Nothing is published here: a maintainer publishes the draft, and
+# post-release.yml runs from that event.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+concurrency:
+  group: release-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.versions.outputs.version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # publish-sdk.yml and book.yml check VERSION only after the release is public,
+      # so every version source is checked here, before anything is built.
+      - name: Check that every version source matches the tag
+        id: versions
+        run: |
+          version="$(python3 scripts/release_checks.py versions --tag "$TAG")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      # A re-run keeps its original commit, so after a tag is deleted and pushed again
+      # an old run must not release the commit the tag no longer names.
+      - name: Check that the tag still points at this commit
+        run: |
+          tagged="$(gh api "repos/${GH_REPO}/commits/refs/tags/${TAG}" --jq .sha)"
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::${TAG} points at ${tagged}, but this run built ${GITHUB_SHA}. Cancel this run; the run for the current tag releases it."
+            exit 1
+          fi
+
+  macos:
+    needs: plan
+    uses: ./.github/workflows/release-macos.yml
+    secrets: inherit
+
+  windows:
+    needs: plan
+    uses: ./.github/workflows/release-windows.yml
+
+  linux:
+    needs: plan
+    uses: ./.github/workflows/release-linux.yml
+
+  draft:
+    needs: [plan, macos, windows, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/release_checks.py
+            scripts/stage_windows.py
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: orzma-*-${{ needs.plan.outputs.version }}
+          merge-multiple: true
+          path: dist
+
+      - name: Check the release files
+        run: python3 scripts/release_checks.py dist --version "$VERSION" --dir dist
+
+      - name: Check that the tag still points at this commit
+        run: |
+          tagged="$(gh api "repos/${GH_REPO}/commits/refs/tags/${TAG}" --jq .sha)"
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::${TAG} points at ${tagged}, but this run built ${GITHUB_SHA}. Cancel this run; the run for the current tag releases it."
+            exit 1
+          fi
+
+      # A draft left by an earlier attempt of this run is refilled, so a description
+      # already written survives; release_checks.py refuses every other existing release.
+      - name: Create or refill the draft release
+        run: |
+          gh api --paginate --slurp "repos/${GH_REPO}/releases" > "${RUNNER_TEMP}/releases.json"
+          action="$(python3 scripts/release_checks.py draft-action --tag "$TAG" --sha "$GITHUB_SHA" < "${RUNNER_TEMP}/releases.json")"
+          if [ "$action" = upload ]; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            latest="$(gh release view --json tagName --jq .tagName)"
+            gh release create "$TAG" dist/* --draft --verify-tag --target "$GITHUB_SHA" \
+              --generate-notes --notes-start-tag "$latest" --title "$TAG"
+          fi
+
+      - name: Check the uploaded assets
+        run: |
+          gh release view "$TAG" --json assets > "${RUNNER_TEMP}/release.json"
+          python3 scripts/release_checks.py uploaded --version "$VERSION" --dir dist < "${RUNNER_TEMP}/release.json"
+
+      - name: Link the draft
+        run: |
+          url="$(gh release view "$TAG" --json url --jq .url)"
+          echo "Draft release for ${TAG}: ${url}" >> "$GITHUB_STEP_SUMMARY"
