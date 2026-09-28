@@ -124,6 +124,34 @@ grouped by label, so add one of `breaking-change`, `enhancement`,
 `performance`, `bug`, `documentation`, or `dependencies` — or `skip-changelog`
 to leave the change out of the notes.
 
+## Releasing
+
+Maintainers cut a release from `main`:
+
+1. Run `just bump-version X.Y.Z`, then `cargo update --workspace` and
+   `just licenses` so that `Cargo.lock` and `licenses/THIRD-PARTY-LICENSES.md`
+   follow. Merge the pull request once CI is green.
+2. Tag the merge commit and push the tag:
+   `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. Wait for the `release` workflow run to succeed. It builds every platform and
+   leaves a draft release, linked from the run's summary. Nothing is public yet.
+4. Open the draft, check that it holds the four packages and their `.sha256`
+   files, write a description above the generated notes, and publish it.
+5. Publishing starts the `post-release` workflow, which bumps the Homebrew
+   cask, publishes the SDK to npm and crates.io, and deploys the user guide.
+
+| If this fails | Do this |
+| --- | --- |
+| The `plan` job (a version file disagrees with the tag) | Fix the versions on `main`, then move the tag as described in the next row. |
+| A build in `release`, before any draft exists | Re-run the failed jobs. If the fix needs a code change, merge it to `main`, cancel the old run, and move the tag: `git push --delete origin vX.Y.Z`, then tag the new commit and push it again. |
+| The `draft` job | Re-run the failed jobs within 7 days, while the build artifacts are kept; the job refills the same draft and keeps your description. After that, re-run all jobs. |
+| A problem you find in the draft | Copy your description, delete the draft, merge the fix, and move the tag as above. |
+| You published the draft before the `release` run succeeded | Treat it as an incident: `post-release` refuses a release with missing assets, so nothing else goes out. Do not re-run the draft job; release a new version. |
+| A `post-release` job | Re-run the failed jobs, or run `gh workflow run post-release.yml --ref vX.Y.Z`. Both run the workflow files as they were at the tag, so a bug in those files needs a new version. |
+
+Once a release is published, fix problems with a new version; never move its
+tag.
+
 ## Documentation
 
 The user guide lives in `docs/book` and is built with

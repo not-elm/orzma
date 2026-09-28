@@ -1,0 +1,119 @@
+name: post-release
+
+# Runs once a maintainer publishes the draft release.yml created. A manual run is
+# the retry path. Start it on the release tag (gh workflow run post-release.yml
+# --ref vX.Y.Z), never on a branch: publish-sdk.yml and the github-pages
+# environment both check that the run's ref is the release tag.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: post-release-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name != 'release' || !github.event.release.prerelease
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      latest: ${{ steps.release.outputs.latest }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Require a tag ref
+        if: github.ref_type != 'tag'
+        run: |
+          echo "::error::Run post-release on the release tag: gh workflow run post-release.yml --ref vX.Y.Z"
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/release_checks.py
+            scripts/stage_windows.py
+          sparse-checkout-cone-mode: false
+
+      - name: Check the published release
+        id: release
+        run: |
+          tagged="$(gh api "repos/${GH_REPO}/commits/refs/tags/${TAG}" --jq .sha)"
+          gh release view "$TAG" --json isDraft,isPrerelease,targetCommitish,assets > "${RUNNER_TEMP}/release.json"
+          version="$(python3 scripts/release_checks.py published --tag "$TAG" --sha "$tagged" < "${RUNNER_TEMP}/release.json")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          # A retry on an older tag must not move the cask or the user guide backwards.
+          latest="$(gh release view --json tagName --jq .tagName)"
+          if [ "$latest" = "$TAG" ]; then
+            echo "latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::${TAG} is not the Latest release (${latest}), so the Homebrew cask and the user guide are left alone."
+            echo "latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  homebrew:
+    needs: check
+    if: needs.check.outputs.latest == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.check.outputs.version }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: build/macos/homebrew
+
+      - name: Bump the Homebrew cask
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set, so the cask cannot be bumped."
+            exit 1
+          fi
+          gh release download "$TAG" --pattern "orzma-${VERSION}-arm64.zip.sha256" --dir "$RUNNER_TEMP"
+          SHA256="$(cut -d' ' -f1 "${RUNNER_TEMP}/orzma-${VERSION}-arm64.zip.sha256")"
+          if ! printf '%s' "$SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::The zip's sidecar holds '${SHA256}', not a SHA-256."
+            exit 1
+          fi
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/not-elm/homebrew-orzma.git" "${RUNNER_TEMP}/tap"
+          mkdir -p "${RUNNER_TEMP}/tap/Casks"
+          sed -e "s/__VERSION__/${VERSION}/g" -e "s/__SHA256__/${SHA256}/g" \
+            build/macos/homebrew/orzma.rb.tmpl > "${RUNNER_TEMP}/tap/Casks/orzma.rb"
+          cd "${RUNNER_TEMP}/tap"
+          git add Casks/orzma.rb
+          if git diff --cached --quiet; then
+            echo "The cask already installs ${VERSION}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "orzma ${VERSION}"
+          git push
+
+  sdk:
+    needs: check
+    uses: ./.github/workflows/publish-sdk.yml
+    secrets: inherit
+
+  book:
+    needs: check
+    if: needs.check.outputs.latest == 'true'
+    uses: ./.github/workflows/book.yml
+    with:
+      deploy: true
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
