@@ -27,6 +27,24 @@ const MAX_HELLO_LINE: u64 = 4 * 1024;
 /// The longest request line a connection may send, newline included.
 const MAX_REQUEST_LINE: u64 = 32 * 1024 * 1024;
 
+// TODO: temporary Windows diagnostic; remove before merge.
+#[cfg(all(test, windows))]
+static DIAG_STAGES: std::sync::Mutex<
+    Option<std::collections::HashMap<ConnectionId, &'static str>>,
+> = std::sync::Mutex::new(None);
+
+// TODO: temporary Windows diagnostic; remove before merge.
+fn diag_stage(connection: ConnectionId, stage: &'static str) {
+    #[cfg(all(test, windows))]
+    if let Ok(mut stages) = DIAG_STAGES.lock() {
+        stages
+            .get_or_insert_with(Default::default)
+            .insert(connection, stage);
+    }
+    #[cfg(not(all(test, windows)))]
+    let _ = (connection, stage);
+}
+
 /// Binds `sock_path` (replacing a stale socket file there), spawns the
 /// accept loop, and returns the receiver of the events its connections
 /// produce. The listener threads are detached and live as long as the
@@ -96,9 +114,11 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
         return;
     };
     let mut lines = BufReader::new(read_half);
+    diag_stage(connection, "cloned");
     let Some(token) = read_hello(&mut lines) else {
         return;
     };
+    diag_stage(connection, "hello_read");
     let (out_tx, out_rx) = unbounded::<String>();
     let writer = match spawn_writer(write_half, out_rx) {
         Ok(writer) => writer,
@@ -114,6 +134,7 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
         writer: out_tx.clone(),
         reply: answer_tx,
     };
+    diag_stage(connection, "writer_spawned");
     if events.send(hello).is_err() || !answer_rx.recv().unwrap_or(false) {
         // NOTE: the host keeps no clone of `out_tx` for a `hello` it refused
         // or dropped unanswered; if it kept one, this join would never
@@ -122,7 +143,9 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
         let _ = writer.join();
         return;
     }
+    diag_stage(connection, "answered");
     read_requests(&mut lines, connection, &events, &out_tx);
+    diag_stage(connection, "requests_done");
     // NOTE: the host holds a clone of `out_tx`, so dropping ours does not end
     // the writer thread; only the host dropping its clone when it applies
     // `Disconnect` does. Shut the socket down first, send `Disconnect`, and
@@ -132,9 +155,12 @@ fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender
     // the shutdown on Unix; on Windows it stays parked, and this join with it,
     // until the peer closes its socket.
     let _ = stream.shutdown(Shutdown::Both);
+    diag_stage(connection, "shutdown_done");
     let _ = events.send(ControlEvent::Disconnect { connection });
+    diag_stage(connection, "disconnect_sent");
     drop(out_tx);
     let _ = writer.join();
+    diag_stage(connection, "joined");
 }
 
 /// Starts the thread that writes each line `lines` yields to `stream`,
@@ -184,9 +210,12 @@ fn read_requests(
     let mut buf = String::new();
     loop {
         buf.clear();
+        diag_stage(connection, "reading");
         if !read_capped_line(lines, &mut buf, MAX_REQUEST_LINE) {
+            diag_stage(connection, "read_ended");
             return;
         }
+        diag_stage(connection, "read_line");
         let line = buf.trim_end_matches(['\n', '\r']);
         let Ok(msg) = serde_json::from_str::<ClientMsg>(line) else {
             continue;
@@ -697,98 +726,83 @@ mod tests {
     // TODO: temporary Windows diagnostic for the flaky disconnect test; remove before merge.
     #[cfg(windows)]
     #[test]
-    fn diag_windows_eof_before_recv() {
+    fn diag_windows_serve_connection_stages() {
+        use std::collections::BTreeMap;
         use std::fmt::Write as _;
         let mut report = String::from("\n");
-        // (name, read on a duplicate, keep the original open, first read before the close)
-        let variants = [
-            ("orig-noprior", false, false, false),
-            ("orig-prior", false, false, true),
-            ("dup-noprior-origkept", true, true, false),
-            ("dup-prior-origkept", true, true, true),
-            ("dup-prior-origdropped", true, false, true),
-        ];
-        let listener_like = "dup-prior-origkept-writerdup";
-        for (name, via_dup, keep_original, prior_read) in variants {
+        for (variant, shutdown_first, base) in [
+            ("drop", false, 1_000_000u64),
+            ("shutdown-drop", true, 2_000_000u64),
+        ] {
             let dir = tempfile::tempdir().unwrap();
-            let sock = dir.path().join("raw.sock");
+            let sock = dir.path().join("stages.sock");
             let listener = UnixListener::bind(&sock).unwrap();
-            let (mut eof, mut timed_out, mut other) = (0, 0, 0);
-            for _ in 0..200 {
-                let mut client = UnixStream::connect(&sock).unwrap();
+            let (events_tx, events) = unbounded();
+            let mut stuck_at: BTreeMap<&'static str, usize> = BTreeMap::new();
+            let (mut ok, mut stuck) = (0, 0);
+            for i in 0..300 {
+                let connection = ConnectionId::new(base + i);
+                let mut client = connect(&sock);
                 let (server, _) = listener.accept().unwrap();
-                let (kept, mut reader) = if via_dup {
-                    let dup = server.try_clone().unwrap();
-                    (keep_original.then_some(server), dup)
-                } else {
-                    (None, server)
+                let tx = events_tx.clone();
+                thread::spawn(move || serve_connection(server, connection, tx));
+                send_line(&mut client, r#"{"op":"hello","token":"tok"}"#);
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let writer = loop {
+                    match events.recv_deadline(deadline) {
+                        Ok(ControlEvent::Hello {
+                            connection: c,
+                            writer,
+                            reply,
+                            ..
+                        }) if c == connection => {
+                            reply.send(true).unwrap();
+                            break Some(writer);
+                        }
+                        Ok(_) => continue,
+                        Err(_) => break None,
+                    }
                 };
-                reader
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut buf = [0u8; 64];
-                if prior_read {
-                    client.write_all(b"hello\n").unwrap();
-                    let _ = reader.read(&mut buf).unwrap();
+                let Some(writer) = writer else {
+                    *stuck_at.entry("no-hello").or_default() += 1;
+                    stuck += 1;
+                    continue;
+                };
+                if shutdown_first {
+                    client.shutdown(Shutdown::Write).unwrap();
                 }
                 drop(client);
-                thread::sleep(Duration::from_millis(20));
-                match reader.read(&mut buf) {
-                    Ok(0) => eof += 1,
-                    Err(error)
-                        if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
-                    {
-                        timed_out += 1;
+                let deadline = Instant::now() + Duration::from_secs(3);
+                let arrived = loop {
+                    match events.recv_deadline(deadline) {
+                        Ok(ControlEvent::Disconnect { connection: c }) if c == connection => {
+                            break true;
+                        }
+                        Ok(_) => continue,
+                        Err(_) => break false,
                     }
-                    _ => other += 1,
+                };
+                if arrived {
+                    ok += 1;
+                } else {
+                    stuck += 1;
+                    let stage = DIAG_STAGES
+                        .lock()
+                        .ok()
+                        .and_then(|stages| {
+                            stages.as_ref().and_then(|m| m.get(&connection).copied())
+                        })
+                        .unwrap_or("unknown");
+                    *stuck_at.entry(stage).or_default() += 1;
                 }
-                drop(kept);
-                if timed_out >= 10 {
+                drop(writer);
+                if stuck >= 10 {
                     break;
                 }
             }
             writeln!(
                 report,
-                "{name}: eof={eof} timed_out={timed_out} other={other}"
-            )
-            .unwrap();
-        }
-        {
-            let dir = tempfile::tempdir().unwrap();
-            let sock = dir.path().join("raw.sock");
-            let listener = UnixListener::bind(&sock).unwrap();
-            let (mut eof, mut timed_out, mut other) = (0, 0, 0);
-            for _ in 0..200 {
-                let mut client = UnixStream::connect(&sock).unwrap();
-                let (server, _) = listener.accept().unwrap();
-                let mut reader = server.try_clone().unwrap();
-                let writer_dup = server.try_clone().unwrap();
-                reader
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut buf = [0u8; 64];
-                client.write_all(b"hello\n").unwrap();
-                let _ = reader.read(&mut buf).unwrap();
-                drop(client);
-                thread::sleep(Duration::from_millis(20));
-                match reader.read(&mut buf) {
-                    Ok(0) => eof += 1,
-                    Err(error)
-                        if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
-                    {
-                        timed_out += 1;
-                    }
-                    _ => other += 1,
-                }
-                drop(writer_dup);
-                drop(server);
-                if timed_out >= 10 {
-                    break;
-                }
-            }
-            writeln!(
-                report,
-                "{listener_like}: eof={eof} timed_out={timed_out} other={other}"
+                "{variant}: ok={ok} stuck={stuck} stuck_at={stuck_at:?}"
             )
             .unwrap();
         }
