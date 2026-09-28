@@ -433,6 +433,84 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_right_pane: Option<Binding>,
+    /// Open a new workspace after the last one and display it.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub new_workspace: Option<Binding>,
+    /// Close the displayed workspace and every pane in it.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub close_workspace: Option<Binding>,
+    /// Display the workspace to the right, wrapping to the first.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub next_workspace: Option<Binding>,
+    /// Display the workspace to the left, wrapping to the last.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub previous_workspace: Option<Binding>,
+    /// Display the first workspace.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_workspace_1: Option<Binding>,
+    /// Display the second workspace.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_workspace_2: Option<Binding>,
+    /// Display the third workspace.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_workspace_3: Option<Binding>,
+    /// Display the fourth workspace.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_workspace_4: Option<Binding>,
+    /// Display the fifth workspace.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_workspace_5: Option<Binding>,
+    /// Display the sixth workspace.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_workspace_6: Option<Binding>,
+    /// Display the seventh workspace.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_workspace_7: Option<Binding>,
+    /// Display the eighth workspace.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_workspace_8: Option<Binding>,
+    /// Display the ninth workspace.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_workspace_9: Option<Binding>,
     /// Timeout (ms) for a modifier-tap leader: press+release within this window
     /// with no intervening key/mouse press counts as a tap. Default 300; 0 is
     /// normalized to 300.
@@ -469,6 +547,19 @@ impl Default for Shortcuts {
             resize_down_pane: Some(parse_default_binding("<Leader:r>Shift+J")),
             resize_up_pane: Some(parse_default_binding("<Leader:r>Shift+K")),
             resize_right_pane: Some(parse_default_binding("<Leader:r>Shift+L")),
+            new_workspace: Some(parse_default_binding("<Leader>c")),
+            close_workspace: Some(parse_default_binding("<Leader>Shift+X")),
+            next_workspace: Some(parse_default_binding("<Leader>]")),
+            previous_workspace: Some(parse_default_binding("<Leader>[")),
+            select_workspace_1: Some(parse_default_binding("<Leader>1")),
+            select_workspace_2: Some(parse_default_binding("<Leader>2")),
+            select_workspace_3: Some(parse_default_binding("<Leader>3")),
+            select_workspace_4: Some(parse_default_binding("<Leader>4")),
+            select_workspace_5: Some(parse_default_binding("<Leader>5")),
+            select_workspace_6: Some(parse_default_binding("<Leader>6")),
+            select_workspace_7: Some(parse_default_binding("<Leader>7")),
+            select_workspace_8: Some(parse_default_binding("<Leader>8")),
+            select_workspace_9: Some(parse_default_binding("<Leader>9")),
             leader_tap_timeout_ms: 300,
             repeat_time_ms: 500,
         }
@@ -555,6 +646,67 @@ impl Shortcuts {
                 "resize-right-pane",
                 &self.resize_right_pane,
                 Shortcut::ResizePane(PaneDirection::Right),
+            ),
+            ("new-workspace", &self.new_workspace, Shortcut::NewWorkspace),
+            (
+                "close-workspace",
+                &self.close_workspace,
+                Shortcut::CloseWorkspace,
+            ),
+            (
+                "next-workspace",
+                &self.next_workspace,
+                Shortcut::NextWorkspace,
+            ),
+            (
+                "previous-workspace",
+                &self.previous_workspace,
+                Shortcut::PreviousWorkspace,
+            ),
+            (
+                "select-workspace-1",
+                &self.select_workspace_1,
+                Shortcut::SelectWorkspace(1),
+            ),
+            (
+                "select-workspace-2",
+                &self.select_workspace_2,
+                Shortcut::SelectWorkspace(2),
+            ),
+            (
+                "select-workspace-3",
+                &self.select_workspace_3,
+                Shortcut::SelectWorkspace(3),
+            ),
+            (
+                "select-workspace-4",
+                &self.select_workspace_4,
+                Shortcut::SelectWorkspace(4),
+            ),
+            (
+                "select-workspace-5",
+                &self.select_workspace_5,
+                Shortcut::SelectWorkspace(5),
+            ),
+            (
+                "select-workspace-6",
+                &self.select_workspace_6,
+                Shortcut::SelectWorkspace(6),
+            ),
+            (
+                "select-workspace-7",
+                &self.select_workspace_7,
+                Shortcut::SelectWorkspace(7),
+            ),
+            (
+                "select-workspace-8",
+                &self.select_workspace_8,
+                Shortcut::SelectWorkspace(8),
+            ),
+            (
+                "select-workspace-9",
+                &self.select_workspace_9,
+                Shortcut::SelectWorkspace(9),
             ),
         ]
         .into_iter()
@@ -659,6 +811,16 @@ pub enum Shortcut {
     KillPane,
     /// Moves a divider of the active pane in the given direction.
     ResizePane(PaneDirection),
+    /// Opens a new workspace after the last one and displays it.
+    NewWorkspace,
+    /// Closes the displayed workspace.
+    CloseWorkspace,
+    /// Displays the workspace to the right, wrapping to the first.
+    NextWorkspace,
+    /// Displays the workspace to the left, wrapping to the last.
+    PreviousWorkspace,
+    /// Displays the workspace with this 1-based tab number.
+    SelectWorkspace(u8),
 }
 
 /// The literal token marking a leader-scoped binding value (`<Leader>x`).
@@ -1196,7 +1358,7 @@ mod tests {
     }
 
     /// Asserts that the macOS default table binds the `Cmd` tap leader and
-    /// six direct `Cmd` chords, leaving the other 13 actions leader-scoped.
+    /// six direct `Cmd` chords, leaving the other 26 actions leader-scoped.
     ///
     /// Case: a user on macOS starts orzma with no config file at all.
     #[cfg(target_os = "macos")]
@@ -1216,13 +1378,13 @@ mod tests {
             s.copy,
             Some(Binding::Direct(parse_key_chord("Cmd+C").unwrap()))
         );
-        assert_eq!(s.bindings_iter().count(), 19);
+        assert_eq!(s.bindings_iter().count(), 32);
         assert_eq!(s.direct_chords().count(), 6);
-        assert_eq!(s.leader_chords().count(), 13);
+        assert_eq!(s.leader_chords().count(), 26);
     }
 
     /// Asserts that the non-macOS default table binds the `Alt` tap leader and
-    /// five direct `Ctrl` chords, leaves the other 13 actions leader-scoped,
+    /// five direct `Ctrl` chords, leaves the other 26 actions leader-scoped,
     /// and leaves `quit` unbound rather than binding a chord the window
     /// manager already owns.
     ///
@@ -1242,9 +1404,9 @@ mod tests {
             Some(Binding::Direct(parse_key_chord("Ctrl+C").unwrap()))
         );
         assert_eq!(s.quit, None);
-        assert_eq!(s.bindings_iter().count(), 19);
+        assert_eq!(s.bindings_iter().count(), 32);
         assert_eq!(s.direct_chords().count(), 5);
-        assert_eq!(s.leader_chords().count(), 13);
+        assert_eq!(s.leader_chords().count(), 26);
     }
 
     /// Asserts that every chord in the host default table is unique, so no
@@ -1274,14 +1436,14 @@ mod tests {
         }
     }
 
-    /// Asserts that `bindings_iter` lists one entry for each of the 19
+    /// Asserts that `bindings_iter` lists one entry for each of the 32
     /// actions.
     ///
     /// Case: orzma starts and turns the configured actions into its shortcut
     /// table.
     #[test]
     fn bindings_iter_count_is_pinned_to_field_count() {
-        assert_eq!(Shortcuts::default().bindings_iter().count(), 19);
+        assert_eq!(Shortcuts::default().bindings_iter().count(), 32);
     }
 
     #[test]
@@ -1339,6 +1501,34 @@ mod tests {
                 repeat: false,
             })
         );
+    }
+
+    /// Asserts the stock workspace bindings: leader-scoped on every
+    /// platform.
+    ///
+    /// Case: a new user opens a second workspace, cycles, and jumps to the
+    /// third tab without editing the config.
+    #[test]
+    fn workspace_bindings_default_to_leader_keys() {
+        let s = Shortcuts::default();
+        let binding_of = |shortcut| {
+            s.bindings_iter()
+                .find(|(_, _, action)| *action == shortcut)
+                .and_then(|(_, binding, _)| binding.clone())
+        };
+        for (shortcut, chord) in [
+            (Shortcut::NewWorkspace, "<Leader>c"),
+            (Shortcut::CloseWorkspace, "<Leader>Shift+X"),
+            (Shortcut::NextWorkspace, "<Leader>]"),
+            (Shortcut::PreviousWorkspace, "<Leader>["),
+            (Shortcut::SelectWorkspace(3), "<Leader>3"),
+        ] {
+            assert_eq!(
+                binding_of(shortcut),
+                Some(parse_default_binding(chord)),
+                "{chord}"
+            );
+        }
     }
 
     /// Asserts that a pane action accepts a leader chord, an empty string that
@@ -1407,7 +1597,7 @@ kill-pane = "<Leader>d"
             })
         );
         assert_eq!(s.paste, Shortcuts::default().paste);
-        assert_eq!(s.leader_chords().count(), 13);
+        assert_eq!(s.leader_chords().count(), 26);
     }
 
     #[test]
@@ -1480,19 +1670,19 @@ kill-pane = "<Leader>d"
     }
 
     /// Asserts that the macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 22 fields at once.
+    /// form, pinning every one of the 35 fields at once.
     ///
     /// Case: a macOS user's config is serialized back out.
     #[cfg(target_os = "macos")]
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"Cmd+Plus","decrease-font-size":"Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"Cmd+Plus","decrease-font-size":"Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-workspace":"<Leader>C","close-workspace":"<Leader>Shift+X","next-workspace":"<Leader>]","previous-workspace":"<Leader>[","select-workspace-1":"<Leader>1","select-workspace-2":"<Leader>2","select-workspace-3":"<Leader>3","select-workspace-4":"<Leader>4","select-workspace-5":"<Leader>5","select-workspace-6":"<Leader>6","select-workspace-7":"<Leader>7","select-workspace-8":"<Leader>8","select-workspace-9":"<Leader>9","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
     /// Asserts that the non-macOS default table round-trips to its exact JSON
-    /// form, pinning every one of the 22 fields at once, with the unbound
+    /// form, pinning every one of the 35 fields at once, with the unbound
     /// `quit` emitted as an empty string.
     ///
     /// Case: a Windows user's config is serialized back out.
@@ -1500,7 +1690,7 @@ kill-pane = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"Ctrl+Plus","decrease-font-size":"Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"Ctrl+Plus","decrease-font-size":"Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-workspace":"<Leader>C","close-workspace":"<Leader>Shift+X","next-workspace":"<Leader>]","previous-workspace":"<Leader>[","select-workspace-1":"<Leader>1","select-workspace-2":"<Leader>2","select-workspace-3":"<Leader>3","select-workspace-4":"<Leader>4","select-workspace-5":"<Leader>5","select-workspace-6":"<Leader>6","select-workspace-7":"<Leader>7","select-workspace-8":"<Leader>8","select-workspace-9":"<Leader>9","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 

@@ -17,13 +17,15 @@ use crate::{
     session::spawn::PaneSpawnRequest,
 };
 use bevy::prelude::*;
-use bevy_orzmux::prelude::{PaneAction, RequestActiveKeyInput, RequestPaneAction};
+use bevy_orzmux::prelude::{
+    PaneAction, RequestActiveKeyInput, RequestPaneAction, RequestWorkspaceAction, WorkspaceAction,
+};
 use orzma_configs::shortcuts::{
     PaneDirection as ConfigPaneDirection, Shortcut, SplitOrientation as ConfigSplitOrientation,
 };
 use orzmux::prelude::{
-    NewPaneAt, PaneDirection as OrzmuxPaneDirection, PaneTarget,
-    SplitOrientation as OrzmuxSplitOrientation,
+    CloseTarget, NewPaneAt, PaneDirection as OrzmuxPaneDirection, PaneTarget,
+    SplitOrientation as OrzmuxSplitOrientation, WorkspaceTarget,
 };
 
 pub(super) struct ShortcutsApplyPlugin;
@@ -81,8 +83,9 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
 /// fires only outside vi mode; a leader paste fires unconditionally), copy
 /// (fires unconditionally — vi mode included; no-selection is a no-op
 /// downstream), the font-size zoom (window-wide, so it fires even with no
-/// focused surface), and the pane actions (select/split/kill/resize,
-/// targeting the backend's active pane). `Quit` and `ReleaseWebviewFocus` are
+/// focused surface), the pane actions (select/split/kill/resize, targeting
+/// the backend's active pane), and the workspace actions
+/// (new/close/next/previous/select). `Quit` and `ReleaseWebviewFocus` are
 /// handled upstream in `resolve_key_effects`.
 fn apply_shortcut(
     commands: &mut Commands,
@@ -123,6 +126,23 @@ fn apply_shortcut(
                 direction: pane_direction(direction),
                 cells: PANE_RESIZE_CELLS,
             },
+        }),
+        Shortcut::NewWorkspace => commands.trigger(PaneSpawnRequest {
+            at: NewPaneAt::Workspace,
+        }),
+        Shortcut::CloseWorkspace => commands.trigger(RequestWorkspaceAction {
+            action: WorkspaceAction::Close(CloseTarget::Active),
+        }),
+        Shortcut::NextWorkspace => commands.trigger(RequestWorkspaceAction {
+            action: WorkspaceAction::Select(WorkspaceTarget::Next),
+        }),
+        Shortcut::PreviousWorkspace => commands.trigger(RequestWorkspaceAction {
+            action: WorkspaceAction::Select(WorkspaceTarget::Previous),
+        }),
+        Shortcut::SelectWorkspace(number) => commands.trigger(RequestWorkspaceAction {
+            action: WorkspaceAction::Select(WorkspaceTarget::Index(u16::from(
+                number.saturating_sub(1),
+            ))),
         }),
         Shortcut::Quit | Shortcut::ReleaseWebviewFocus => {}
     }
@@ -552,5 +572,52 @@ mod tests {
                 "{step:?} must reach the zoom observer unchanged"
             );
         }
+    }
+
+    #[derive(Resource, Default)]
+    struct WorkspaceRequests(Vec<WorkspaceAction>);
+
+    /// Asserts that each workspace shortcut becomes its request.
+    ///
+    /// Case: the user presses the leader and then c, Shift+X, ], [, and 2.
+    #[test]
+    fn workspace_shortcuts_become_workspace_requests() {
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        app.init_resource::<WorkspaceRequests>().add_observer(
+            |ev: On<RequestWorkspaceAction>, mut seen: ResMut<WorkspaceRequests>| {
+                seen.0.push(ev.action.clone());
+            },
+        );
+        let actions = [
+            Shortcut::NewWorkspace,
+            Shortcut::CloseWorkspace,
+            Shortcut::NextWorkspace,
+            Shortcut::PreviousWorkspace,
+            Shortcut::SelectWorkspace(2),
+        ];
+        dispatch(
+            &mut app,
+            actions
+                .into_iter()
+                .map(|a| action_effect(a, true))
+                .collect(),
+            Some(term),
+            false,
+            Modifiers::default(),
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().spawns,
+            vec![NewPaneAt::Workspace]
+        );
+        assert_eq!(
+            app.world().resource::<WorkspaceRequests>().0,
+            vec![
+                WorkspaceAction::Close(CloseTarget::Active),
+                WorkspaceAction::Select(WorkspaceTarget::Next),
+                WorkspaceAction::Select(WorkspaceTarget::Previous),
+                WorkspaceAction::Select(WorkspaceTarget::Index(1)),
+            ]
+        );
     }
 }
