@@ -1110,7 +1110,7 @@ mod tests {
     // letter rather than `/`, so joining it to `file://localhost`
     // directly yields `file://localhostC:/…`, whose path the parser
     // reads as `/Users/…` — not drive-rooted, and rejected.
-    fn osc7(path: &Path) -> Vec<u8> {
+    pub(super) fn osc7(path: &Path) -> Vec<u8> {
         let forward = path.display().to_string().replace('\\', "/");
         format!(
             "\x1b]7;file://localhost/{}\x1b\\",

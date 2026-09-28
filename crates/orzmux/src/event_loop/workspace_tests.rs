@@ -6,10 +6,11 @@ use crate::backend::{
     SplitOrientation, WorkspaceId, WorkspaceTarget,
 };
 use crate::event_loop::OrzmuxCommand;
-use crate::event_loop::tests::enable_focus_reporting;
+use crate::event_loop::tests::{enable_focus_reporting, osc7};
 use crate::test_support::Harness;
 use orzma_vt::prelude::GridSize;
 use std::collections::VecDeque;
+use tempfile::TempDir;
 
 fn workspaces_of(events: &VecDeque<OrzmuxEvent>) -> Vec<(Vec<WorkspaceId>, Option<WorkspaceId>)> {
     events
@@ -59,6 +60,34 @@ fn the_first_pane_opens_the_first_workspace() {
         workspaces_of(&events),
         vec![(vec![WorkspaceId(1)], Some(WorkspaceId(1)))]
     );
+}
+
+/// Asserts that a new workspace with no explicit directory starts in the
+/// directory the displayed workspace's active pane reported, not in a
+/// hidden workspace's.
+///
+/// Case: the user `cd`s into a project in the second workspace's shell
+/// while the first workspace's shell reported another directory, and
+/// presses new-workspace while the OS cannot be asked for either pane's
+/// directory.
+#[test]
+fn a_new_workspace_inherits_the_displayed_active_panes_cwd() {
+    let elsewhere = TempDir::new().expect("a temporary directory");
+    let project = TempDir::new().expect("a temporary directory");
+    let mut h = Harness::new();
+    let (first, first_pane) = h.open_root();
+    first_pane.print(&osc7(elsewhere.path()));
+    h.pump_pane(first);
+    h.drain();
+    let (second, second_pane) = h.open_workspace(RequestId(2));
+    second_pane.print(&osc7(project.path()));
+    h.pump_pane(second);
+    h.drain();
+    h.clear_spawn_cwds();
+
+    h.open_workspace(RequestId(3));
+
+    assert_eq!(h.last_spawn_cwd().as_deref(), Some(project.path()));
 }
 
 /// Asserts that a new workspace is announced as displayed between
