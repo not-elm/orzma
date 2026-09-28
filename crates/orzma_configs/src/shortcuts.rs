@@ -446,8 +446,8 @@ pub struct Shortcuts {
     /// Whether direct-chord bindings fire while a webview holds keyboard
     /// focus, instead of reaching the page. Default `true`.
     ///
-    /// `copy` and `paste` never fire while a webview has focus, and
-    /// `<Leader>` bindings and `release-webview-focus` always do.
+    /// Direct `copy` and `paste` chords never fire while a webview has focus,
+    /// and `<Leader>` bindings and `release-webview-focus` always do.
     pub direct_chords_over_webview: bool,
 }
 

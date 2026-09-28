@@ -152,8 +152,8 @@ still come first:
 - Other direct chords, such as `Cmd+Plus` or a pane action bound to a chord,
   run while `direct-chords-over-webview` is `true`, the default. Set it to
   `false` to let the page have them.
-- `copy` and `paste` never run while a webview has focus, so `Cmd+C` and
-  `Cmd+V` copy and paste inside the page.
+- `copy` and `paste` bound to direct chords never run while a webview has
+  focus, so `Cmd+C` and `Cmd+V` copy and paste inside the page.
 
 A chord that runs an orzma shortcut never reaches the page, and it runs even
 when the page's program lists it as a forward key.
@@ -195,8 +195,9 @@ leader-tap-timeout-ms = 300
 # repeat entirely.
 repeat-time-ms = 500
 # Direct chords ("Cmd+Plus", ...) run even while a webview has keyboard focus.
-# "<Leader>..." bindings and release-webview-focus always do, and copy and
-# paste never do. Set false to hand the other direct chords to the page.
+# "<Leader>..." bindings and release-webview-focus always do, and direct copy
+# and paste chords never do. Set false to hand the other direct chords to the
+# page.
 direct-chords-over-webview = true
 
 # Each action takes ONE value: a direct chord ("Cmd+V"), a leader-scoped

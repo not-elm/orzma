@@ -96,8 +96,8 @@ impl Webview {
     /// Declares the initial chords the page lets through to the app while
     /// focused: the host writes them to the PTY, so the app reads them via
     /// `crossterm::event::read`, and the page never receives them. A chord
-    /// that is also one of orzma's own shortcuts runs that shortcut instead.
-    /// Replace the list after registration with
+    /// that also runs one of orzma's own shortcuts while the page has focus
+    /// runs that shortcut instead. Replace the list after registration with
     /// [`WebviewHandle::set_forward_keys`].
     pub fn forward_keys(mut self, keys: impl IntoIterator<Item = KeyChord>) -> Self {
         match &mut self.kind {

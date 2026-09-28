@@ -249,7 +249,7 @@ pub(crate) struct Shortcuts {
 impl Shortcuts {
     /// Returns the GUI action bound to `(keycode, mods)` in the direct table, if
     /// any.
-    pub(crate) fn match_gui_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
+    pub fn match_gui_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
         Self::find_entry(&self.direct, keycode, mods).map(|s| s.action)
     }
 
@@ -262,7 +262,13 @@ impl Shortcuts {
             .filter(|action| match action {
                 Shortcut::ReleaseWebviewFocus => true,
                 Shortcut::Copy | Shortcut::Paste => false,
-                _ => self.direct_chords_over_webview,
+                Shortcut::FontSize(_)
+                | Shortcut::Quit
+                | Shortcut::EnterViMode
+                | Shortcut::SelectPane(_)
+                | Shortcut::SplitPane(_)
+                | Shortcut::KillPane
+                | Shortcut::ResizePane(_) => self.direct_chords_over_webview,
             })
     }
 
