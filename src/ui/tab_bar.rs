@@ -643,7 +643,7 @@ mod tests {
     use bevy::math::Affine2;
     use bevy::picking::backend::HitData;
     use bevy::picking::pointer::{Location, PointerId};
-    use bevy::text::EditableText;
+    use bevy::text::{EditableText, TextCursorStyle};
     use bevy::ui::CalculatedClip;
     use bevy::ui::update::update_clipping_system;
     use bevy_orzmux::prelude::PendingWorkspaceMove;
@@ -948,8 +948,10 @@ mod tests {
     }
 
     /// Asserts that a double-click on a tab replaces its label with a
-    /// focused rename field holding the label, in the label's place, and
-    /// selects nothing; a further click on that tab is ignored.
+    /// focused rename field holding the label, in the label's place, that
+    /// draws a caret in the label's text color and a highlight behind its
+    /// selection, and selects nothing; a further click on that tab is
+    /// ignored.
     ///
     /// Case: the user double-clicks the second of two tabs, then clicks
     /// inside the rename field that appears.
@@ -987,6 +989,11 @@ mod tests {
             Some(Display::None)
         );
         assert_eq!(world.resource::<InputFocus>().get(), Some(field));
+        let cursor = world
+            .get::<TextCursorStyle>(field)
+            .expect("the rename field draws a caret and a selection");
+        assert_eq!(cursor.color, ACTIVE_TEXT);
+        assert_ne!(cursor.selection_color, Color::NONE);
         assert_eq!(
             world.resource::<WorkspaceRename>().workspace(),
             Some(WorkspaceId(2))

@@ -9,7 +9,7 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input_focus::{AutoFocus, FocusedInput, InputFocus};
 use bevy::picking::PickingSettings;
 use bevy::prelude::*;
-use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems};
+use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems, TextCursorStyle};
 use bevy::ui_widgets::SelectAllOnFocus;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_webview::RequestWebviewFocus;
@@ -199,6 +199,8 @@ impl Plugin for TabRenamePlugin {
 
 /// A blink period long enough that the caret stays drawn.
 const STEADY_CARET: Duration = Duration::from_secs(3600);
+/// The background of the rename field's selected text.
+const SELECTION_BG: Color = Color::srgb_u8(0x3f, 0x63, 0x8b);
 
 /// One rename: the workspace, its field, the label the field replaces, the
 /// name and automatic label the workspace had, and how the rename ends.
@@ -215,7 +217,8 @@ struct RenameSession {
 }
 
 /// Replaces the tab's label with a focused text field that holds the label,
-/// all of it selected, and releases webview focus.
+/// all of it selected, and draws a caret in the label's text color and a
+/// highlight behind the selection; releases webview focus.
 fn start_rename(
     ev: On<StartWorkspaceRename>,
     mut commands: Commands,
@@ -266,6 +269,13 @@ fn start_rename(
             AutoFocus,
             tab_font(ui_font.as_deref()),
             TextColor(ACTIVE_TEXT),
+            TextLayout::no_wrap(),
+            TextCursorStyle {
+                color: ACTIVE_TEXT,
+                selection_color: SELECTION_BG,
+                unfocused_selection_color: Color::NONE,
+                selected_text_color: None,
+            },
             Node {
                 flex_grow: 1.0,
                 min_width: Val::Px(0.0),
