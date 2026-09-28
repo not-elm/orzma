@@ -222,11 +222,6 @@ impl TerminalFonts {
 
 impl Default for TerminalFonts {
     fn default() -> Self {
-        // Bytes come from crate::bundled so the Bevy app's FontBridgePlugin
-        // can reference the same static slices instead of re-embedding
-        // identical copies (the linker cannot dedup include_bytes! across
-        // crate boundaries without LTO; without this single source of
-        // truth the binary carries the font data twice).
         Self {
             regular: FontArc::try_from_slice(REGULAR)
                 .expect("JetBrainsMonoNerdFontMono-Regular load"),

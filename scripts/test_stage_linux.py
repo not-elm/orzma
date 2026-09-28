@@ -63,6 +63,7 @@ def _fake_cef_dir(root: Path) -> Path:
     ):
         _write(cef / name, name.encode())
     _write_archive_json(cef, LINUX_ARCHIVE_NAME)
+    _write(cef / "locales" / "en-US.pak", b"en-US")
     _write(cef / "locales" / "ja.pak", b"ja")
     _write(cef / "include" / "cef_app.h", b"header")
     _write(cef / "libcef_dll" / "wrapper.cc", b"src")
@@ -159,6 +160,29 @@ class CefRuntime(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 sl.copy_cef_runtime(cef, tree)
             self.assertIn("icudtl.dat", str(ctx.exception))
+
+    def test_copy_keeps_only_the_linux_locale_packs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cef = _fake_cef_dir(Path(tmp))
+            for name in ("fr.pak", "ja_FEMININE.pak", "en-GB.pak"):
+                _write(cef / "locales" / name, name.encode())
+            tree = Path(tmp) / "tree"
+            tree.mkdir()
+            sl.copy_cef_runtime(cef, tree)
+            self.assertEqual(
+                sorted(p.name for p in (tree / "locales").iterdir()), ["en-US.pak", "ja.pak"]
+            )
+
+    def test_copy_rejects_a_missing_locale_pack_before_copying(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cef = _fake_cef_dir(Path(tmp))
+            (cef / "locales" / "en-US.pak").unlink()
+            tree = Path(tmp) / "tree"
+            tree.mkdir()
+            with self.assertRaises(SystemExit) as ctx:
+                sl.copy_cef_runtime(cef, tree)
+            self.assertIn("en-US", str(ctx.exception))
+            self.assertEqual(list(tree.iterdir()), [])
 
     def test_stage_cef_uses_the_lockfile_build_meta_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -79,29 +79,35 @@ repository = "https://github.com/not-elm/orzma"
 publish = false
 
 [workspace.dependencies]
+# NOTE: list individual features only: the bundles (`ui_api`, `2d_api`, `3d_api`, `common_api`, `*_bevy_render`)
+# re-enable audio, glTF, animation, gizmos and the LUTs; PNG / HDR image loading is deliberately off.
 bevy = { version = "0.19", default-features = false, features = [
   "default_app",
-  "2d_bevy_render",
-  "3d_bevy_render",
-  "ui_api",
-  "ui_bevy_render",
-  "bevy_ui_widgets",
-  "scene",
-  "picking",
-  "bevy_audio",
-  "vorbis",
   "std",
-  "bevy_gilrs",
-  "bevy_winit",
-  "bevy_clipboard",
-  "default_font",
   "multi_threaded",
-  "webgl2",
+  "bevy_winit",
+  "bevy_window",
+  "custom_cursor",
   "x11",
   "wayland",
-  "custom_cursor",
-  "system_clipboard",
+  "webgl2",
+  "bevy_render",
+  "bevy_core_pipeline",
+  "bevy_camera",
+  "bevy_color",
+  "bevy_image",
+  "bevy_shader",
+  "bevy_mesh",
+  "bevy_material",
+  "bevy_ui",
+  "bevy_ui_render",
+  "bevy_input_focus",
+  "bevy_text",
+  "default_font",
   "system_font_discovery",
+  "picking",
+  "bevy_clipboard",
+  "system_clipboard",
 ] }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
