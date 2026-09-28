@@ -12,6 +12,7 @@ mod surface;
 mod system_set;
 mod ui;
 mod window_icon;
+mod window_monitor;
 mod window_title;
 
 use crate::action::ActionPlugin;
@@ -20,6 +21,7 @@ use crate::redraw::{AppWakers, RedrawPlugin};
 use crate::surface::SurfacePlugin;
 use crate::system_set::OrzmaSystems;
 use crate::window_icon::WindowIconPlugin;
+use crate::window_monitor::WindowMonitorPlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
@@ -87,6 +89,7 @@ fn main() {
             OrzmaWebviewPlugin::new(orzma_registry),
             WindowTitlePlugin,
             WindowIconPlugin,
+            WindowMonitorPlugin,
             RedrawPlugin::new(wakers),
         ));
     // NOTE: the client binds the control socket, whose runtime directory only
