@@ -2,7 +2,7 @@
 //! webview host, applies the operations the event loop dispatches, and
 //! queues the events the GUI receives.
 
-use crate::backend::layout::LayoutTree;
+use crate::backend::layout::{LayoutTree, SplitIds};
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::ChunkDepth;
 use crate::error::{OrzmuxError, OrzmuxResult};
@@ -248,6 +248,8 @@ pub(crate) struct Backend {
     factory: Box<dyn PaneFactory>,
     panes: HashMap<PaneId, Pane>,
     tree: LayoutTree,
+    /// Mints every split id the tree hands out.
+    split_ids: SplitIds,
     geometry: Option<Geometry>,
     /// Whether the primary window has keyboard focus, as the GUI last
     /// reported it.
@@ -273,7 +275,8 @@ impl Backend {
         Self {
             factory,
             panes: HashMap::new(),
-            tree: LayoutTree::new(),
+            tree: LayoutTree::default(),
+            split_ids: SplitIds::default(),
             geometry: None,
             window_focused: true,
             next_pane_id: 1,
@@ -756,11 +759,15 @@ impl Backend {
     ) -> OrzmuxResult<Option<PaneId>> {
         match at {
             PinnedPaneAt::Root => {
-                self.tree.insert_root(new)?;
+                if !self.tree.is_empty() {
+                    return Err(OrzmuxError::RootOccupied);
+                }
+                self.tree = LayoutTree::with_root(new);
                 Ok(None)
             }
             PinnedPaneAt::Split { pane, orientation } => {
-                self.tree.split(pane, orientation, new, window)?;
+                self.tree
+                    .split(&mut self.split_ids, pane, orientation, new, window)?;
                 Ok(Some(pane))
             }
         }

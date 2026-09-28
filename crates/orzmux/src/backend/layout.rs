@@ -35,12 +35,26 @@ impl Solved {
     }
 }
 
+/// Mints split ids that stay unique across every tree it serves.
+#[derive(Debug, Default)]
+pub struct SplitIds {
+    next: u32,
+}
+
+impl SplitIds {
+    /// The next unused split id.
+    pub fn mint(&mut self) -> SplitId {
+        let id = SplitId(self.next);
+        self.next += 1;
+        id
+    }
+}
+
 /// The split tree plus the activation history.
 #[derive(Debug, Default)]
 pub struct LayoutTree {
     root: Option<Node>,
     history: Vec<PaneId>,
-    next_split_id: u32,
 }
 
 #[derive(Debug)]
@@ -90,13 +104,15 @@ struct Ancestor {
 }
 
 impl LayoutTree {
-    /// An empty tree with no active pane.
-    pub fn new() -> Self {
-        Self::default()
+    /// A tree whose only pane is `pane`, which is active.
+    pub fn with_root(pane: PaneId) -> Self {
+        Self {
+            root: Some(Node::Leaf(pane)),
+            history: vec![pane],
+        }
     }
 
     /// Whether the tree holds no pane.
-    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.root.is_none()
     }
@@ -116,22 +132,8 @@ impl LayoutTree {
         out
     }
 
-    /// Makes `pane` the only pane.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OrzmuxError::RootOccupied`] while any pane exists.
-    pub fn insert_root(&mut self, pane: PaneId) -> OrzmuxResult {
-        if self.root.is_some() {
-            return Err(OrzmuxError::RootOccupied);
-        }
-        self.root = Some(Node::Leaf(pane));
-        self.activate(pane);
-        Ok(())
-    }
-
     /// Splits `target` in two, placing `new` right of / below it, and
-    /// makes `new` active.
+    /// makes `new` active. The divider's id comes from `ids`.
     ///
     /// # Errors
     ///
@@ -140,6 +142,7 @@ impl LayoutTree {
     /// and a separator.
     pub fn split(
         &mut self,
+        ids: &mut SplitIds,
         target: PaneId,
         orientation: SplitOrientation,
         new: PaneId,
@@ -156,12 +159,10 @@ impl LayoutTree {
         if along < needed {
             return Err(OrzmuxError::SplitRefused);
         }
-        let id = SplitId(self.next_split_id);
-        self.next_split_id += 1;
         let Some(root) = self.root.as_mut() else {
             return Err(OrzmuxError::SplitRefused);
         };
-        if !root.split_leaf(target, orientation, new, id) {
+        if !root.split_leaf(target, orientation, new, ids.mint()) {
             return Err(OrzmuxError::SplitRefused);
         }
         self.activate(new);
@@ -303,6 +304,11 @@ impl LayoutTree {
         moves && node.set_first_len(next, range.avail)
     }
 
+    /// Whether `pane` is a leaf of the tree.
+    pub fn contains(&self, pane: PaneId) -> bool {
+        self.root.as_ref().is_some_and(|root| root.has_leaf(pane))
+    }
+
     #[cfg(test)]
     fn set_root_ratio_for_test(&mut self, ratio: f32) {
         if let Some(Node::Split(split)) = self.root.as_mut() {
@@ -324,10 +330,6 @@ impl LayoutTree {
             .as_ref()
             .map(Node::min_size_for_drag)
             .unwrap_or(GridSize { cols: 0, rows: 0 })
-    }
-
-    fn contains(&self, pane: PaneId) -> bool {
-        self.root.as_ref().is_some_and(|root| root.has_leaf(pane))
     }
 
     fn activate(&mut self, pane: PaneId) {
@@ -704,12 +706,56 @@ mod tests {
         solved.rect_of(pane).expect("pane rect")
     }
 
-    fn two_side_by_side() -> LayoutTree {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
-            .unwrap();
+    fn two_side_by_side(ids: &mut SplitIds) -> LayoutTree {
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(ids, PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
+            .expect("an 80-column pane splits");
         tree
+    }
+
+    /// Asserts that two trees splitting through one `SplitIds` never
+    /// hand out the same split id.
+    ///
+    /// Case: two workspaces each split their first pane, and the GUI keys
+    /// its divider nodes by split id.
+    #[test]
+    fn trees_sharing_split_ids_never_reuse_an_id() {
+        let mut ids = SplitIds::default();
+        let mut a = LayoutTree::with_root(PaneId(1));
+        let mut b = LayoutTree::with_root(PaneId(3));
+        a.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(2),
+            W,
+        )
+        .expect("an 80-column pane splits");
+        b.split(
+            &mut ids,
+            PaneId(3),
+            SplitOrientation::Vertical,
+            PaneId(4),
+            W,
+        )
+        .expect("an 80-column pane splits");
+        assert_ne!(
+            a.solve(W).separators[0].split,
+            b.solve(W).separators[0].split
+        );
+    }
+
+    /// Asserts that a root-only tree holds exactly its pane, which is
+    /// active.
+    ///
+    /// Case: a new workspace opens with its first shell.
+    #[test]
+    fn a_root_only_tree_holds_its_active_pane() {
+        let tree = LayoutTree::with_root(PaneId(7));
+        assert_eq!(tree.panes(), vec![PaneId(7)]);
+        assert_eq!(tree.active(), Some(PaneId(7)));
+        assert!(tree.contains(PaneId(7)));
+        assert!(!tree.is_empty());
     }
 
     /// Asserts that a vertical split halves the width around a one-cell
@@ -719,7 +765,8 @@ mod tests {
     /// 80×24 window.
     #[test]
     fn a_vertical_split_halves_the_width_around_a_separator() {
-        let tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let tree = two_side_by_side(&mut ids);
         let solved = tree.solve(W);
         assert_eq!(
             rect_of(&solved, PaneId(1)),
@@ -760,10 +807,16 @@ mod tests {
     /// Case: the user presses split-horizontal-pane on an 80×24 pane.
     #[test]
     fn a_horizontal_split_stacks_the_new_pane_below() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Horizontal,
+            PaneId(2),
+            W,
+        )
+        .unwrap();
         let solved = tree.solve(W);
         assert_eq!(rect_of(&solved, PaneId(1)).rows, 12);
         assert_eq!(
@@ -784,16 +837,28 @@ mod tests {
     /// Case: the user keeps splitting a pane until it is two columns wide.
     #[test]
     fn a_split_needs_room_for_two_minimum_leaves_and_a_separator() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
         let narrow = GridSize { cols: 2, rows: 24 };
         assert!(
-            tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), narrow)
-                .is_err()
+            tree.split(
+                &mut ids,
+                PaneId(1),
+                SplitOrientation::Vertical,
+                PaneId(2),
+                narrow
+            )
+            .is_err()
         );
         assert!(
-            tree.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), narrow)
-                .is_ok()
+            tree.split(
+                &mut ids,
+                PaneId(1),
+                SplitOrientation::Horizontal,
+                PaneId(2),
+                narrow
+            )
+            .is_ok()
         );
     }
 
@@ -804,7 +869,8 @@ mod tests {
     /// having worked in the left one earlier.
     #[test]
     fn removing_a_pane_gives_its_space_to_the_sibling_and_restores_recency() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         tree.select(PaneId(1));
         tree.select(PaneId(2));
         assert!(tree.remove(PaneId(2)));
@@ -822,12 +888,24 @@ mod tests {
     #[test]
     fn removing_a_leaf_can_resize_a_pane_outside_its_subtree() {
         let window = GridSize { cols: 11, rows: 5 };
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(3), window)
-            .unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), window)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(3),
+            window,
+        )
+        .unwrap();
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(2),
+            window,
+        )
+        .unwrap();
         tree.set_root_ratio_for_test(0.1);
         let before = tree.solve(window);
         assert_eq!(rect_of(&before, PaneId(3)).cols, 5);
@@ -844,7 +922,8 @@ mod tests {
     /// then again from the right pane.
     #[test]
     fn select_direction_moves_to_the_adjacent_pane_and_stops_at_the_edge() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         tree.select(PaneId(1));
         assert!(tree.select_direction(PaneDirection::Right, W));
         assert_eq!(tree.active(), Some(PaneId(2)));
@@ -861,9 +940,16 @@ mod tests {
     /// visited the bottom one, went left, and presses select-right again.
     #[test]
     fn select_direction_prefers_the_most_recently_active_candidate() {
-        let mut tree = two_side_by_side();
-        tree.split(PaneId(2), SplitOrientation::Horizontal, PaneId(3), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
+        tree.split(
+            &mut ids,
+            PaneId(2),
+            SplitOrientation::Horizontal,
+            PaneId(3),
+            W,
+        )
+        .unwrap();
         tree.select(PaneId(1));
         assert!(tree.select_direction(PaneDirection::Right, W));
         assert_eq!(
@@ -872,9 +958,16 @@ mod tests {
             "pane 3 was active most recently"
         );
 
-        let mut fresh = two_side_by_side();
+        let mut fresh_ids = SplitIds::default();
+        let mut fresh = two_side_by_side(&mut fresh_ids);
         fresh
-            .split(PaneId(2), SplitOrientation::Horizontal, PaneId(3), W)
+            .split(
+                &mut fresh_ids,
+                PaneId(2),
+                SplitOrientation::Horizontal,
+                PaneId(3),
+                W,
+            )
             .unwrap();
         fresh.clear_history_for_test();
         fresh.select(PaneId(1));
@@ -895,7 +988,8 @@ mod tests {
     /// sit side by side.
     #[test]
     fn a_window_below_the_minimum_solves_as_a_clipped_virtual_layout() {
-        let tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let tree = two_side_by_side(&mut ids);
         let solved = tree.solve(GridSize { cols: 1, rows: 1 });
         assert_eq!(
             rect_of(&solved, PaneId(1)),
@@ -926,25 +1020,28 @@ mod tests {
     /// the user presses select-right from the leftmost.
     #[test]
     fn select_direction_does_not_skip_neighbours_when_clipped() {
-        let mut tree = two_side_by_side();
-        tree.split(PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
+        tree.split(
+            &mut ids,
+            PaneId(2),
+            SplitOrientation::Vertical,
+            PaneId(3),
+            W,
+        )
+        .unwrap();
         tree.select(PaneId(1));
         let tiny = GridSize { cols: 2, rows: 1 };
         assert!(tree.select_direction(PaneDirection::Right, tiny));
         assert_eq!(tree.active(), Some(PaneId(2)));
     }
 
-    /// Asserts that `insert_root` is refused once a pane exists and that
-    /// removing the last pane empties the tree.
+    /// Asserts that removing the last pane empties the tree.
     ///
-    /// Case: the backend receives a stray `NewPane { Root }` while a pane
-    /// is open, and later the last shell exits.
+    /// Case: the last shell in the window exits.
     #[test]
-    fn root_insertion_is_exclusive_and_the_last_removal_empties_the_tree() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        assert!(tree.insert_root(PaneId(2)).is_err());
+    fn the_last_removal_empties_the_tree() {
+        let mut tree = LayoutTree::with_root(PaneId(1));
         assert!(tree.remove(PaneId(1)));
         assert!(tree.is_empty());
         assert_eq!(tree.active(), None);
@@ -958,14 +1055,32 @@ mod tests {
     /// of the innermost panes.
     #[test]
     fn an_ancestor_split_keeps_its_id_when_a_descendant_collapses() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
-            .unwrap();
-        tree.split(PaneId(2), SplitOrientation::Horizontal, PaneId(3), W)
-            .unwrap();
-        tree.split(PaneId(3), SplitOrientation::Horizontal, PaneId(4), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(2),
+            W,
+        )
+        .unwrap();
+        tree.split(
+            &mut ids,
+            PaneId(2),
+            SplitOrientation::Horizontal,
+            PaneId(3),
+            W,
+        )
+        .unwrap();
+        tree.split(
+            &mut ids,
+            PaneId(3),
+            SplitOrientation::Horizontal,
+            PaneId(4),
+            W,
+        )
+        .unwrap();
         let before: Vec<SplitId> = tree.solve(W).separators.iter().map(|s| s.split).collect();
         assert_eq!(before.len(), 3);
 
@@ -985,17 +1100,29 @@ mod tests {
     /// again.
     #[test]
     fn a_split_id_is_never_reused() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(2),
+            W,
+        )
+        .unwrap();
         let first = tree.solve(W).separators[0].split;
 
         assert!(tree.remove(PaneId(2)));
         assert!(tree.solve(W).separators.is_empty());
 
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(3), W)
-            .unwrap();
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(3),
+            W,
+        )
+        .unwrap();
         assert_ne!(tree.solve(W).separators[0].split, first);
     }
 
@@ -1007,22 +1134,46 @@ mod tests {
     /// three-pane stack.
     #[test]
     fn the_drag_minimum_composes_through_nested_splits() {
-        let mut columns = LayoutTree::new();
-        columns.insert_root(PaneId(1)).unwrap();
+        let mut column_ids = SplitIds::default();
+        let mut columns = LayoutTree::with_root(PaneId(1));
         columns
-            .split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
+            .split(
+                &mut column_ids,
+                PaneId(1),
+                SplitOrientation::Vertical,
+                PaneId(2),
+                W,
+            )
             .unwrap();
         columns
-            .split(PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
+            .split(
+                &mut column_ids,
+                PaneId(2),
+                SplitOrientation::Vertical,
+                PaneId(3),
+                W,
+            )
             .unwrap();
         assert_eq!(columns.min_size_for_drag().cols, 14);
 
-        let mut rows = LayoutTree::new();
-        rows.insert_root(PaneId(1)).unwrap();
-        rows.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), W)
-            .unwrap();
-        rows.split(PaneId(2), SplitOrientation::Horizontal, PaneId(3), W)
-            .unwrap();
+        let mut row_ids = SplitIds::default();
+        let mut rows = LayoutTree::with_root(PaneId(1));
+        rows.split(
+            &mut row_ids,
+            PaneId(1),
+            SplitOrientation::Horizontal,
+            PaneId(2),
+            W,
+        )
+        .unwrap();
+        rows.split(
+            &mut row_ids,
+            PaneId(2),
+            SplitOrientation::Horizontal,
+            PaneId(3),
+            W,
+        )
+        .unwrap();
         assert_eq!(rows.min_size_for_drag().rows, 8);
     }
 
@@ -1034,7 +1185,8 @@ mod tests {
     /// the middle out to column 60.
     #[test]
     fn a_resize_puts_the_divider_on_the_requested_cell() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         let split = tree.solve(W).separators[0].split;
 
         assert!(tree.resize_split(split, 60, W));
@@ -1052,7 +1204,8 @@ mod tests {
     /// the way to the left edge, then all the way to the right.
     #[test]
     fn a_resize_clamps_to_the_drag_minimum_on_both_sides() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         let split = tree.solve(W).separators[0].split;
 
         assert!(tree.resize_split(split, 0, W));
@@ -1069,10 +1222,16 @@ mod tests {
     /// to the top edge, then all the way down to the bottom.
     #[test]
     fn a_horizontal_resize_clamps_to_the_drag_minimum_on_both_sides() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Horizontal,
+            PaneId(2),
+            W,
+        )
+        .unwrap();
         let split = tree.solve(W).separators[0].split;
 
         assert!(tree.resize_split(split, 0, W));
@@ -1089,7 +1248,8 @@ mod tests {
     /// the pointer was holding, and the next drag frame still names it.
     #[test]
     fn a_resize_of_an_unknown_split_is_refused() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         let before = tree.solve(W);
 
         assert!(!tree.resize_split(SplitId(999), 60, W));
@@ -1104,12 +1264,24 @@ mod tests {
     /// far past the left edge of the window.
     #[test]
     fn a_position_before_the_split_origin_saturates() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
-            .unwrap();
-        tree.split(PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(2),
+            W,
+        )
+        .unwrap();
+        tree.split(
+            &mut ids,
+            PaneId(2),
+            SplitOrientation::Vertical,
+            PaneId(3),
+            W,
+        )
+        .unwrap();
         let inner = tree.solve(W).separators[1].split;
 
         assert!(tree.resize_split(inner, 0, W));
@@ -1125,12 +1297,24 @@ mod tests {
     /// a two-column layout.
     #[test]
     fn resizing_an_inner_split_leaves_the_outer_divider() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
-            .unwrap();
-        tree.split(PaneId(2), SplitOrientation::Horizontal, PaneId(3), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(2),
+            W,
+        )
+        .unwrap();
+        tree.split(
+            &mut ids,
+            PaneId(2),
+            SplitOrientation::Horizontal,
+            PaneId(3),
+            W,
+        )
+        .unwrap();
         let outer_x = tree.solve(W).separators[0].x;
         let inner = tree.solve(W).separators[1].split;
 
@@ -1150,10 +1334,16 @@ mod tests {
     #[test]
     fn a_cramped_window_falls_back_to_the_tree_minimum() {
         let narrow = GridSize { cols: 8, rows: 24 };
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), narrow)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(2),
+            narrow,
+        )
+        .unwrap();
         let split = tree.solve(narrow).separators[0].split;
 
         assert!(tree.resize_split(split, 1, narrow));
@@ -1169,7 +1359,8 @@ mod tests {
     /// resize corner, so a smaller window arrives mid-drag.
     #[test]
     fn a_resize_against_a_shrunken_window_is_clamped() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         let split = tree.solve(W).separators[0].split;
         let shrunk = GridSize { cols: 20, rows: 10 };
 
@@ -1188,10 +1379,11 @@ mod tests {
     fn a_deep_column_below_the_drag_minimum_still_resizes() {
         let wide = GridSize { cols: 23, rows: 24 };
         let narrow = GridSize { cols: 16, rows: 24 };
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
         for (target, new) in [(1, 2), (2, 3), (3, 4)] {
             tree.split(
+                &mut ids,
                 PaneId(target),
                 SplitOrientation::Vertical,
                 PaneId(new),
@@ -1209,9 +1401,9 @@ mod tests {
 
     /// Builds `A | (B | C)` in an 80×24 window with C active: the root
     /// divider sits at x = 40 and the B|C divider at x = 60.
-    fn three_columns() -> LayoutTree {
-        let mut tree = two_side_by_side();
-        tree.split(PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
+    fn three_columns(ids: &mut SplitIds) -> LayoutTree {
+        let mut tree = two_side_by_side(ids);
+        tree.split(ids, PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
             .unwrap();
         tree
     }
@@ -1219,12 +1411,11 @@ mod tests {
     /// Builds `(A | A') | B` in an 80×24 window by splitting A after B,
     /// with A' active: the A|A' divider sits at x = 20 and the root
     /// divider at x = 40.
-    fn nested_run() -> LayoutTree {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(3), W)
+    fn nested_run(ids: &mut SplitIds) -> LayoutTree {
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(ids, PaneId(1), SplitOrientation::Vertical, PaneId(3), W)
             .unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
+        tree.split(ids, PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
             .unwrap();
         tree
     }
@@ -1236,7 +1427,8 @@ mod tests {
     /// side-by-side panes to the left, then back to the right.
     #[test]
     fn a_middle_pane_moves_its_right_border() {
-        let mut tree = three_columns();
+        let mut ids = SplitIds::default();
+        let mut tree = three_columns(&mut ids);
         tree.select(PaneId(2));
 
         assert!(tree.resize_direction(PaneDirection::Left, 5, W));
@@ -1255,7 +1447,8 @@ mod tests {
     /// side-by-side panes to widen it.
     #[test]
     fn the_last_pane_of_a_row_moves_its_left_border() {
-        let mut tree = three_columns();
+        let mut ids = SplitIds::default();
+        let mut tree = three_columns(&mut ids);
 
         assert!(tree.resize_direction(PaneDirection::Left, 5, W));
 
@@ -1273,10 +1466,16 @@ mod tests {
     /// resize-up-pane twice in the bottom pane.
     #[test]
     fn stacked_panes_move_the_horizontal_divider() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Horizontal,
+            PaneId(2),
+            W,
+        )
+        .unwrap();
         tree.select(PaneId(1));
 
         assert!(tree.resize_direction(PaneDirection::Down, 5, W));
@@ -1296,7 +1495,8 @@ mod tests {
     /// resize-right-pane in the new middle pane.
     #[test]
     fn a_nested_pane_moves_the_outer_divider_after_it() {
-        let mut tree = nested_run();
+        let mut ids = SplitIds::default();
+        let mut tree = nested_run(&mut ids);
 
         assert!(tree.resize_direction(PaneDirection::Right, 5, W));
 
@@ -1312,7 +1512,8 @@ mod tests {
     /// panes whose left two came from splitting one pane.
     #[test]
     fn the_first_pane_of_a_nested_run_moves_the_nearest_divider() {
-        let mut tree = nested_run();
+        let mut ids = SplitIds::default();
+        let mut tree = nested_run(&mut ids);
         tree.select(PaneId(1));
 
         assert!(tree.resize_direction(PaneDirection::Right, 5, W));
@@ -1329,9 +1530,16 @@ mod tests {
     /// the user presses resize-left-pane in the bottom one.
     #[test]
     fn a_stacked_pane_moves_the_column_divider_beside_it() {
-        let mut tree = two_side_by_side();
-        tree.split(PaneId(2), SplitOrientation::Horizontal, PaneId(3), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
+        tree.split(
+            &mut ids,
+            PaneId(2),
+            SplitOrientation::Horizontal,
+            PaneId(3),
+            W,
+        )
+        .unwrap();
 
         assert!(tree.resize_direction(PaneDirection::Left, 5, W));
 
@@ -1346,14 +1554,32 @@ mod tests {
     /// right, and the user presses resize-left-pane in C.
     #[test]
     fn the_run_stops_at_a_split_of_the_other_orientation() {
-        let mut tree = LayoutTree::new();
-        tree.insert_root(PaneId(1)).unwrap();
-        tree.split(PaneId(1), SplitOrientation::Vertical, PaneId(4), W)
-            .unwrap();
-        tree.split(PaneId(1), SplitOrientation::Horizontal, PaneId(2), W)
-            .unwrap();
-        tree.split(PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
-            .unwrap();
+        let mut ids = SplitIds::default();
+        let mut tree = LayoutTree::with_root(PaneId(1));
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Vertical,
+            PaneId(4),
+            W,
+        )
+        .unwrap();
+        tree.split(
+            &mut ids,
+            PaneId(1),
+            SplitOrientation::Horizontal,
+            PaneId(2),
+            W,
+        )
+        .unwrap();
+        tree.split(
+            &mut ids,
+            PaneId(2),
+            SplitOrientation::Vertical,
+            PaneId(3),
+            W,
+        )
+        .unwrap();
 
         assert!(tree.resize_direction(PaneDirection::Left, 5, W));
 
@@ -1370,16 +1596,16 @@ mod tests {
     /// arrives before the first pane has opened.
     #[test]
     fn a_resize_without_a_divider_on_the_axis_is_refused() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         let before = tree.solve(W);
         assert!(!tree.resize_direction(PaneDirection::Up, 5, W));
         assert_eq!(tree.solve(W), before);
 
-        let mut single = LayoutTree::new();
-        single.insert_root(PaneId(1)).unwrap();
+        let mut single = LayoutTree::with_root(PaneId(1));
         assert!(!single.resize_direction(PaneDirection::Left, 5, W));
 
-        assert!(!LayoutTree::new().resize_direction(PaneDirection::Left, 5, W));
+        assert!(!LayoutTree::default().resize_direction(PaneDirection::Left, 5, W));
     }
 
     /// Asserts that repeated presses stop the divider at the drag
@@ -1390,7 +1616,8 @@ mod tests {
     /// shrink any further.
     #[test]
     fn repeated_resizes_stop_at_the_drag_minimum() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
 
         for expected in [35, 30, 25, 20, 15, 10, 5, 4] {
             assert!(tree.resize_direction(PaneDirection::Left, 5, W));
@@ -1409,7 +1636,8 @@ mod tests {
     /// resize-right-pane.
     #[test]
     fn a_resize_never_moves_the_divider_against_the_key() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         tree.set_root_ratio_for_test(0.03);
         assert_eq!(tree.solve(W).separators[0].x, 2);
 
@@ -1427,7 +1655,8 @@ mod tests {
     /// presses resize-left-pane to widen it.
     #[test]
     fn a_resize_widening_a_squeezed_side_moves_exactly_the_requested_cells() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         tree.set_root_ratio_for_test(0.98);
         assert_eq!(tree.solve(W).separators[0].x, 77);
 
@@ -1441,7 +1670,8 @@ mod tests {
     /// Case: a caller sends a directional resize with a zero step.
     #[test]
     fn a_zero_cell_resize_is_refused() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
 
         assert!(!tree.resize_direction(PaneDirection::Left, 0, W));
     }
@@ -1453,7 +1683,8 @@ mod tests {
     /// longer fit their drag minimum, then presses resize-left-pane.
     #[test]
     fn a_cramped_window_resizes_down_to_the_tree_minimum() {
-        let mut tree = two_side_by_side();
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
         let narrow = GridSize { cols: 8, rows: 24 };
 
         assert!(tree.resize_direction(PaneDirection::Left, 5, narrow));
