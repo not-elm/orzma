@@ -19,6 +19,25 @@ def _write_fake_macho(dest: Path) -> None:
     dest.chmod(0o755)
 
 
+def _write_fake_cef_resources(fw: Path, locales: tuple[str, ...] = ("en", "ja", "de")) -> None:
+    resources = fw / "Resources"
+    resources.mkdir(exist_ok=True)
+    for name in ("icudtl.dat", "resources.pak", "chrome_100_percent.pak",
+                 "chrome_200_percent.pak", "v8_context_snapshot.arm64.bin",
+                 "gpu_shader_cache.bin"):
+        (resources / name).write_bytes(b"fake")
+    for locale in locales:
+        lproj = resources / f"{locale}.lproj"
+        lproj.mkdir()
+        (lproj / "locale.pak").write_bytes(b"fake")
+
+
+def _write_fake_cef_swiftshader(fw: Path) -> None:
+    libs = fw / "Libraries"
+    _write_fake_macho(libs / "libvk_swiftshader.dylib")
+    (libs / "vk_swiftshader_icd.json").write_bytes(b"{}")
+
+
 class PureHelpers(unittest.TestCase):
     def test_zip_name(self):
         self.assertEqual(bm.zip_name("orzma", "0.1.0", "arm64"), "orzma-0.1.0-arm64.zip")
@@ -247,8 +266,9 @@ class AssembleAndEmbed(unittest.TestCase):
         (fw / "Libraries").mkdir(parents=True)
         _write_fake_macho(fw / "Chromium Embedded Framework")
         _write_fake_macho(fw / "Libraries" / "libEGL.dylib")
-        (fw / "Resources").mkdir()
-        (fw / "Resources" / "icudtl.dat").write_bytes(b"fake")
+        _write_fake_macho(fw / "Libraries" / "libGLESv2.dylib")
+        _write_fake_cef_swiftshader(fw)
+        _write_fake_cef_resources(fw)
         return fw
 
     def _cfg(self, d: Path) -> "bm.BundleConfig":
@@ -303,6 +323,151 @@ class AssembleAndEmbed(unittest.TestCase):
         self.assertTrue((libs / "libEGL.dylib").is_file())
         self.assertTrue(
             (self.cfg.cef_framework / "Libraries" / "bevy_cef_debug_render_process").is_file()
+        )
+
+
+class CefLocaleHelpers(unittest.TestCase):
+    SHIPPED = ("en", "ja")
+
+    def test_a_shipped_locale_matches_only_its_exact_lproj_dir(self):
+        self.assertTrue(bm.is_cef_locale_dir("en.lproj", self.SHIPPED))
+        self.assertTrue(bm.is_cef_locale_dir("ja.lproj", self.SHIPPED))
+        for name in ("fr.lproj", "ja_FEMININE.lproj", "en_NEUTER.lproj",
+                     "en-GB.lproj", "en", "en.lproj.bak"):
+            self.assertFalse(bm.is_cef_locale_dir(name, self.SHIPPED), name)
+
+    def test_missing_cef_locale_dirs_lists_absent_packs_in_order(self):
+        self.assertEqual(bm.missing_cef_locale_dirs(["en.lproj", "ja.lproj", "fr.lproj"], self.SHIPPED), [])
+        self.assertEqual(bm.missing_cef_locale_dirs(["ja.lproj", "en_FEMININE.lproj"], self.SHIPPED), ["en"])
+        self.assertEqual(bm.missing_cef_locale_dirs([], self.SHIPPED), ["en", "ja"])
+
+    def test_app_advertised_localizations_unions_every_source(self):
+        self.assertEqual(
+            bm.app_advertised_localizations(
+                {"CFBundleLocalizations": ["fr"], "CFBundleDevelopmentRegion": "en"},
+                ["AppIcon.icns", "de.lproj", "ja.lproj"],
+            ),
+            {"fr", "en", "de", "ja"},
+        )
+
+    def test_app_advertised_localizations_falls_back_to_the_development_region(self):
+        self.assertEqual(
+            bm.app_advertised_localizations({"CFBundleDevelopmentRegion": "ja"}, ["AppIcon.icns"]),
+            {"ja"},
+        )
+
+    def test_app_advertised_localizations_is_empty_without_any_declaration(self):
+        self.assertEqual(bm.app_advertised_localizations({}, []), set())
+
+
+class CefFrameworkPruning(unittest.TestCase):
+    def _cfg(self, d: Path) -> "bm.BundleConfig":
+        _write_fake_macho(d / "orzma")
+        _write_fake_macho(d / "helper")
+        fw = d / "Chromium Embedded Framework.framework"
+        (fw / "Libraries").mkdir(parents=True)
+        _write_fake_macho(fw / "Chromium Embedded Framework")
+        _write_fake_macho(fw / "Libraries" / "libEGL.dylib")
+        _write_fake_macho(fw / "Libraries" / "libGLESv2.dylib")
+        _write_fake_cef_swiftshader(fw)
+        _write_fake_cef_resources(fw)
+        return bm.BundleConfig(
+            version="9.9.9", app_name="orzma", bin_name="orzma",
+            bundle_id_base="not.elm.orzma", arch="arm64", target_triple="aarch64-apple-darwin",
+            bin_source=d / "orzma", cef_framework=fw, helper_bin=d / "helper",
+            out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
+        )
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self._tmp.name)
+        self.cfg = self._cfg(self.d)
+        self.cfg.out_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _embedded_framework(self) -> Path:
+        return (self.cfg.app_path / "Contents" / "Frameworks"
+                / "Chromium Embedded Framework.framework")
+
+    def _set_app_localizations(self, locales: list[str]) -> None:
+        import plistlib
+        plist_path = self.cfg.app_path / "Contents" / "Info.plist"
+        with open(plist_path, "rb") as f:
+            plist = plistlib.load(f)
+        plist["CFBundleLocalizations"] = locales
+        with open(plist_path, "wb") as f:
+            plistlib.dump(plist, f)
+
+    def test_embed_ships_only_the_locale_the_app_resolves(self):
+        bm.assemble_app(self.cfg)
+        bm.embed_cef(self.cfg)
+        resources = self._embedded_framework() / "Resources"
+        self.assertTrue((resources / "en.lproj" / "locale.pak").is_file())
+        self.assertFalse((resources / "ja.lproj").exists())
+        self.assertFalse((resources / "de.lproj").exists())
+
+    def test_embed_drops_swiftshader_and_the_shader_cache(self):
+        bm.assemble_app(self.cfg)
+        bm.embed_cef(self.cfg)
+        fw = self._embedded_framework()
+        self.assertFalse((fw / "Libraries" / "libvk_swiftshader.dylib").exists())
+        self.assertFalse((fw / "Libraries" / "vk_swiftshader_icd.json").exists())
+        self.assertFalse((fw / "Resources" / "gpu_shader_cache.bin").exists())
+
+    def test_embed_keeps_every_required_and_angle_component(self):
+        bm.assemble_app(self.cfg)
+        bm.embed_cef(self.cfg)
+        fw = self._embedded_framework()
+        self.assertTrue((fw / "Chromium Embedded Framework").is_file())
+        for name in ("libEGL.dylib", "libGLESv2.dylib"):
+            self.assertTrue((fw / "Libraries" / name).is_file(), name)
+        for name in ("icudtl.dat", "resources.pak", "chrome_100_percent.pak",
+                     "chrome_200_percent.pak", "v8_context_snapshot.arm64.bin"):
+            self.assertTrue((fw / "Resources" / name).is_file(), name)
+
+    def test_embed_leaves_the_shared_cef_framework_untouched(self):
+        bm.assemble_app(self.cfg)
+        bm.embed_cef(self.cfg)
+        source = self.cfg.cef_framework
+        self.assertTrue((source / "Resources" / "ja.lproj" / "locale.pak").is_file())
+        self.assertTrue((source / "Resources" / "gpu_shader_cache.bin").is_file())
+        self.assertTrue((source / "Libraries" / "libvk_swiftshader.dylib").is_file())
+
+    def test_embed_raises_when_a_shipped_locale_pack_is_absent(self):
+        shutil.rmtree(self.cfg.cef_framework / "Resources" / "en.lproj")
+        bm.assemble_app(self.cfg)
+        with self.assertRaises(SystemExit):
+            bm.embed_cef(self.cfg)
+
+    def test_embed_raises_when_the_app_advertises_an_unshipped_locale(self):
+        bm.assemble_app(self.cfg)
+        self._set_app_localizations(["en", "ja"])
+        with self.assertRaises(SystemExit):
+            bm.embed_cef(self.cfg)
+
+    def _set_app_development_region(self, region: str) -> None:
+        import plistlib
+        plist_path = self.cfg.app_path / "Contents" / "Info.plist"
+        with open(plist_path, "rb") as f:
+            plist = plistlib.load(f)
+        plist["CFBundleDevelopmentRegion"] = region
+        with open(plist_path, "wb") as f:
+            plistlib.dump(plist, f)
+
+    def test_embed_raises_when_the_development_region_is_unshipped(self):
+        bm.assemble_app(self.cfg)
+        self._set_app_development_region("ja")
+        with self.assertRaises(SystemExit):
+            bm.embed_cef(self.cfg)
+
+    def test_embed_accepts_an_app_advertising_only_a_shipped_locale(self):
+        bm.assemble_app(self.cfg)
+        self._set_app_localizations(["en"])
+        bm.embed_cef(self.cfg)
+        self.assertTrue(
+            (self._embedded_framework() / "Resources" / "en.lproj" / "locale.pak").is_file()
         )
 
 
@@ -379,6 +544,8 @@ class EndToEnd(unittest.TestCase):
         (fw / "Libraries").mkdir(parents=True)
         _write_fake_macho(fw / "Chromium Embedded Framework")
         _write_fake_macho(fw / "Libraries" / "libEGL.dylib")
+        _write_fake_cef_swiftshader(fw)
+        _write_fake_cef_resources(fw)
         return fw
 
     def test_main_adhoc_end_to_end(self):
