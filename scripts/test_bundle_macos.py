@@ -40,6 +40,9 @@ def _write_fake_cef_swiftshader(fw: Path) -> None:
 
 
 class PureHelpers(unittest.TestCase):
+    def test_dmg_name(self):
+        self.assertEqual(bm.dmg_name("orzma", "0.1.0", "arm64"), "orzma-0.1.0-arm64.dmg")
+
     def test_version_less_than(self):
         self.assertTrue(bm.version_less_than("10.15", "11.0"))
         self.assertFalse(bm.version_less_than("11.0", "11.0"))
@@ -191,11 +194,6 @@ class CommandBuilders(unittest.TestCase):
         finally:
             os.unlink(name)
 
-
-class DmgCommands(unittest.TestCase):
-    def test_dmg_name(self):
-        self.assertEqual(bm.dmg_name("orzma", "0.1.0", "arm64"), "orzma-0.1.0-arm64.dmg")
-
     def test_ditto_copy_argv(self):
         self.assertEqual(
             bm.ditto_copy_argv(Path("/tmp/a.app"), Path("/tmp/stage/a.app")),
@@ -270,9 +268,10 @@ class PackageDmg(unittest.TestCase):
         self.tmp.cleanup()
 
     def _fake_run(self, fail_on=None, error=None, times=None):
-        failed = []
+        failures = 0
 
         def fake_run(argv, redact=()):
+            nonlocal failures
             self.calls.append(argv)
             if argv[0] == "ditto":
                 Path(argv[-1]).mkdir()
@@ -285,8 +284,8 @@ class PackageDmg(unittest.TestCase):
                 })
                 Path(argv[-1]).write_bytes(b"new dmg")
             failing = fail_on is not None and argv[:2] == fail_on
-            if failing and (times is None or len(failed) < times):
-                failed.append(argv)
+            if failing and (times is None or failures < times):
+                failures += 1
                 raise error if error is not None else subprocess.CalledProcessError(1, argv)
 
         return fake_run

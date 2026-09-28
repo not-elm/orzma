@@ -261,7 +261,7 @@ def verify_prerequisites(cfg: BundleConfig) -> None:
 
 def run(argv: list[str], redact: tuple[str, ...] = ()) -> None:
     shown = " ".join("***" if arg in redact else arg for arg in argv)
-    print(f"==> {shown}", flush=True)
+    print(f"==> {shown}")
     subprocess.run(argv, check=True)
 
 
@@ -519,8 +519,7 @@ def run_hdiutil(argv: list[str]) -> None:
                 raise
             print(
                 f"==> {' '.join(argv[:2])} failed (attempt {attempt}/{HDIUTIL_ATTEMPTS}); "
-                f"retrying in {HDIUTIL_RETRY_DELAY_SECONDS}s",
-                flush=True,
+                f"retrying in {HDIUTIL_RETRY_DELAY_SECONDS}s"
             )
             time.sleep(HDIUTIL_RETRY_DELAY_SECONDS)
 
@@ -531,9 +530,10 @@ def package(cfg: BundleConfig) -> str:
     dest.unlink(missing_ok=True)
     sidecar.unlink(missing_ok=True)
     try:
-        with tempfile.TemporaryDirectory(prefix="dmg-staging-", dir=cfg.out_dir) as staging:
-            stage_dmg(cfg.app_path, Path(staging))
-            run_hdiutil(hdiutil_create_argv(cfg.app_name, Path(staging), dest))
+        with tempfile.TemporaryDirectory(prefix="dmg-staging-", dir=cfg.out_dir) as tmp:
+            staging = Path(tmp)
+            stage_dmg(cfg.app_path, staging)
+            run_hdiutil(hdiutil_create_argv(cfg.app_name, staging, dest))
         run_hdiutil(hdiutil_verify_argv(dest))
     except BaseException:
         dest.unlink(missing_ok=True)
@@ -564,6 +564,10 @@ def cargo_build(cfg: BundleConfig) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    # NOTE: CI pipes stdout, which Python then block-buffers; without line
+    # buffering the "==>" progress lines land far from the subprocess output
+    # they describe, including the hdiutil retry notices.
+    sys.stdout.reconfigure(line_buffering=True)
     args = build_arg_parser().parse_args(argv)
     cfg = resolve_config(args)
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
