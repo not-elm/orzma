@@ -7,11 +7,19 @@ on:
       - "scripts/**"
       - "build/**"
       - ".github/workflows/ci-scripts.yml"
+      - "VERSION"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "sdk/orzma-web/package.json"
   pull_request:
     paths:
       - "scripts/**"
       - "build/**"
       - ".github/workflows/ci-scripts.yml"
+      - "VERSION"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "sdk/orzma-web/package.json"
 
 concurrency:
   group: ci-scripts-${{ github.ref }}
