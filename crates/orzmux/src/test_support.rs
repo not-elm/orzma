@@ -332,9 +332,15 @@ impl Harness {
     pub fn open_root(&mut self) -> (PaneId, FakePane) {
         self.resize(GridSize::new(80, 24).expect("a valid size"));
         self.drain();
+        self.open_workspace(RequestId(1))
+    }
+
+    /// Opens a new workspace whose first pane answers `request`, and
+    /// returns the pane with its test ends. The events are drained.
+    pub fn open_workspace(&mut self, request: RequestId) -> (PaneId, FakePane) {
         self.send(OrzmuxCommand::NewPane {
-            request: RequestId(1),
-            at: NewPaneAt::Root,
+            request,
+            at: NewPaneAt::Workspace,
             cwd: None,
             env: vec![],
         });
@@ -343,6 +349,15 @@ impl Harness {
             panic!("expected PaneOpened, got {events:?}");
         };
         (*pane, self.panes.try_recv().expect("one spawned pane"))
+    }
+
+    /// Like [`drain`](Self::drain), without the `Workspaces` snapshots,
+    /// for a test that pins the order of the other events.
+    pub fn drain_skipping_workspaces(&mut self) -> VecDeque<OrzmuxEvent> {
+        self.drain()
+            .into_iter()
+            .filter(|event| !matches!(event, OrzmuxEvent::Workspaces { .. }))
+            .collect()
     }
 
     fn build(wheel: WheelConfig, webview: WebviewHost<PaneId>) -> Self {

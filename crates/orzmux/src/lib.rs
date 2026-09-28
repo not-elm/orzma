@@ -1,6 +1,7 @@
 //! The built-in terminal multiplexer backend: a Bevy-free thread that
-//! owns every pane's PTY and VT plus the cell-unit layout tree, and
-//! talks to the GUI over channels with plain-data commands and events.
+//! owns every pane's PTY and VT plus the workspaces' cell-unit layout
+//! trees, and talks to the GUI over channels with plain-data commands and
+//! events.
 
 pub(crate) mod backend;
 pub mod client;

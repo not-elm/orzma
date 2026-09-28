@@ -55,7 +55,7 @@ fn request_root_pane(mut commands: Commands, mut requested: Local<bool>) {
     }
     *requested = true;
     commands.trigger(PaneSpawnRequest {
-        at: NewPaneAt::Root,
+        at: NewPaneAt::Workspace,
     });
 }
 

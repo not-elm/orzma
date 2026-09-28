@@ -23,9 +23,6 @@ pub enum OrzmuxError {
     /// No workspace matches the target.
     #[error("no workspace matches the target")]
     UnresolvedWorkspace,
-    /// A root pane was requested while the tree already holds one.
-    #[error("the tree already holds a root pane")]
-    RootOccupied,
     /// A split was refused because the target is missing, or cannot
     /// hold two minimum leaves and a separator along the split axis.
     #[error("the target pane has too little room to divide")]
@@ -78,8 +75,8 @@ mod tests {
     /// own reason, rather than all of them collapsing to one message.
     ///
     /// Case: a user asks for a pane before the window has reported its
-    /// size, asks for a second root pane, and splits a pane that has no
-    /// room left to divide.
+    /// size, names a pane that is gone, and splits a pane that has no room
+    /// left to divide.
     #[test]
     fn a_refused_pane_request_names_the_reason_it_was_refused() {
         assert_eq!(
@@ -89,10 +86,6 @@ mod tests {
         assert_eq!(
             OrzmuxError::UnresolvedTarget.to_string(),
             "no pane matches the target"
-        );
-        assert_eq!(
-            OrzmuxError::RootOccupied.to_string(),
-            "the tree already holds a root pane"
         );
         assert_eq!(
             OrzmuxError::SplitRefused.to_string(),

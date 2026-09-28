@@ -34,13 +34,14 @@ pub enum OrzmuxCommand {
     /// Spawn a pane. `env` is forwarded to the shell verbatim.
     ///
     /// A split with `cwd: None` starts in the target pane's working
-    /// directory: on Unix the directory of its foreground process or
-    /// shell when the OS reports one, else the directory it last
+    /// directory and a new workspace in the displayed active pane's,
+    /// found as follows: on Unix the directory of its foreground process
+    /// or shell when the OS reports one, else the directory it last
     /// reported through OSC 7 or OSC 9;9, else the directory it was
     /// spawned in; on Windows the report is preferred over the OS. Only
-    /// a directory that still exists and can be entered is used. A root
-    /// pane with `cwd: None`, or a split whose target has none of these,
-    /// starts in the user's home directory.
+    /// a directory that still exists and can be entered is used. When the
+    /// source pane has none of these, or there is no source pane, the
+    /// shell starts in the user's home directory.
     NewPane {
         /// The id the resulting `PaneOpened` / `SpawnFailed` correlates to.
         request: RequestId,
@@ -563,6 +564,7 @@ const CONTROL_BATCH: usize = 64;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::layout::LayoutTree;
     use crate::backend::queue_sample::ChunkDepth;
     use crate::backend::{CloseReason, Layout, OrzmuxEvent, SplitOrientation};
     use crate::test_support::{FactoryLog, FakeFactory, FakePane, Harness};
@@ -674,8 +676,8 @@ mod tests {
         );
     }
 
-    /// Asserts that `NewPane { Root }` before any `Resize` fails instead
-    /// of guessing a size.
+    /// Asserts that `NewPane { Workspace }` before any `Resize` fails
+    /// instead of guessing a size.
     ///
     /// Case: a misordered GUI start-up spawns before the window metrics
     /// exist.
@@ -684,7 +686,7 @@ mod tests {
         let mut h = Harness::new();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(9),
-            at: NewPaneAt::Root,
+            at: NewPaneAt::Workspace,
             cwd: None,
             env: vec![],
         });
@@ -709,11 +711,11 @@ mod tests {
         h.drain();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(1),
-            at: NewPaneAt::Root,
+            at: NewPaneAt::Workspace,
             cwd: None,
             env: vec![],
         });
-        let mut events = h.drain();
+        let mut events = h.drain_skipping_workspaces();
         assert!(matches!(
             events.pop_front(),
             Some(OrzmuxEvent::PaneOpened {
@@ -757,8 +759,9 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(h.backend().tree().panes(), vec![root]);
-        assert_eq!(h.backend().tree().active(), Some(root));
+        let tree = displayed_tree(&h);
+        assert_eq!(tree.panes(), vec![root]);
+        assert_eq!(tree.active(), Some(root));
     }
 
     /// Asserts that a split whose target no longer exists is answered
@@ -791,7 +794,7 @@ mod tests {
                 ..
             })
         ));
-        assert_eq!(h.backend().tree().panes(), vec![root]);
+        assert_eq!(displayed_tree(&h).panes(), vec![root]);
         assert_eq!(h.backend().next_pane_id(), next_id);
     }
 
@@ -930,7 +933,7 @@ mod tests {
         let (_root, _pane) = h.open_root();
         split_active(&mut h, 2);
         let window = GridSize::new(80, 24).expect("a valid size");
-        let split = h.backend().tree().solve(window).separators[0].split;
+        let split = displayed_tree(&h).solve(window).separators[0].split;
         for position in [50, 55, 60] {
             h.queue(OrzmuxCommand::ResizeSplit { split, position });
         }
@@ -1065,6 +1068,15 @@ mod tests {
         .into_bytes()
     }
 
+    /// The displayed workspace's tree.
+    fn displayed_tree(h: &Harness) -> &LayoutTree {
+        &h.backend()
+            .workspaces()
+            .active()
+            .expect("a displayed workspace")
+            .tree
+    }
+
     /// Splits the active pane and returns the new pane's id and its
     /// spawned fake terminal.
     fn split_active(h: &mut Harness, request: u64) -> (PaneId, FakePane) {
@@ -1086,7 +1098,7 @@ mod tests {
 
     /// Feeds `CSI ? 1004 h` through `pane`'s output stream and pumps it, so
     /// the pane's application has focus reporting enabled.
-    fn enable_focus_reporting(h: &mut Harness, id: PaneId, pane: &FakePane) {
+    pub(super) fn enable_focus_reporting(h: &mut Harness, id: PaneId, pane: &FakePane) {
         pane.print(b"\x1b[?1004h");
         h.pump_pane(id);
         h.drain();
@@ -1358,8 +1370,9 @@ mod tests {
                 reason: CloseReason::Killed
             } if *pane == new
         )));
-        assert_eq!(h.backend().tree().panes(), vec![root]);
-        assert_eq!(h.backend().tree().active(), Some(root));
+        let tree = displayed_tree(&h);
+        assert_eq!(tree.panes(), vec![root]);
+        assert_eq!(tree.active(), Some(root));
     }
 
     /// Asserts that a kill flushes the pane's pending output before
@@ -1429,7 +1442,7 @@ mod tests {
             panic!("Layout must be last");
         };
         assert!(layout.panes.is_empty());
-        assert!(h.backend().tree().is_empty());
+        assert!(h.backend().workspaces().entries().is_empty());
     }
 
     /// Asserts that keyboard input reaches the active pane's PTY and that
@@ -2027,3 +2040,6 @@ mod tests {
 
 #[cfg(test)]
 mod webview_tests;
+
+#[cfg(test)]
+mod workspace_tests;

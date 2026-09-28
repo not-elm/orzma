@@ -111,6 +111,7 @@ fn apply_event(
         OrzmuxEvent::Webview { event, seq } => {
             trigger_webview_event(commands, registry, event, seq);
         }
+        OrzmuxEvent::Workspaces { .. } => {}
     }
 }
 
