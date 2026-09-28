@@ -1,12 +1,11 @@
 name: release-linux
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
   # NOTE: pull requests trigger only on packaging-owned files. A Cargo.lock change
   # that links a new system library, or an edit to the `bundle` recipe in the
-  # justfile, is caught first by the tag run, which then leaves the release without
-  # Linux assets; dispatch this workflow on main before pushing a release tag.
+  # justfile, is caught first by the release run, which then fails before any draft
+  # release exists; dispatch this workflow on main before pushing a release tag.
   pull_request:
     paths:
       - ".github/workflows/release-linux.yml"
@@ -26,8 +25,9 @@ on:
         required: false
         type: string
 
-# NOTE: macOS and Windows share `release-${{ github.ref }}`. A third member would
-# cancel whichever run is pending there, so Linux keeps its own group.
+# NOTE: a called workflow sees the caller's github.ref, and release.yml holds
+# `release-${{ github.ref }}`; this group keeps its `release-linux-` prefix so the
+# two never collide.
 concurrency:
   group: release-linux-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -159,14 +159,15 @@ jobs:
       - name: Trim the CEF cache
         run: rm -rf "$HOME"/.cache/orzma/cef/*/cef_binary_*.tar.bz2
 
-      # Uploaded on every run: verify-deb installs the .deb from it, and publish
-      # releases exactly the files verify-deb checked.
+      # Uploaded on every run: verify-deb installs the .deb from it, and the draft job
+      # in release.yml releases exactly the files verify-deb checked.
       - name: Upload the release files
         uses: actions/upload-artifact@v4
         with:
           name: orzma-linux-${{ steps.ver.outputs.version }}
           retention-days: 7
           if-no-files-found: error
+          overwrite: true
           path: |
             target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz
             target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz.sha256
@@ -254,31 +255,3 @@ jobs:
         run: |
           apt-get install -y --no-install-recommends desktop-file-utils
           desktop-file-validate /usr/share/applications/orzma.desktop
-
-  publish:
-    if: github.ref_type == 'tag'
-    needs: [build, verify-deb]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    env:
-      VERSION: ${{ needs.build.outputs.version }}
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: orzma-linux-${{ needs.build.outputs.version }}
-          path: dist
-
-      # action-gh-release (>= 2.5.2) finds the release macOS/Windows may be creating in
-      # parallel and retries on a 422 already_exists, so no create/upload fallback is needed.
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/orzma-${{ env.VERSION }}-x86_64-linux.tar.gz
-            dist/orzma-${{ env.VERSION }}-x86_64-linux.tar.gz.sha256
-            dist/orzma_${{ env.VERSION }}_amd64.deb
-            dist/orzma_${{ env.VERSION }}_amd64.deb.sha256
-          fail_on_unmatched_files: true
-          generate_release_notes: true

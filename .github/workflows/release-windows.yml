@@ -1,8 +1,7 @@
 name: release-windows
 
 on:
-  push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_call:
   workflow_dispatch:
     inputs:
       version:
@@ -10,11 +9,8 @@ on:
         required: false
         type: string
 
-concurrency:
-  group: release-${{ github.ref }}
-
 permissions:
-  contents: write
+  contents: read
 
 env:
   CEF_VERSION: "152.4.0+152.0.8"
@@ -152,11 +148,15 @@ jobs:
           $name = Split-Path -Leaf $msi
           [IO.File]::WriteAllText("$msi.sha256", "$hash  $name`n")
 
-      - name: Publish GitHub Release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+      # Uploaded on every run, so a manual dry run's MSI can be downloaded too; the draft
+      # job in release.yml releases exactly these files.
+      - name: Upload the release files
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: orzma-windows-${{ steps.ver.outputs.version }}
+          retention-days: 7
+          if-no-files-found: error
+          overwrite: true
+          path: |
             target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi
             target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi.sha256
-          generate_release_notes: true
