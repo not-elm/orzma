@@ -19,7 +19,7 @@ pub(crate) use write::TerminalParamsPlugin;
 /// Uniform block uploaded once per frame alongside the storage buffers.
 ///
 /// The WGSL `TerminalParams` declaration must match this std140 layout,
-/// whose field offsets are in bytes and whose total size is 336 bytes:
+/// whose field offsets are in bytes and whose total size is 352 bytes:
 ///
 /// | Offset | Field                       |
 /// |--------|-----------------------------|
@@ -49,6 +49,8 @@ pub(crate) use write::TerminalParamsPlugin;
 /// | 324    | `overlay_desaturate`        |
 /// | 328    | `cursor_packed`             |
 /// | 332    | `default_fg_packed`         |
+/// | 336    | `hover_span_first`          |
+/// | 340    | `hover_span_last`           |
 ///
 /// # Invariants
 ///
@@ -125,6 +127,12 @@ pub(super) struct TerminalParams {
     cursor_packed: u32,
     /// The default foreground in the cell-color packing.
     default_fg_packed: u32,
+    /// Linear index (`row * cols + col`) of the first cell of the detected
+    /// URL the pointer hovers in this pane while the activation modifier
+    /// is held; above `hover_span_last` when there is none.
+    hover_span_first: u32,
+    /// Linear index of that URL's last cell.
+    hover_span_last: u32,
 }
 
 impl Default for TerminalParams {
@@ -156,11 +164,17 @@ impl Default for TerminalParams {
             overlay_desaturate: 0.0,
             cursor_packed: 0,
             default_fg_packed: 0,
+            hover_span_first: Self::NO_HOVER_SPAN.0,
+            hover_span_last: Self::NO_HOVER_SPAN.1,
         }
     }
 }
 
 impl TerminalParams {
+    /// The span written when no detected URL is hovered: its first index
+    /// is past its last, so no cell falls inside it.
+    const NO_HOVER_SPAN: (u32, u32) = (1, 0);
+
     /// Builds the per-frame uniform block from the current view and the
     /// caret paint the policy settled on.
     ///
@@ -176,6 +190,8 @@ impl TerminalParams {
     ///   paints no selection.
     /// - `overlay_rects` is left at its default; the caller fills it from
     ///   the entity's overlays.
+    /// - `hover_span_first` and `hover_span_last` are left at the empty
+    ///   span; the caller fills them from the hover state.
     fn new(
         view: &TerminalView,
         palette: &Palette,
@@ -231,6 +247,8 @@ impl TerminalParams {
                 .filter(|color| *color != palette.foreground)
                 .map_or(0, pack_linear),
             default_fg_packed: pack_linear(palette.foreground),
+            hover_span_first: Self::NO_HOVER_SPAN.0,
+            hover_span_last: Self::NO_HOVER_SPAN.1,
         }
     }
 }
@@ -365,14 +383,14 @@ mod tests {
         assert_eq!(TerminalParams::default().dim, 1.0);
     }
 
-    /// Asserts that the uniform block's std140 size is 336 bytes with the
-    /// overlay rects included.
+    /// Asserts that the uniform block's std140 size is 352 bytes with the
+    /// overlay rects and the hover span included.
     ///
-    /// Case: a pane shows an inline webview whose placement the shader reads
-    /// from the overlay rects in the uniform block.
+    /// Case: a pane shows an inline webview while the user holds Cmd over
+    /// a detected URL, so the shader reads both from the uniform block.
     #[test]
-    fn terminal_params_uniform_size_includes_overlay_rects() {
-        assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 336);
+    fn terminal_params_uniform_size_includes_overlay_rects_and_hover_span() {
+        assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 352);
     }
 
     /// Asserts that the default uniforms apply no background tint and leave
@@ -386,6 +404,16 @@ mod tests {
         assert_eq!(p.inactive_tint, Vec4::ZERO);
         assert_eq!(p.overlay_dim, 1.0);
         assert_eq!(p.overlay_desaturate, 0.0);
+    }
+
+    /// Asserts that the default uniforms carry an empty hover span, so no
+    /// cell falls inside it.
+    ///
+    /// Case: a pane is drawn before the pointer has hovered anything.
+    #[test]
+    fn terminal_params_default_hover_span_is_empty() {
+        let params = TerminalParams::default();
+        assert!(params.hover_span_first > params.hover_span_last);
     }
 
     /// Asserts the std140 offsets of the fields after `dim`, where a
@@ -430,6 +458,16 @@ mod tests {
             <TerminalParams as ShaderType>::METADATA.offset(25),
             332,
             "default_fg_packed after cursor_packed"
+        );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(26),
+            336,
+            "hover_span_first after default_fg_packed"
+        );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(27),
+            340,
+            "hover_span_last after hover_span_first"
         );
     }
 
@@ -614,25 +652,32 @@ mod tests {
         assert_ne!(params_for(&recolored).cursor_packed, 0);
     }
 
-    /// Asserts that the shader declares the packed default foreground as
-    /// the last field of its uniform block, matching the host layout.
+    /// Asserts that the shader declares the hover span as the last fields
+    /// of its uniform block, matching the host layout.
     ///
-    /// Case: a shell theme recolors the default foreground with `OSC 10`,
-    /// and a cursor whose fill lacks contrast against the cell under it
-    /// is repainted in that foreground.
+    /// Case: the user holds Cmd over a detected URL and the shader reads
+    /// the span the host wrote after the packed default foreground.
     #[test]
-    fn wgsl_terminal_params_end_with_the_default_foreground() {
+    fn wgsl_terminal_params_end_with_the_hover_span() {
         let src = include_str!("../shaders/terminal_ui_material.wgsl");
         let declaration = src
             .split("struct TerminalParams {")
             .nth(1)
             .and_then(|rest| rest.split("};").next())
             .expect("the shader declares TerminalParams");
-        let last_field = declaration
+        let fields: Vec<&str> = declaration
             .lines()
             .map(str::trim)
-            .rfind(|line| !line.is_empty());
-        assert_eq!(last_field, Some("default_fg_packed: u32,"));
+            .filter(|line| !line.is_empty())
+            .collect();
+        assert_eq!(
+            fields[fields.len() - 3..],
+            [
+                "default_fg_packed: u32,",
+                "hover_span_first: u32,",
+                "hover_span_last: u32,"
+            ]
+        );
     }
 
     /// Asserts that the shader declares no time uniform, so every
