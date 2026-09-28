@@ -37,7 +37,8 @@ fn ensure_shell_surface_ui(mut commands: Commands, ui_root: Query<Entity, With<U
         Name::new("Shell Surface UI"),
         Node {
             width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
+            flex_grow: 1.0,
+            min_height: Val::Px(0.0),
             overflow: Overflow::clip(),
             ..default()
         },

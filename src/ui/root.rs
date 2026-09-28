@@ -43,6 +43,7 @@ fn spawn_root_ui(mut commands: Commands) {
         Node {
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
             ..default()
         },
         UiRoot,

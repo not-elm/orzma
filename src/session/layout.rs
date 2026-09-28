@@ -1,8 +1,9 @@
-//! Window geometry: computes the whole-window cell size and cell pixel
-//! pitch, records them in `PaneGeometry` once they form a valid grid
-//! size, and sends `OrzmuxCommand::Resize`.
+//! Window geometry: computes the cell size of the area under the tab bar
+//! and the cell pixel pitch, records them in `PaneGeometry` once they form
+//! a valid grid size, and sends `OrzmuxCommand::Resize`.
 
 use crate::surface::geometry::{cell_pitch_phys, cells_for};
+use crate::ui::tab_bar::tab_bar_height_phys;
 use bevy::ecs::schedule::common_conditions::on_message;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized, WindowScaleFactorChanged};
@@ -56,9 +57,10 @@ fn send_window_geometry(
         return;
     };
     let (cell_w, cell_h) = cell_pitch_phys(&metrics.metrics);
+    let bar_phys = tab_bar_height_phys(window.scale_factor());
     let (cols, rows) = cells_for(
         window.resolution.physical_width(),
-        window.resolution.physical_height(),
+        window.resolution.physical_height().saturating_sub(bar_phys),
         cell_w,
         cell_h,
     );
@@ -150,7 +152,7 @@ mod tests {
             [OrzmuxCommand::Resize {
                 size: GridSize {
                     cols: 100,
-                    rows: 37
+                    rows: 35
                 },
                 ..
             }]
@@ -179,7 +181,7 @@ mod tests {
             [OrzmuxCommand::Resize {
                 size: GridSize {
                     cols: 200,
-                    rows: 37
+                    rows: 35
                 },
                 ..
             }]
@@ -233,7 +235,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<LastGeometry>().0,
             Some((
-                GridSize::new(100, 37).expect("a valid grid size"),
+                GridSize::new(100, 35).expect("a valid grid size"),
                 CellPixels {
                     width: 8,
                     height: 16
@@ -365,6 +367,63 @@ mod tests {
         app.update();
 
         assert!(!app.world().contains_resource::<PaneGeometry>());
+    }
+
+    /// Asserts that the rows sent leave out the tab bar's height.
+    ///
+    /// Case: an 800×600 window at scale 1 with a 16 px cell: 572 px remain
+    /// under the 28 px bar, which is 35 rows.
+    #[test]
+    fn the_rows_sent_leave_out_the_tab_bar() {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(metrics(8.0, 16.0));
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+        let sent: Vec<OrzmuxCommand> = commands.try_iter().map(|(_, c)| c).collect();
+        assert!(matches!(
+            sent.as_slice(),
+            [OrzmuxCommand::Resize {
+                size: GridSize {
+                    cols: 100,
+                    rows: 35
+                },
+                ..
+            }]
+        ));
+    }
+
+    /// Asserts that a window no taller than the tab bar plus one row sends
+    /// no geometry.
+    ///
+    /// Case: the user drags the window down to its title bar.
+    #[test]
+    fn a_window_shorter_than_the_tab_bar_sends_no_geometry() {
+        let (client, _events, commands) = OrzmuxClient::detached();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(LayoutPlugin)
+            .insert_resource(OrzmuxConnection(client))
+            .insert_resource(metrics(8.0, 16.0));
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(800, 40),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.update();
+        assert!(commands.try_iter().next().is_none());
+        assert!(app.world().get_resource::<PaneGeometry>().is_none());
     }
 
     /// Asserts that a scale-factor change alone refreshes the scale factor
