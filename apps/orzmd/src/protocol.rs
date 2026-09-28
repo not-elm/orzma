@@ -95,14 +95,39 @@ pub(crate) struct StageAssetsResponse {
     pub(crate) urls: Vec<Option<String>>,
 }
 
-/// Search-result counts the page reports back (`searchCount` event).
+/// Why the page ended a search that was being typed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct SearchCount {
-    /// Total matches in the document.
-    pub(crate) total: usize,
-    /// 1-based index of the current match (0 when none).
-    pub(crate) current: usize,
+pub(crate) enum SearchCause {
+    /// Enter, Escape, or the close button.
+    Key,
+    /// The search input lost focus.
+    Blur,
+}
+
+/// A page report that the typed search was confirmed (`searchSubmit` event).
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub(crate) struct SearchSubmit {
+    /// What ended the typing.
+    pub(crate) cause: SearchCause,
+}
+
+/// A page report that the typed search was abandoned (`searchEscape` event).
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub(crate) struct SearchEscape {
+    /// What ended the typing.
+    pub(crate) cause: SearchCause,
+}
+
+/// A page request to close a confirmed search (`searchClose` event).
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub(crate) struct SearchClose {}
+
+/// Text for the page's search input (`searchType` emit).
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SearchType {
+    /// The typed text.
+    pub(crate) text: String,
 }
 
 /// Viewport state the page reports back (`scrollState` event).
@@ -120,13 +145,6 @@ pub(crate) struct ScrollState {
 pub(crate) struct Scroll {
     /// Which way to scroll.
     pub(crate) action: ScrollAction,
-}
-
-/// A search request payload (`search` emit).
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct Search {
-    /// The query string to highlight.
-    pub(crate) query: String,
 }
 
 /// A search-navigation payload (`searchNav` emit).
@@ -174,15 +192,29 @@ mod tests {
         assert_eq!(s.current_heading_index, None);
     }
 
+    /// Asserts that the search-ending reports parse, reading their cause from camelCase strings.
+    ///
+    /// Case: the page reports Enter in the find box, a click on the body while typing, and a
+    /// click on the close button of a confirmed search.
     #[test]
-    fn search_count_reads_camel_case() {
-        let s: SearchCount = serde_json::from_value(json!({"total": 12, "current": 3})).unwrap();
+    fn search_reports_read_their_cause() {
+        let submit: SearchSubmit =
+            serde_json::from_value(json!({"cause": "key"})).expect("submit parses");
+        assert_eq!(submit.cause, SearchCause::Key);
+        let escape: SearchEscape =
+            serde_json::from_value(json!({"cause": "blur"})).expect("escape parses");
+        assert_eq!(escape.cause, SearchCause::Blur);
+        let _close: SearchClose = serde_json::from_value(json!({})).expect("close parses");
+    }
+
+    /// Asserts that a relayed character serializes as a `text` field.
+    ///
+    /// Case: the user types `a` right after `/`, before the page holds focus.
+    #[test]
+    fn search_type_serializes_its_text() {
         assert_eq!(
-            s,
-            SearchCount {
-                total: 12,
-                current: 3
-            }
+            serde_json::to_value(SearchType { text: "a".into() }).expect("serializes"),
+            json!({"text": "a"})
         );
     }
 

@@ -2,6 +2,7 @@
 //! two-key chords (`gg`, `]]`, `[[`) emit a [`Action::Prefix`] that `App`
 //! completes.
 
+use crate::protocol::SearchCause;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui_orzma::KeyChord;
 
@@ -43,8 +44,35 @@ pub(crate) enum Action {
     SearchConfirm,
     SearchNext,
     SearchPrev,
+    /// The page confirmed the typed search.
+    PageSearchSubmit(SearchCause),
+    /// The page abandoned the typed search.
+    PageSearchEscape(SearchCause),
+    /// The page closed a confirmed search.
+    PageSearchClose,
     Escape,
     Ignore,
+}
+
+/// Which forward-key set the page carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum KeySet {
+    /// The reading keys, so they reach the TUI while the page is focused.
+    #[default]
+    Normal,
+    /// No keys, so everything typed reaches the page's search input.
+    Search,
+}
+
+impl KeySet {
+    /// The set the page needs while the app is in `mode`.
+    pub fn of(mode: Mode) -> Self {
+        if mode == Mode::Search {
+            Self::Search
+        } else {
+            Self::Normal
+        }
+    }
 }
 
 /// Maps a key event in `mode` to an [`Action`].
@@ -78,12 +106,15 @@ pub(crate) fn map(mode: Mode, key: KeyEvent) -> Action {
     }
 }
 
-/// The chords orzmd's Normal and Outline keymaps use, passed through to the
-/// TUI while the page holds keyboard focus.
+/// The chords passed through to the TUI while the page holds keyboard focus:
+/// the reading keys for [`KeySet::Normal`], and none for [`KeySet::Search`].
 ///
-/// Ctrl+C is left out so that, while the page is focused, it copies the
+/// Ctrl+C is never forwarded, so while the page is focused it copies the
 /// page's selection instead of quitting.
-pub(crate) fn forward_chords() -> Vec<KeyChord> {
+pub(crate) fn forward_chords(set: KeySet) -> Vec<KeyChord> {
+    if set == KeySet::Search {
+        return Vec::new();
+    }
     let plain = |code| KeyChord {
         mods: KeyModifiers::NONE,
         code,
@@ -296,7 +327,7 @@ mod tests {
     /// TUI documents, or selects text and presses Ctrl+C to copy it.
     #[test]
     fn every_forwarded_chord_drives_a_normal_or_outline_action() {
-        for chord in forward_chords() {
+        for chord in forward_chords(KeySet::Normal) {
             let code = match chord.code {
                 KeyCode::Char(c) if chord.mods.contains(KeyModifiers::SHIFT) => {
                     KeyCode::Char(c.to_ascii_uppercase())
@@ -310,9 +341,20 @@ mod tests {
                 "{chord:?} drives nothing"
             );
         }
-        assert!(!forward_chords().contains(&KeyChord {
+        assert!(!forward_chords(KeySet::Normal).contains(&KeyChord {
             mods: KeyModifiers::CONTROL,
             code: KeyCode::Char('c'),
         }));
+    }
+
+    /// Asserts that the search set forwards nothing and that only Search mode selects it.
+    ///
+    /// Case: the user presses `/` and types a query containing `q` and `n`.
+    #[test]
+    fn the_search_key_set_forwards_nothing() {
+        assert!(forward_chords(KeySet::Search).is_empty());
+        assert_eq!(KeySet::of(Mode::Search), KeySet::Search);
+        assert_eq!(KeySet::of(Mode::Normal), KeySet::Normal);
+        assert_eq!(KeySet::of(Mode::Outline), KeySet::Normal);
     }
 }
