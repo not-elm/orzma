@@ -2,7 +2,8 @@
 //! hidden panes' size and focus.
 
 use crate::backend::{
-    NewPaneAt, OrzmuxEvent, PaneId, PaneTarget, RequestId, SplitOrientation, WorkspaceId,
+    CloseReason, CloseTarget, NewPaneAt, OrzmuxEvent, PaneId, PaneTarget, RequestId,
+    SplitOrientation, WorkspaceId, WorkspaceTarget,
 };
 use crate::event_loop::OrzmuxCommand;
 use crate::event_loop::tests::enable_focus_reporting;
@@ -271,18 +272,191 @@ fn a_resize_split_of_a_hidden_workspace_does_nothing() {
 }
 
 /// Asserts that focus reports reach only the displayed active pane: the
-/// pane a new workspace hides reports focus loss and does not regain focus
-/// while hidden.
+/// pane a new workspace hides reports focus loss, does not regain focus
+/// while hidden, and regains it once its workspace is displayed again,
+/// while the pane that loses the display reports focus loss in turn.
 ///
-/// Case: the user opens a new tab while nvim runs in the first one, then
-/// resizes the window.
+/// Case: the user opens a new tab while nvim runs in the first one,
+/// resizes the window, then switches back to the first tab.
 #[test]
 fn focus_reports_reach_only_the_displayed_active_pane() {
     let mut h = Harness::new();
     let (root, root_pane) = h.open_root();
     enable_focus_reporting(&mut h, root, &root_pane);
-    let (_shown, _p2) = h.open_workspace(RequestId(2));
+    let (shown, shown_pane) = h.open_workspace(RequestId(2));
+    enable_focus_reporting(&mut h, shown, &shown_pane);
     h.resize(GridSize::new(100, 30).expect("a valid size"));
     h.settle_writes();
     assert_eq!(root_pane.received(), b"\x1b[O");
+    let first_ws = h
+        .backend()
+        .workspaces()
+        .workspace_of(root)
+        .expect("root's workspace");
+    h.send(OrzmuxCommand::SelectWorkspace {
+        workspace: WorkspaceTarget::Id(first_ws),
+    });
+    h.settle_writes();
+    assert_eq!(root_pane.received(), b"\x1b[O\x1b[I");
+    assert_eq!(shown_pane.received(), b"\x1b[O");
+}
+
+/// Asserts that when the displayed workspace's last pane closes, the
+/// workspace to its right is displayed and the session goes on.
+///
+/// Case: the user exits the only shell of the middle tab while two other
+/// tabs are open.
+#[test]
+fn the_last_pane_closing_displays_the_right_neighbour() {
+    let mut h = Harness::new();
+    let (_a, _pa) = h.open_root();
+    let (b, pb) = h.open_workspace(RequestId(2));
+    let (c, _pc) = h.open_workspace(RequestId(3));
+    let ws_b = h
+        .backend()
+        .workspaces()
+        .workspace_of(b)
+        .expect("b's workspace");
+    h.send(OrzmuxCommand::SelectWorkspace {
+        workspace: WorkspaceTarget::Id(ws_b),
+    });
+    h.drain();
+    pb.exit(Some(0));
+    h.pump_pane(b);
+    let events = h.drain();
+    assert!(events.iter().any(|e| matches!(
+        e,
+        OrzmuxEvent::PaneClosed { pane, reason: CloseReason::ChildExit { .. } } if *pane == b
+    )));
+    assert_eq!(last_layout_panes(&events), vec![c]);
+    let (ids, active) = workspaces_of(&events).pop().expect("a Workspaces snapshot");
+    assert_eq!(ids.len(), 2);
+    assert_eq!(active, h.backend().workspaces().workspace_of(c));
+}
+
+/// Asserts that `Next` and `Previous` wrap, that the displayed workspace's
+/// pane becomes the `Layout`, and that selecting the displayed workspace
+/// or a missing index publishes nothing.
+///
+/// Case: the user cycles through three tabs and presses the key for a
+/// ninth one.
+#[test]
+fn selecting_workspaces_wraps_and_ignores_no_ops() {
+    let mut h = Harness::new();
+    let (a, _pa) = h.open_root();
+    let (_b, _pb) = h.open_workspace(RequestId(2));
+    let (c, _pc) = h.open_workspace(RequestId(3));
+    h.send(OrzmuxCommand::SelectWorkspace {
+        workspace: WorkspaceTarget::Next,
+    });
+    assert_eq!(last_layout_panes(&h.drain()), vec![a]);
+    h.send(OrzmuxCommand::SelectWorkspace {
+        workspace: WorkspaceTarget::Previous,
+    });
+    assert_eq!(last_layout_panes(&h.drain()), vec![c]);
+    h.send(OrzmuxCommand::SelectWorkspace {
+        workspace: WorkspaceTarget::Active,
+    });
+    assert!(h.drain().is_empty());
+    h.send(OrzmuxCommand::SelectWorkspace {
+        workspace: WorkspaceTarget::Index(8),
+    });
+    assert!(h.drain().is_empty());
+}
+
+/// Asserts that closing a workspace kills each of its panes, then emits
+/// one `Workspaces` and one `Layout` of the neighbour.
+///
+/// Case: the user closes a tab holding two split shells.
+#[test]
+fn closing_a_workspace_kills_its_panes_and_shows_the_neighbour() {
+    let mut h = Harness::new();
+    let (a, _pa) = h.open_root();
+    let (b, _pb) = h.open_workspace(RequestId(2));
+    h.send(OrzmuxCommand::NewPane {
+        request: RequestId(3),
+        at: NewPaneAt::Split {
+            pane: PaneTarget::Active,
+            orientation: SplitOrientation::Vertical,
+        },
+        cwd: None,
+        env: vec![],
+    });
+    h.drain();
+    h.send(OrzmuxCommand::CloseWorkspace {
+        workspace: CloseTarget::Active,
+    });
+    let events = h.drain();
+    let closed: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            OrzmuxEvent::PaneClosed {
+                pane,
+                reason: CloseReason::Killed,
+            } => Some(*pane),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(closed.len(), 2);
+    assert!(closed.contains(&b));
+    assert_eq!(workspaces_of(&events).len(), 1);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, OrzmuxEvent::Layout { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(last_layout_panes(&events), vec![a]);
+}
+
+/// Asserts that a rename is sanitized and announced only when it changes
+/// the name.
+///
+/// Case: the user renames a tab, then confirms the same name again.
+#[test]
+fn a_rename_is_announced_only_on_change() {
+    let mut h = Harness::new();
+    let (_a, _pa) = h.open_root();
+    let id = WorkspaceId(1);
+    h.send(OrzmuxCommand::RenameWorkspace {
+        workspace: id,
+        name: Some(" logs\n".into()),
+    });
+    let events = h.drain();
+    let Some(OrzmuxEvent::Workspaces { entries, .. }) = events.front() else {
+        panic!("expected Workspaces, got {events:?}");
+    };
+    assert_eq!(entries[0].name.as_deref(), Some("logs"));
+    h.send(OrzmuxCommand::RenameWorkspace {
+        workspace: id,
+        name: Some("logs".into()),
+    });
+    assert!(h.drain().is_empty());
+}
+
+/// Asserts that every `MoveWorkspace`, including a no-op and one naming a
+/// closed workspace, is answered with exactly one `Workspaces` carrying
+/// its sequence.
+///
+/// Case: the user drops a tab where it was, and another drop races the
+/// close of the dragged tab.
+#[test]
+fn move_workspace_always_answers_with_workspaces() {
+    let mut h = Harness::new();
+    let (_a, _pa) = h.open_root();
+    let (_b, _pb) = h.open_workspace(RequestId(2));
+    for (workspace, index) in [
+        (WorkspaceId(1), 1),
+        (WorkspaceId(1), 1),
+        (WorkspaceId(9), 0),
+    ] {
+        let seq = h.send(OrzmuxCommand::MoveWorkspace { workspace, index });
+        let events = h.drain();
+        assert_eq!(events.len(), 1, "one answer for {workspace:?} → {index}");
+        assert!(matches!(
+            events[0],
+            OrzmuxEvent::Workspaces { seq: answered, .. } if answered == seq
+        ));
+    }
 }

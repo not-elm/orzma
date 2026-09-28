@@ -474,6 +474,74 @@ impl Backend {
         Ok(())
     }
 
+    /// Displays the workspace `target` names, publishing `Workspaces` and
+    /// `Layout` when the displayed workspace changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedWorkspace`] when the target names
+    /// no workspace; nothing is published.
+    pub fn select_workspace(&mut self, target: WorkspaceTarget) -> OrzmuxResult {
+        let id = self
+            .workspaces
+            .resolve(target)
+            .ok_or(OrzmuxError::UnresolvedWorkspace)?;
+        if self.workspaces.activate(id) {
+            self.emit_workspaces();
+            self.publish_layout();
+        }
+        Ok(())
+    }
+
+    /// Kills every pane of the workspace `target` names, then publishes the
+    /// one `Layout` that follows.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedWorkspace`] when the target names
+    /// no workspace; no pane closes.
+    pub fn close_workspace(&mut self, target: CloseTarget) -> OrzmuxResult {
+        let id = self
+            .workspaces
+            .resolve_close(target)
+            .ok_or(OrzmuxError::UnresolvedWorkspace)?;
+        let panes = self
+            .workspaces
+            .get(id)
+            .map(|w| w.tree.panes())
+            .unwrap_or_default();
+        for pane in panes {
+            self.retire_pane(pane, CloseReason::Killed);
+        }
+        self.publish_layout();
+        Ok(())
+    }
+
+    /// Names workspace `id`, publishing `Workspaces` when the name changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedWorkspace`] for an unknown id.
+    pub fn rename_workspace(&mut self, id: WorkspaceId, name: Option<String>) -> OrzmuxResult {
+        if self.workspaces.rename(id, name)? {
+            self.emit_workspaces();
+        }
+        Ok(())
+    }
+
+    /// Moves workspace `id` to `index` and always publishes one
+    /// `Workspaces`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrzmuxError::UnresolvedWorkspace`] for an unknown id; the
+    /// `Workspaces` is still published.
+    pub fn move_workspace(&mut self, id: WorkspaceId, index: u16) -> OrzmuxResult {
+        let moved = self.workspaces.move_to(id, index);
+        self.emit_workspaces();
+        moved.map(|_| ())
+    }
+
     /// Makes `pane` active when it is in the displayed workspace. A layout
     /// is published either way.
     ///

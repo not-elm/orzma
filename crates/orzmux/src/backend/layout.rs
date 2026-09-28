@@ -123,7 +123,6 @@ impl LayoutTree {
     }
 
     /// Every pane in the tree, left-to-right / top-to-bottom.
-    #[cfg(test)]
     pub fn panes(&self) -> Vec<PaneId> {
         let mut out = Vec::new();
         if let Some(root) = &self.root {
@@ -386,7 +385,6 @@ impl Node {
         }
     }
 
-    #[cfg(test)]
     fn collect_leaves(&self, out: &mut Vec<PaneId>) {
         match self {
             Node::Leaf(id) => out.push(*id),

@@ -4,8 +4,8 @@
 
 use crate::backend::queue_sample::QueueSampler;
 use crate::backend::{
-    Backend, CommandSeq, NewPaneAt, PaneDirection, PaneId, PaneTarget, RequestId, SplitId,
-    log_refused_write,
+    Backend, CloseTarget, CommandSeq, NewPaneAt, PaneDirection, PaneId, PaneTarget, RequestId,
+    SplitId, WorkspaceId, WorkspaceTarget, log_refused_write,
 };
 use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::{Receiver, Select, TryRecvError};
@@ -166,6 +166,36 @@ pub enum OrzmuxCommand {
     /// A report the GUI sends the webview host: a focus change, a first
     /// frame, or a page's call, event, or URL change.
     Webview(WebviewCommand),
+    /// Kill every pane of a workspace and remove it; its right neighbour,
+    /// else its left one, is displayed when it was displayed.
+    CloseWorkspace {
+        /// The workspace to close.
+        workspace: CloseTarget,
+    },
+    /// Display a workspace. Nothing is published when it already is, or
+    /// when the target names no workspace.
+    SelectWorkspace {
+        /// The workspace to display.
+        workspace: WorkspaceTarget,
+    },
+    /// Name a workspace, or restore its automatic name with `None`. The
+    /// name loses its control characters and surrounding whitespace and is
+    /// cut to 64 characters.
+    RenameWorkspace {
+        /// The workspace to name.
+        workspace: WorkspaceId,
+        /// The new name.
+        name: Option<String>,
+    },
+    /// Move a workspace to a zero-based position, clamped to the last.
+    /// Always answered with exactly one `Workspaces`, even when nothing
+    /// moves or the workspace is gone.
+    MoveWorkspace {
+        /// The workspace to move.
+        workspace: WorkspaceId,
+        /// Its new position.
+        index: u16,
+    },
 }
 
 impl OrzmuxCommand {
@@ -195,6 +225,10 @@ impl OrzmuxCommand {
             }
             Self::ResizeSplit { .. } => ("ResizeSplit", None),
             Self::Webview(_) => ("Webview", None),
+            Self::CloseWorkspace { .. } => ("CloseWorkspace", None),
+            Self::SelectWorkspace { .. } => ("SelectWorkspace", None),
+            Self::RenameWorkspace { .. } => ("RenameWorkspace", None),
+            Self::MoveWorkspace { .. } => ("MoveWorkspace", None),
         }
     }
 
@@ -427,6 +461,16 @@ impl EventLoop {
                 self.backend.vi_selection_toggle(pane, kind)
             }
             OrzmuxCommand::Webview(command) => self.backend.webview_command(command),
+            OrzmuxCommand::CloseWorkspace { workspace } => self.backend.close_workspace(workspace),
+            OrzmuxCommand::SelectWorkspace { workspace } => {
+                self.backend.select_workspace(workspace)
+            }
+            OrzmuxCommand::RenameWorkspace { workspace, name } => {
+                self.backend.rename_workspace(workspace, name)
+            }
+            OrzmuxCommand::MoveWorkspace { workspace, index } => {
+                self.backend.move_workspace(workspace, index)
+            }
         }
     }
 
