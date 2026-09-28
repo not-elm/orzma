@@ -11,7 +11,7 @@ pub(crate) mod event_loop;
 pub(crate) mod test_support;
 
 pub mod prelude {
-    use crate::backend::workspace::Workspace;
+    pub use crate::backend::workspace::Workspace;
     pub use crate::backend::{
         CloseReason, CloseTarget, CommandSeq, Layout, NewPaneAt, OrzmuxEvent, PaneDirection,
         PaneId, PaneRect, PaneTarget, RequestId, Separator, SplitId, SplitOrientation,
@@ -21,7 +21,4 @@ pub mod prelude {
     pub use crate::error::{OrzmuxError, OrzmuxResult};
     pub use crate::event_loop::OrzmuxCommand;
     pub use orzma_webview_host::prelude::{WebviewCommand, WebviewEvent};
-
-    /// The longest workspace name the backend keeps, in `char`s.
-    pub const MAX_WORKSPACE_NAME_CHARS: usize = Workspace::MAX_NAME_CHARS;
 }

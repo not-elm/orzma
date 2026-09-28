@@ -17,7 +17,7 @@ use bevy_orzma_webview::RequestWebviewFocus;
 use bevy_orzmux::prelude::{
     CurrentWorkspaces, OrzmuxSystems, RequestWorkspaceAction, WorkspaceAction, WorkspaceId,
 };
-use orzmux::prelude::MAX_WORKSPACE_NAME_CHARS;
+use orzmux::prelude::Workspace;
 use std::time::Duration;
 
 /// The rename in progress, if any.
@@ -266,7 +266,7 @@ fn start_rename(
     let field = commands
         .spawn((
             EditableText {
-                max_characters: Some(MAX_WORKSPACE_NAME_CHARS),
+                max_characters: Some(Workspace::MAX_NAME_CHARS),
                 allow_newlines: false,
                 cursor_blink_period: STEADY_CARET,
                 ..EditableText::new(tab_label(position, name.as_deref()))
