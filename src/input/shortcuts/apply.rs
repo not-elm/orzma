@@ -15,6 +15,7 @@ use crate::{
         shortcuts::{KeyEffectMessage, ShortcutSet},
     },
     session::spawn::PaneSpawnRequest,
+    ui::tab_bar::rename::StartWorkspaceRename,
 };
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{
@@ -84,9 +85,10 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
 /// (fires unconditionally — vi mode included; no-selection is a no-op
 /// downstream), the font-size zoom (window-wide, so it fires even with no
 /// focused surface), the pane actions (select/split/kill/resize, targeting
-/// the backend's active pane), and the workspace actions
-/// (new/close/next/previous/select). `Quit` and `ReleaseWebviewFocus` are
-/// handled upstream in `resolve_key_effects`.
+/// the backend's active pane), the workspace actions
+/// (new/close/next/previous/select), and the rename of the displayed
+/// workspace. `Quit` and `ReleaseWebviewFocus` are handled upstream in
+/// `resolve_key_effects`.
 fn apply_shortcut(
     commands: &mut Commands,
     action: Shortcut,
@@ -144,6 +146,7 @@ fn apply_shortcut(
                 number.saturating_sub(1),
             ))),
         }),
+        Shortcut::RenameWorkspace => commands.trigger(StartWorkspaceRename { workspace: None }),
         Shortcut::Quit | Shortcut::ReleaseWebviewFocus => {}
     }
 }
@@ -177,6 +180,7 @@ mod tests {
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
+    use bevy_orzmux::prelude::WorkspaceId;
     use orzma_configs::shortcuts::{FontSizeStep, Modifiers, PaneDirection, SplitOrientation};
     use orzma_tty::prelude::TerminalKey;
     use orzmux::prelude::PaneDirection as OrzmuxDirection;
@@ -619,5 +623,32 @@ mod tests {
                 WorkspaceAction::Select(WorkspaceTarget::Index(1)),
             ]
         );
+    }
+
+    #[derive(Resource, Default)]
+    struct RenameStarts(Vec<Option<WorkspaceId>>);
+
+    /// Asserts that the rename-workspace shortcut starts renaming the
+    /// displayed workspace.
+    ///
+    /// Case: the user presses the leader and then r to rename the tab on
+    /// screen.
+    #[test]
+    fn the_rename_shortcut_starts_renaming_the_displayed_workspace() {
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        app.init_resource::<RenameStarts>().add_observer(
+            |ev: On<StartWorkspaceRename>, mut seen: ResMut<RenameStarts>| {
+                seen.0.push(ev.workspace);
+            },
+        );
+        dispatch(
+            &mut app,
+            vec![action_effect(Shortcut::RenameWorkspace, true)],
+            Some(term),
+            false,
+            Modifiers::default(),
+        );
+        app.update();
+        assert_eq!(app.world().resource::<RenameStarts>().0, vec![None]);
     }
 }

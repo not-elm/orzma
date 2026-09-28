@@ -6,6 +6,7 @@ use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::keyboard::key_effect::KeyEffect;
 use crate::input::shortcuts::apply::ShortcutsApplyPlugin;
+use crate::ui::tab_bar::rename::WorkspaceRename;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::MouseButton;
@@ -53,7 +54,10 @@ impl Plugin for ShortcutsPlugin {
                     // leader engaged before a mouse-only webview focus/blur would consume the
                     // next terminal keystroke as its second key.
                     reset_leader_phase
-                        .run_if(resource_exists_and_changed::<FocusedWebview>)
+                        .run_if(
+                            resource_exists_and_changed::<FocusedWebview>
+                                .or_else(resource_exists_and_changed::<WorkspaceRename>),
+                        )
                         .before(LeaderGate::Detect),
                 ),
             );
@@ -438,8 +442,9 @@ pub(crate) fn test_shortcuts_with_direct_chord(
 }
 
 /// Clears the leader phase (pending or repeat window), any armed hold-to-repeat,
-/// and any in-progress modifier tap on a webview focus change, so a leader
-/// engaged/armed before the focus change never fires after it.
+/// and any in-progress modifier tap on a webview focus change or a tab rename
+/// starting or ending, so a leader engaged/armed before the change never fires
+/// after it.
 fn reset_leader_phase(
     mut leader_phase: ResMut<LeaderPhase>,
     mut held_repeat: ResMut<HeldRepeatKey>,
@@ -476,6 +481,7 @@ fn detect_modifier_tap(
     mouse: Res<ButtonInput<MouseButton>>,
     time: Res<Time<Real>>,
     shortcuts: Res<Shortcuts>,
+    rename: Option<Res<WorkspaceRename>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     // `run_if(tap_leader_enabled)` guarantees this is `Some`.
@@ -484,11 +490,13 @@ fn detect_modifier_tap(
     };
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     let mut armed = state.armed;
-    if !focused || mouse.get_just_pressed().next().is_some() {
-        // NOTE: a mouse press anywhere this frame (or lost focus) invalidates the
-        // tap gesture — disarm and drain this frame's key events without arming or
-        // firing. Draining here (own reader cursor) prevents a same-frame
-        // `Cmd-down` + click from arming and firing on the next `Cmd-up`.
+    let renaming = rename.as_deref().is_some_and(WorkspaceRename::is_active);
+    if !focused || renaming || mouse.get_just_pressed().next().is_some() {
+        // NOTE: a mouse press anywhere this frame (or lost focus, or a tab rename
+        // in progress) invalidates the tap gesture — disarm and drain this frame's
+        // key events without arming or firing. Draining here (own reader cursor)
+        // prevents a same-frame `Cmd-down` + click from arming and firing on the
+        // next `Cmd-up`.
         armed = None;
         keys.clear();
     } else {
@@ -768,6 +776,7 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
 mod tests {
     use super::*;
     use bevy::input::keyboard::Key;
+    use bevy_orzmux::prelude::WorkspaceId;
     use orzma_configs::OrzmaConfigs;
     use orzma_configs::shortcuts::{
         Binding, FontSizeStep, PaneDirection, Shortcuts as ConfigShortcuts,
@@ -1583,6 +1592,24 @@ mod tests {
         );
     }
 
+    /// Asserts that a modifier tap during a rename neither arms nor fires
+    /// the leader, and that its key events are consumed.
+    ///
+    /// Case: the user presses and releases Cmd alone while the rename field
+    /// has focus.
+    #[test]
+    fn a_modifier_tap_while_renaming_does_nothing() {
+        let mut app = tap_app();
+        app.insert_resource(WorkspaceRename::active_for_test(WorkspaceId(1)));
+        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Pressed);
+        app.update();
+        assert_eq!(app.world().resource::<ModifierTapState>().armed, None);
+        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
+        app.update();
+        assert_ne!(*app.world().resource::<LeaderPhase>(), LeaderPhase::Pending);
+        assert_eq!(app.world().resource::<ModifierTapState>().armed, None);
+    }
+
     fn resolved_shortcuts(config: OrzmaConfigs) -> Shortcuts {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -1629,6 +1656,7 @@ mod tests {
                 select_workspace_7: None,
                 select_workspace_8: None,
                 select_workspace_9: None,
+                rename_workspace: None,
                 ..Default::default()
             },
             ..Default::default()
