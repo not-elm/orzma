@@ -6,15 +6,15 @@ import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
 import { breadcrumb, type Chrome, type HeadingInfo, renderRail, renderToast } from './chrome';
 import { collectLocalImages } from './images';
-import { applyLayoutVars, RAIL_HEIGHT, reachedTop } from './layout';
+import { applyLayoutVars, RAIL_HEIGHT, reachedTop, SCROLL_OFFSET } from './layout';
 import { classifyLink } from './links';
 import { renderMarkdown } from './render';
-import { Search } from './search';
+import { CssHighlightPainter, measureTop, revealRange, Search } from './search';
 
 mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
 
 const content = document.getElementById('content') as HTMLElement;
-const search = new Search();
+const search = new Search(new CssHighlightPainter(), measureTop);
 
 const rail = document.getElementById('rail') as HTMLElement;
 const toast = document.getElementById('toast') as HTMLElement;
@@ -266,14 +266,26 @@ orzma.on('scrollToHeading', (p: { index: number }) => {
   document.getElementById(`h${p.index}`)?.scrollIntoView({ block: 'start' });
   reportScrollState();
 });
+
+function revealCurrentMatch(): void {
+  const range = search.currentRange();
+  if (range !== null) {
+    revealRange(range, { top: SCROLL_OFFSET, bottom: window.innerHeight });
+  }
+}
+
 orzma.on('search', (p: { query: string }) => {
-  orzma.emit('searchCount', search.run(content, p.query));
+  const result = search.run(content, p.query, window.scrollY + SCROLL_OFFSET);
+  revealCurrentMatch();
+  orzma.emit('searchCount', { total: result.total, current: result.current });
 });
 orzma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
-  orzma.emit('searchCount', search.navigate(p.dir));
+  const result = search.navigate(p.dir);
+  revealCurrentMatch();
+  orzma.emit('searchCount', { total: result.total, current: result.current });
 });
 orzma.on('clearSearch', () => {
-  search.clear(content);
+  search.clear();
 });
 orzma.on('chrome', (c: Chrome) => {
   chrome = c;
