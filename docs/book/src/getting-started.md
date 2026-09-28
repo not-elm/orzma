@@ -35,6 +35,27 @@ This adds the `not-elm/homebrew-orzma` tap and installs `orzma.app` into
 brew upgrade --cask orzma
 ```
 
+To install without Homebrew, download `orzma-<version>-arm64.dmg` from the
+[latest release](https://github.com/not-elm/orzma/releases/latest), open it, and
+drag `orzma.app` onto the `Applications` folder next to it. This does not put
+`orzmd` and `orzbrowser` on your `PATH`; to run them by name, add
+`/Applications/orzma.app/Contents/Resources` to your `PATH`. To upgrade, download
+the new dmg and replace `orzma.app` the same way.
+
+#### First launch
+
+orzma is not notarized by Apple, so macOS blocks its first launch, however you
+installed it, and again after each upgrade. macOS may report that "orzma" is
+damaged and can't be opened. The app is not damaged, so do not move it to the
+Trash. Instead, clear its quarantine flag:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/orzma.app
+```
+
+Alternatively, open **System Settings > Privacy & Security** and click
+**Open Anyway** next to the message about orzma.
+
 ### Windows
 
 Download `orzma-<version>-x64.msi` from the
