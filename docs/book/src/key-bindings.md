@@ -121,10 +121,17 @@ the seven that differ elsewhere.
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side by side (vertical divider); the new pane becomes active. |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (horizontal divider); the new pane becomes active. |
 | `kill-pane` | `<Leader>p` | Kill the active pane; its shell is terminated. |
+| `new-workspace` | `<Leader>c` | Open a new workspace after the last one and show it. |
+| `close-workspace` | `<Leader>Shift+X` | Close the workspace on screen and end every shell in it. |
+| `next-workspace` | `<Leader>]` | Show the workspace to the right, wrapping around. |
+| `previous-workspace` | `<Leader>[` | Show the workspace to the left, wrapping around. |
+| `select-workspace-1` … `select-workspace-9` | `<Leader>1` … `<Leader>9` | Show the first … ninth workspace. |
 
-The window actions (`new-window`, `next-window`, `select-window-0` and the
-rest), `rename-window`, and `zoom-pane` that orzma 0.1.0 accepted have been
-removed. A configuration that still sets one of them is ignored as a whole (see
+The window actions orzma 0.1.0 accepted (`new-window`, `next-window`,
+`select-window-0` and the rest, `rename-window`) and `zoom-pane` have been
+removed; workspaces replace the window actions under new names (see
+[Workspaces](multiplexer.md#workspaces)). A configuration that still sets one
+of the old keys is ignored as a whole (see
 [Validation](configuration.md#validation)), so delete those lines when you
 upgrade.
 
@@ -138,7 +145,7 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   actions. Unbind the stock default explicitly (`select-left-pane = ""`) or
   pick a free chord.
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
-  stock defaults that includes all 13 leader-bound actions above, silently
+  stock defaults that includes all 26 leader-bound actions above, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g.
   `split-vertical-pane = "Ctrl+Shift+I"`.
@@ -153,7 +160,8 @@ layout. Key bindings match physical key positions, so on a non-US layout the
 `=` key on a US layout, and fires whether or not Shift is held — including
 when it is the leader. On a layout with a dedicated `+` key, such as German,
 that position is a different key, so bind the key you actually want by name
-instead.
+instead. `[` and `]` name physical key positions of a US layout; on a JIS
+keyboard they are the keys labelled `@` and `[`.
 
 ## Example
 

@@ -60,7 +60,7 @@ fn request_root_pane(mut commands: Commands, mut requested: Local<bool>) {
     });
 }
 
-/// Despawns the pending entity; a failed root spawn (no pane at all) exits.
+/// Despawns the pending entity; a failed first spawn (no pane at all) exits.
 fn on_spawn_failed(
     ev: On<OrzmuxPaneSpawnFailed>,
     mut commands: Commands,
@@ -72,7 +72,7 @@ fn on_spawn_failed(
         tracing::error!(error = %ev.error, "root pane spawn failed, no pane left");
         exit.write(AppExit::Success);
     } else {
-        tracing::warn!(error = %ev.error, "pane split failed");
+        tracing::warn!(error = %ev.error, "pane spawn failed");
     }
 }
 

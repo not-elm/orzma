@@ -198,6 +198,10 @@ TUI needs every key for a while — a search line, an address bar — sends a
 `focus` op with `null` when it starts and, if it wants, focuses the page
 again when it ends.
 
+A `focus` of a placement whose pane is in a workspace that is not on screen is
+ignored, and the page that has focus keeps it. `compositing` is reported for
+placements in hidden workspaces as well.
+
 ### Forward keys
 
 `forward_keys` lists key chords the host passes through to the pane's PTY

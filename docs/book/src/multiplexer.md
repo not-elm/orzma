@@ -1,7 +1,9 @@
 # Multiplexer
 
-orzma can split its window into panes, each running its own shell. The panes
-are part of orzma itself, so there is no separate multiplexer to start.
+orzma can split its window into panes, each running its own shell, and keep
+several such layouts as workspaces, listed as tabs across the top of the
+window. The panes are part of orzma itself, so there is no separate
+multiplexer to start.
 
 | Default keys | Action |
 | --- | --- |
@@ -17,7 +19,26 @@ release it on its own, then press the next key. See
 
 A new pane becomes the active pane. You can also click a pane to make it
 active, and drag the border between two panes to resize them. When the last
-pane closes, orzma quits.
+pane of a workspace closes, the workspace closes; when the last workspace
+closes, orzma quits.
+
+## Workspaces
+
+A workspace is one layout of panes. The tab bar across the top of the window
+lists every workspace; the highlighted tab is the one on screen. The shells in
+the other workspaces keep running, and pages shown in them keep their state.
+
+| Default keys | Action |
+| --- | --- |
+| Leader, then `c` | Open a new workspace after the last one and show it. |
+| Leader, then `Shift+X` | Close the workspace on screen and end every shell in it. |
+| Leader, then `]` / `[` | Show the workspace to the right / left (wrapping around). |
+| Leader, then `1` … `9` | Show the first … ninth workspace. |
+
+Click a tab to show its workspace, click its `×` to close it, and click `+` to
+open a new one. A workspace you have not named is called `Workspace n`, where
+`n` is its position in the tab bar. A new workspace starts in the working
+directory of the active pane, like a split.
 
 ## Resizing panes
 

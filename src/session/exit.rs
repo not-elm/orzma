@@ -1,5 +1,5 @@
-//! Session end: `OrzmuxSessionEnded` (the last pane closed, or the backend
-//! is gone) sends `AppExit`.
+//! Session end: `OrzmuxSessionEnded` (the last workspace closed, or the
+//! backend is gone) sends `AppExit`.
 
 use bevy::prelude::*;
 use bevy_orzmux::prelude::OrzmuxSessionEnded;
@@ -24,7 +24,8 @@ mod tests {
 
     /// Asserts that an `OrzmuxSessionEnded` event sends `AppExit`.
     ///
-    /// Case: the last pane's shell exits, or the backend thread panics.
+    /// Case: the last workspace's last shell exits, or the backend thread
+    /// panics.
     #[test]
     fn session_end_sends_app_exit() {
         #[derive(Resource, Default)]
