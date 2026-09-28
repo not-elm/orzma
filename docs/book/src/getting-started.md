@@ -45,9 +45,8 @@ the new dmg and replace `orzma.app` the same way.
 #### First launch
 
 orzma is not notarized by Apple, so macOS blocks its first launch, however you
-installed it, and again after each upgrade. macOS may report that "orzma" is
-damaged and can't be opened. The app is not damaged, so do not move it to the
-Trash. Instead, clear its quarantine flag:
+installed it, and again after each upgrade, saying that Apple could not verify
+"orzma" is free of malware. To open it, clear its quarantine flag:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/orzma.app
