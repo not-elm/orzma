@@ -131,5 +131,7 @@ fn a_frame() -> Frame {
         placements: None,
         palette: None,
         hyperlinks: Vec::new(),
+        wraps: None,
+        continues_from_above: false,
     }
 }

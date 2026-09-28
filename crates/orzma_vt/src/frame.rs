@@ -8,6 +8,7 @@ use crate::device::DeviceState;
 use crate::device::color::Palette;
 use crate::hyperlink::{Hyperlink, HyperlinkId};
 use crate::placement::AnchoredPlacement;
+use crate::screen::Screen;
 use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::row::Row;
@@ -19,8 +20,8 @@ use std::collections::HashSet;
 
 /// One emitted frame.
 ///
-/// The `Option` fields split into two kinds: `placements` and
-/// `palette` are changed-only (`None` = unchanged since the last
+/// The `Option` fields split into two kinds: `placements`, `palette`
+/// and `wraps` are changed-only (`None` = unchanged since the last
 /// emitted frame, and for placements `Some(vec![])` = none visible —
 /// a distinct state), while `vi_cursor` and `selection` are absent
 /// state (`None` = not in vi mode / no selection, carried on every
@@ -59,6 +60,14 @@ pub struct Frame {
     /// the consumer's retained table. An id the consumer already knows
     /// may appear again; a row absent from `rows` contributes nothing.
     pub hyperlinks: Vec<Hyperlink>,
+    /// For each viewport row, top first, how many leading cells belong to
+    /// a logical line that continues on the next row (`None` when the row
+    /// ends its line): `None` when unchanged since the last emitted frame,
+    /// otherwise the complete list, one entry per viewport row.
+    pub wraps: Option<Vec<Option<u16>>>,
+    /// Whether the top viewport row continues the logical line of the row
+    /// above the viewport; always carried.
+    pub continues_from_above: bool,
 }
 
 /// One repainted viewport row inside a [`Frame`].
@@ -81,6 +90,8 @@ pub(crate) struct FrameTracker {
     placements: Vec<AnchoredPlacement>,
     /// The palette the last emitted frame carried.
     palette: Palette,
+    /// The wrap list the last emitted frame carried.
+    wraps: Vec<Option<u16>>,
 }
 
 impl FrameTracker {
@@ -92,6 +103,7 @@ impl FrameTracker {
             carried: Carried::default(),
             placements: Vec::new(),
             palette: Palette::default(),
+            wraps: Vec::new(),
         }
     }
 
@@ -121,6 +133,8 @@ impl FrameTracker {
     ///   one instant of `device`.
     /// - The tracker never retains a value the consumer does not see, so
     ///   an attempt that returns `None` retains nothing.
+    /// - `wraps` is carried exactly when the viewport's wrap list differs
+    ///   from the last one carried, so the first frame always carries it.
     pub fn emit(&mut self, device: &DeviceState) -> Option<Frame> {
         let screen = device.active_screen();
         let carried = Carried {
@@ -129,12 +143,15 @@ impl FrameTracker {
             history_len: screen.history_len(),
             selection: screen.selection_range(),
             vi_cursor: screen.vi_cursor(),
+            continues_from_above: screen.viewport_continues_from_above(),
         };
         let placements = self.diff_placements(device);
         let palette = self.diff_palette(device.palette());
+        let wraps = self.diff_wraps(screen);
         if self.damage.is_clean()
             && placements.is_none()
             && palette.is_none()
+            && wraps.is_none()
             && carried == self.carried
         {
             return None;
@@ -158,8 +175,15 @@ impl FrameTracker {
             placements,
             palette,
             hyperlinks,
+            wraps,
+            continues_from_above: carried.continues_from_above,
         };
-        self.settle(carried, frame.placements.as_ref(), frame.palette.as_ref());
+        self.settle(
+            carried,
+            frame.placements.as_ref(),
+            frame.palette.as_ref(),
+            frame.wraps.as_ref(),
+        );
         Some(frame)
     }
 
@@ -175,6 +199,13 @@ impl FrameTracker {
     /// `None` when unchanged.
     fn diff_palette(&self, palette: &Palette) -> Option<Palette> {
         (*palette != self.palette).then(|| palette.clone())
+    }
+
+    /// Reports the viewport's wrap list when it differs from the
+    /// last-emitted one; `None` when unchanged.
+    fn diff_wraps(&self, screen: &Screen) -> Option<Vec<Option<u16>>> {
+        (!screen.viewport_wraps().eq(self.wraps.iter().copied()))
+            .then(|| screen.viewport_wraps().collect())
     }
 
     /// The definitions of every hyperlink `rows` references, in first
@@ -203,6 +234,7 @@ impl FrameTracker {
         carried: Carried,
         placements: Option<&Vec<AnchoredPlacement>>,
         palette: Option<&Palette>,
+        wraps: Option<&Vec<Option<u16>>>,
     ) {
         self.carried = carried;
         if let Some(placements) = placements {
@@ -210,6 +242,9 @@ impl FrameTracker {
         }
         if let Some(palette) = palette {
             self.palette.clone_from(palette);
+        }
+        if let Some(wraps) = wraps {
+            self.wraps.clone_from(wraps);
         }
     }
 }
@@ -223,6 +258,7 @@ struct Carried {
     history_len: u32,
     selection: Option<SelectionRange>,
     vi_cursor: Option<ViCursor>,
+    continues_from_above: bool,
 }
 
 #[cfg(test)]
@@ -293,8 +329,10 @@ mod tests {
                 history_len: 0,
                 selection: None,
                 vi_cursor: None,
+                continues_from_above: false,
             },
             Some(&listed),
+            None,
             None,
         );
         assert_eq!(tracker.diff_placements(&device), None);
@@ -315,7 +353,7 @@ mod tests {
         let changed = tracker
             .diff_palette(&palette)
             .expect("an override changes the table");
-        tracker.settle(Carried::default(), None, Some(&changed));
+        tracker.settle(Carried::default(), None, Some(&changed), None);
         assert_eq!(tracker.diff_palette(&palette), None);
     }
 
@@ -376,7 +414,7 @@ mod tests {
     }
 
     /// Asserts that the first frame follows the defaults convention:
-    /// full row coverage with the changed-only sections omitted.
+    /// full row coverage with the palette and placement sections omitted.
     ///
     /// Case: a terminal spawns and the renderer initializes from the
     /// very first frame.
@@ -548,5 +586,42 @@ mod tests {
             .stage(DamageSpan::rows(ViewportLine(2), ViewportLine(2)));
         let frame = emit(&mut rig).expect("staged damage emits");
         assert!(frame.hyperlinks.is_empty());
+    }
+
+    /// Asserts that the first frame carries the viewport's complete wrap
+    /// list and a later frame with no wrap change omits it.
+    ///
+    /// Case: a terminal spawns, and the shell then prints a short prompt
+    /// that fits on its row.
+    #[test]
+    fn the_first_frame_carries_the_wrap_list_and_later_ones_omit_it() {
+        let mut rig = Rig {
+            tracker: FrameTracker::new(),
+            device: DeviceState::new(GridSize { cols: 4, rows: 3 }, 10),
+        };
+        let first = emit(&mut rig).expect("the seeded Full emits");
+        assert_eq!(first.wraps, Some(vec![None, None, None]));
+        assert!(!first.continues_from_above);
+        rig.device.print('a').expect("a printable glyph");
+        rig.tracker.stage(DamageSpan::Full);
+        let next = emit(&mut rig).expect("staged damage emits");
+        assert_eq!(next.wraps, None);
+    }
+
+    /// Asserts that a wrap change emits a frame carrying the complete new
+    /// list without any staged row damage, and that the next attempt
+    /// emits nothing.
+    ///
+    /// Case: output fills a row and wraps onto the next one, and the
+    /// renderer must learn that the two rows form one line.
+    #[test]
+    fn a_wrap_change_emits_the_complete_list_once() {
+        let mut rig = drained_rig();
+        for _ in 0..5 {
+            rig.device.print('a').expect("a printable glyph");
+        }
+        let frame = emit(&mut rig).expect("the wrap and the cursor changed");
+        assert_eq!(frame.wraps, Some(vec![Some(4), None, None]));
+        assert_eq!(emit(&mut rig), None);
     }
 }

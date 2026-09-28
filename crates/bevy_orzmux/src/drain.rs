@@ -211,6 +211,8 @@ mod tests {
             placements: None,
             palette: None,
             hyperlinks: vec![],
+            wraps: None,
+            continues_from_above: false,
         }
     }
 

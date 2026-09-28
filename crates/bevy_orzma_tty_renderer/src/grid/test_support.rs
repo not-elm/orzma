@@ -42,6 +42,8 @@ pub(crate) fn quiet_frame() -> Frame {
         placements: None,
         palette: None,
         hyperlinks: vec![],
+        wraps: None,
+        continues_from_above: false,
     }
 }
 

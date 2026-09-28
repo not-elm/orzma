@@ -99,6 +99,8 @@ impl TerminalView {
             placements,
             palette: _,
             hyperlinks: _,
+            wraps: _,
+            continues_from_above: _,
         } = frame;
         self.cols != size.cols
             || self.rows != size.rows
@@ -133,6 +135,8 @@ impl TerminalView {
             placements,
             palette: _,
             hyperlinks: _,
+            wraps: _,
+            continues_from_above: _,
         } = frame;
         self.cols = size.cols;
         self.rows = size.rows;

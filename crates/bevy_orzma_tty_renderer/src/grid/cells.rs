@@ -63,6 +63,8 @@ impl TerminalCells {
             placements: _,
             palette,
             hyperlinks,
+            wraps: _,
+            continues_from_above: _,
         } = frame;
         self.size_differs(size.cols, size.rows)
             || rows.iter().any(|row| row.line.0 < size.rows)
@@ -107,6 +109,8 @@ impl TerminalCells {
             placements: _,
             palette,
             hyperlinks,
+            wraps: _,
+            continues_from_above: _,
         } = frame;
         rows.iter()
             .flat_map(|row| row.contents.iter())
