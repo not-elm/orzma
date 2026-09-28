@@ -3,7 +3,6 @@
 
 use crate::chrome::SearchStage;
 use crate::keymap::{Action, KeySet, Mode};
-use crate::outline::Heading;
 use crate::protocol::{ScrollAction, SearchCause, SearchDir};
 use std::mem;
 
@@ -47,7 +46,7 @@ pub(crate) enum Cmd {
 pub(crate) struct App {
     mode: Mode,
     pending_prefix: Option<char>,
-    outline: Vec<Heading>,
+    heading_count: usize,
     outline_open: bool,
     outline_selected: usize,
     current_heading_index: Option<usize>,
@@ -73,16 +72,11 @@ impl App {
         self.outline_selected
     }
 
-    /// The headings to draw in the outline panel.
-    pub fn outline(&self) -> &[Heading] {
-        &self.outline
-    }
-
-    /// Replaces the outline (called after a (re)load), clamping the selection.
-    pub fn set_outline(&mut self, outline: Vec<Heading>) {
-        self.outline = outline;
-        if self.outline_selected >= self.outline.len() {
-            self.outline_selected = self.outline.len().saturating_sub(1);
+    /// Records how many headings the rendered page has, clamping the selection.
+    pub fn set_heading_count(&mut self, count: usize) {
+        self.heading_count = count;
+        if self.outline_selected >= count {
+            self.outline_selected = count.saturating_sub(1);
         }
     }
 
@@ -135,6 +129,10 @@ impl App {
             Action::ToggleOutline => {
                 self.outline_open = !self.outline_open;
                 self.mode = if self.outline_open {
+                    self.outline_selected = self
+                        .current_heading_index
+                        .unwrap_or(0)
+                        .min(self.heading_count.saturating_sub(1));
                     Mode::Outline
                 } else {
                     Mode::Normal
@@ -142,7 +140,7 @@ impl App {
                 vec![]
             }
             Action::OutlineMoveDown => {
-                if self.outline_selected + 1 < self.outline.len() {
+                if self.outline_selected + 1 < self.heading_count {
                     self.outline_selected += 1;
                 }
                 vec![]
@@ -152,12 +150,19 @@ impl App {
                 vec![]
             }
             Action::OutlineConfirm => {
-                if self.outline.is_empty() {
+                if self.heading_count == 0 {
                     vec![]
                 } else {
                     vec![Cmd::ScrollToHeading(self.outline_selected)]
                 }
             }
+            Action::OutlineJump(index)
+                if self.mode == Mode::Outline && index < self.heading_count =>
+            {
+                self.outline_selected = index;
+                vec![Cmd::ScrollToHeading(index)]
+            }
+            Action::OutlineJump(_) => vec![],
             Action::EnterSearch => {
                 self.blur_after_search = !self.page_focused;
                 self.mode = Mode::Search;
@@ -258,10 +263,10 @@ impl App {
     }
 
     fn heading_jump(&self, forward: bool) -> Vec<Cmd> {
-        if self.outline.is_empty() {
+        if self.heading_count == 0 {
             return vec![];
         }
-        let last = self.outline.len() - 1;
+        let last = self.heading_count - 1;
         let target = match (self.current_heading_index, forward) {
             (None, _) => 0,
             (Some(i), true) => (i + 1).min(last),
@@ -282,14 +287,7 @@ mod tests {
 
     fn app_with_outline(n: usize) -> App {
         let mut app = App::default();
-        app.set_outline(
-            (0..n)
-                .map(|i| Heading {
-                    level: 1,
-                    text: format!("h{i}"),
-                })
-                .collect(),
-        );
+        app.set_heading_count(n);
         app
     }
 
@@ -648,5 +646,56 @@ mod tests {
         assert_eq!(app.mode(), Mode::Outline);
         app.on_focus_change(false);
         assert_eq!(app.mode(), Mode::Outline);
+    }
+
+    /// Asserts that opening the outline selects the heading being read.
+    ///
+    /// Case: the user scrolls to the third section and presses `o`.
+    #[test]
+    fn opening_the_outline_selects_the_current_heading() {
+        let mut app = app_with_outline(5);
+        app.set_current_heading_index(Some(2));
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.selected(), 2);
+    }
+
+    /// Asserts that a clicked outline entry becomes the selection and is scrolled to.
+    ///
+    /// Case: the user opens the outline and clicks the fourth heading.
+    #[test]
+    fn an_outline_click_selects_and_jumps() {
+        let mut app = app_with_outline(5);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(
+            app.on_action(Action::OutlineJump(3)),
+            vec![Cmd::ScrollToHeading(3)]
+        );
+        assert_eq!(app.selected(), 3);
+    }
+
+    /// Asserts that an outline click out of range or with the outline closed is ignored.
+    ///
+    /// Case: a click arrives just after the document was replaced by a shorter one,
+    /// or just after the outline was closed.
+    #[test]
+    fn a_stray_outline_click_is_ignored() {
+        let mut app = app_with_outline(2);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.on_action(Action::OutlineJump(5)), vec![]);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.on_action(Action::OutlineJump(1)), vec![]);
+    }
+
+    /// Asserts that heading navigation does nothing in a document without headings.
+    ///
+    /// Case: the user opens a note that has no headings and presses `]]`, then `o` and Enter.
+    #[test]
+    fn a_document_without_headings_ignores_heading_navigation() {
+        let mut app = app_with_outline(0);
+        app.on_action(Action::Prefix(']'));
+        assert_eq!(app.on_action(Action::Prefix(']')), vec![]);
+        app.on_action(Action::ToggleOutline);
+        assert_eq!(app.on_action(Action::OutlineConfirm), vec![]);
+        assert_eq!(app.selected(), 0);
     }
 }

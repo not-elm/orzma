@@ -1,20 +1,17 @@
 //! The in-memory Markdown document plus path resolution and change detection.
 
-use crate::outline::{self, Heading};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// A loaded Markdown document and its derived outline.
+/// A loaded Markdown document.
 #[derive(Debug, Clone)]
 pub(crate) struct Document {
     /// Raw Markdown source.
     pub(crate) text: String,
     /// Absolute parent directory of the source file.
     pub(crate) base_dir: PathBuf,
-    /// Headings parsed from `text`, in document order.
-    pub(crate) outline: Vec<Heading>,
 }
 
 /// A cheap change fingerprint: file length plus mtime.
@@ -25,15 +22,9 @@ pub(crate) struct Fingerprint {
 }
 
 impl Document {
-    /// Builds a document from source text and the file's parent directory,
-    /// parsing the outline from `text`.
+    /// Builds a document from source text and the file's parent directory.
     fn from_source(text: String, base_dir: PathBuf) -> Self {
-        let outline = outline::parse(&text);
-        Self {
-            text,
-            base_dir,
-            outline,
-        }
+        Self { text, base_dir }
     }
 }
 
@@ -102,12 +93,14 @@ mod tests {
         (dir, path)
     }
 
+    /// Asserts that loading reads the source text and the parent directory.
+    ///
+    /// Case: the user opens a Markdown file that has two headings.
     #[test]
-    fn load_reads_text_outline_and_base_dir() {
+    fn load_reads_text_and_base_dir() {
         let (_dir, path) = write_temp("doc.md", "# A\n\ntext\n## B\n");
         let doc = load(&path).unwrap();
         assert_eq!(doc.text, "# A\n\ntext\n## B\n");
-        assert_eq!(doc.outline.len(), 2);
         assert_eq!(doc.base_dir, path.parent().unwrap());
     }
 

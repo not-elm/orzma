@@ -138,6 +138,16 @@ pub(crate) struct ScrollState {
     pub(crate) ratio: f64,
     /// Index of the `id="h{n}"` anchor nearest the top, or `None`.
     pub(crate) current_heading_index: Option<usize>,
+    /// Number of `id="h{n}"` headings in the rendered page.
+    #[serde(default)]
+    pub(crate) heading_count: usize,
+}
+
+/// A page request to jump to a heading clicked in the outline (`outlineJump` event).
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub(crate) struct OutlineJump {
+    /// Index of the clicked `id="h{n}"` heading.
+    pub(crate) index: usize,
 }
 
 /// A scroll command payload (`scroll` emit).
@@ -190,6 +200,32 @@ mod tests {
             serde_json::from_value(json!({"ratio": 0.5, "currentHeadingIndex": null})).unwrap();
         assert_eq!(s.ratio, 0.5);
         assert_eq!(s.current_heading_index, None);
+    }
+
+    /// Asserts that the scroll state reads the heading count, defaulting to zero.
+    ///
+    /// Case: the page reports its scroll state after rendering a document, and an
+    /// older page reports it without a count.
+    #[test]
+    fn scroll_state_reads_the_heading_count() {
+        let s: ScrollState = serde_json::from_value(
+            json!({"ratio": 0.0, "currentHeadingIndex": 1, "headingCount": 4}),
+        )
+        .expect("scroll state parses");
+        assert_eq!(s.heading_count, 4);
+        let old: ScrollState =
+            serde_json::from_value(json!({"ratio": 0.0, "currentHeadingIndex": null}))
+                .expect("scroll state parses");
+        assert_eq!(old.heading_count, 0);
+    }
+
+    /// Asserts that an outline jump reads its index.
+    ///
+    /// Case: the user clicks the third heading in the outline sidebar.
+    #[test]
+    fn outline_jump_reads_its_index() {
+        let j: OutlineJump = serde_json::from_value(json!({"index": 2})).expect("parses");
+        assert_eq!(j.index, 2);
     }
 
     /// Asserts that the search-ending reports parse, reading their cause from camelCase strings.

@@ -38,6 +38,8 @@ pub(crate) enum Action {
     OutlineMoveDown,
     OutlineMoveUp,
     OutlineConfirm,
+    /// Jump to heading `n` clicked in the outline.
+    OutlineJump(usize),
     EnterSearch,
     SearchChar(char),
     SearchBackspace,

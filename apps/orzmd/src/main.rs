@@ -6,7 +6,6 @@ mod chrome;
 mod document;
 mod keymap;
 mod local_assets;
-mod outline;
 mod protocol;
 mod ui;
 mod watcher;
@@ -16,8 +15,9 @@ use crate::chrome::{Chrome, Toast};
 use crate::document::Document;
 use crate::keymap::{Action, KeySet};
 use crate::protocol::{
-    Content, NavigateRequest, OpenExternal, OpenPath, Scroll, ScrollState, ScrollTo, SearchClose,
-    SearchEscape, SearchNav, SearchSubmit, SearchType, StageAssetsRequest, StageAssetsResponse,
+    Content, NavigateRequest, OpenExternal, OpenPath, OutlineJump, Scroll, ScrollState, ScrollTo,
+    SearchClose, SearchEscape, SearchNav, SearchSubmit, SearchType, StageAssetsRequest,
+    StageAssetsResponse,
 };
 use crate::watcher::FileWatcher;
 use ratatui::Terminal;
@@ -163,7 +163,8 @@ impl Session {
         self.missing = false;
         self.toast = None;
         let cmds = self.state.clear_search_state();
-        self.state.set_outline(doc.outline.clone());
+        self.state.set_heading_count(0);
+        self.state.set_current_heading_index(None);
         let content = content_for(&doc, scroll_to);
         if let Ok(mut guard) = shared.lock() {
             *guard = doc;
@@ -196,7 +197,6 @@ impl Session {
         self.last_fp = Some(fp);
         self.missing = false;
         self.toast = None;
-        self.state.set_outline(doc.outline.clone());
         let content = content_for(&doc, ScrollTo::Preserve);
         if let Ok(mut guard) = shared.lock() {
             *guard = doc;
@@ -458,6 +458,7 @@ fn register_view(
             .add_event::<SearchSubmit>("searchSubmit")
             .add_event::<SearchEscape>("searchEscape")
             .add_event::<SearchClose>("searchClose")
+            .add_event::<OutlineJump>("outlineJump")
             .add_event::<ScrollState>("scrollState")
             .add_event::<NavigateRequest>("navigate")
             .add_event::<OpenExternal>("openExternal")
@@ -478,9 +479,6 @@ fn event_loop(
     let mut terminal = Terminal::new(backend)?;
 
     let mut session = Session::new(start_path, current_watcher);
-    if let Ok(doc) = shared.lock() {
-        session.state.set_outline(doc.outline.clone());
-    }
     loop {
         let cmds = session.apply_focus_changes(view);
         if run_cmds(&mut session, cmds, ctx).is_break() {
@@ -508,8 +506,15 @@ fn event_loop(
                 return Ok(());
             }
         }
+        for jump in view.read_events::<OutlineJump>() {
+            let cmds = session.state.on_action(Action::OutlineJump(jump.index));
+            if run_cmds(&mut session, cmds, ctx).is_break() {
+                return Ok(());
+            }
+        }
         for s in view.read_events::<ScrollState>() {
             session.latest_ratio = s.ratio.clamp(0.0, 1.0);
+            session.state.set_heading_count(s.heading_count);
             session
                 .state
                 .set_current_heading_index(s.current_heading_index);
@@ -552,7 +557,7 @@ fn event_loop(
         session.expire_toast(Instant::now());
         session.sync_chrome(view, chrome_stale);
         terminal.draw(|f| {
-            ui::draw(f, &mut orzma.frame(), &session.state, &view.instance_id());
+            ui::draw(f, &mut orzma.frame(), &view.instance_id());
         })?;
 
         if event::poll(Duration::from_millis(33))?
