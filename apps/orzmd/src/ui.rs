@@ -1,4 +1,4 @@
-//! Native ratatui chrome around the webview preview.
+//! Native ratatui chrome around the webview preview: the outline panel and the search line.
 
 use crate::app::App;
 use crate::keymap::Mode;
@@ -6,70 +6,31 @@ use crate::protocol::SearchCount;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui_orzma::{FramePlacements, WebviewWidget};
 
-/// Whether live-reload is currently healthy.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum LiveStatus {
-    /// Watching the file; updates flowing.
-    Watching,
-    /// The file is missing (deleted); last content retained.
-    Missing,
-}
-
-/// Draws the whole frame: status line, optional outline panel + webview, and the
-/// optional search line.
+/// Draws the whole frame: the optional outline panel beside the webview, and
+/// the optional search line.
 pub(crate) fn draw(
     frame: &mut Frame<'_>,
     placements: &mut FramePlacements,
     app: &App,
     instance_id: &str,
-    file_name: &str,
-    live: LiveStatus,
-    scroll_percent: u16,
     search: Option<SearchCount>,
-    flash: Option<&str>,
 ) {
     let search_open = app.mode() == Mode::Search || app.search_active();
     let vchunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(if search_open { 1 } else { 0 }),
         ])
         .split(frame.area());
 
-    draw_status(frame, vchunks[0], file_name, live, scroll_percent, flash);
-    draw_body(frame, placements, vchunks[1], app, instance_id);
+    draw_body(frame, placements, vchunks[0], app, instance_id);
     if search_open {
-        draw_search(frame, vchunks[2], app, search);
+        draw_search(frame, vchunks[1], app, search);
     }
-}
-
-fn draw_status(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    file_name: &str,
-    live: LiveStatus,
-    scroll_percent: u16,
-    flash: Option<&str>,
-) {
-    let dot = match live {
-        LiveStatus::Watching => "● live",
-        LiveStatus::Missing => "○ missing",
-    };
-    let base = format!("orzmd · {file_name}    {dot}    {scroll_percent}%");
-    let line = match flash {
-        Some(msg) => Line::from(format!("{base}    {msg}")),
-        None => Line::from(base),
-    };
-    frame.render_widget(
-        Paragraph::new(line).style(Style::default().add_modifier(Modifier::REVERSED)),
-        area,
-    );
 }
 
 fn draw_body(

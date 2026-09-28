@@ -1,6 +1,7 @@
 //! The pure App state machine. `on_action` is the single entry point; it
 //! returns the side-effect [`Cmd`]s for `main.rs` to execute. No SDK or I/O here.
 
+use crate::chrome::SearchStage;
 use crate::keymap::{Action, Mode};
 use crate::outline::Heading;
 use crate::protocol::{ScrollAction, SearchDir};
@@ -48,32 +49,32 @@ pub(crate) struct App {
 
 impl App {
     /// The current input mode.
-    pub(crate) fn mode(&self) -> Mode {
+    pub fn mode(&self) -> Mode {
         self.mode
     }
 
     /// Whether the outline panel is open.
-    pub(crate) fn outline_open(&self) -> bool {
+    pub fn outline_open(&self) -> bool {
         self.outline_open
     }
 
     /// The selected outline index.
-    pub(crate) fn selected(&self) -> usize {
+    pub fn selected(&self) -> usize {
         self.outline_selected
     }
 
     /// The current search query buffer.
-    pub(crate) fn query(&self) -> &str {
+    pub fn query(&self) -> &str {
         &self.search_query
     }
 
     /// The headings to draw in the outline panel.
-    pub(crate) fn outline(&self) -> &[Heading] {
+    pub fn outline(&self) -> &[Heading] {
         &self.outline
     }
 
     /// Replaces the outline (called after a (re)load), clamping the selection.
-    pub(crate) fn set_outline(&mut self, outline: Vec<Heading>) {
+    pub fn set_outline(&mut self, outline: Vec<Heading>) {
         self.outline = outline;
         if self.outline_selected >= self.outline.len() {
             self.outline_selected = self.outline.len().saturating_sub(1);
@@ -81,17 +82,34 @@ impl App {
     }
 
     /// Records the heading index nearest the viewport top (from `scrollState`).
-    pub(crate) fn set_current_heading_index(&mut self, index: Option<usize>) {
+    pub fn set_current_heading_index(&mut self, index: Option<usize>) {
         self.current_heading_index = index;
     }
 
     /// Whether a search is active (matches highlighted, awaiting clear).
-    pub(crate) fn search_active(&self) -> bool {
+    pub fn search_active(&self) -> bool {
         self.search_active
     }
 
+    /// The first key of a pending two-key chord (`g`, `[`, `]`), if any.
+    pub fn pending_key(&self) -> Option<char> {
+        self.pending_prefix
+    }
+
+    /// The search stage the page shows: `Typing` while a query is being
+    /// typed, `Active` while confirmed matches are highlighted, else `Closed`.
+    pub fn search_stage(&self) -> SearchStage {
+        if self.mode == Mode::Search {
+            SearchStage::Typing
+        } else if self.search_active {
+            SearchStage::Active
+        } else {
+            SearchStage::Closed
+        }
+    }
+
     /// Processes an [`Action`], returning the side effects to perform.
-    pub(crate) fn on_action(&mut self, action: Action) -> Vec<Cmd> {
+    pub fn on_action(&mut self, action: Action) -> Vec<Cmd> {
         if let Some(prefix) = self.pending_prefix.take()
             && let Action::Prefix(c) = action
             && c == prefix
@@ -184,7 +202,7 @@ impl App {
     }
 
     /// Clears search state when the viewed document changes (matches/bar are stale).
-    pub(crate) fn clear_search_state(&mut self) {
+    pub fn clear_search_state(&mut self) {
         self.search_active = false;
         self.search_query.clear();
         if self.mode == Mode::Search {
@@ -196,7 +214,7 @@ impl App {
     /// Records a focus change the host reported for the page. A page that
     /// gains focus during a search cancels the typed query, keeping the
     /// previous search.
-    pub(crate) fn on_focus_change(&mut self, focused: bool) {
+    pub fn on_focus_change(&mut self, focused: bool) {
         self.page_focused = focused;
         if focused && self.mode == Mode::Search {
             self.mode = Mode::Normal;
