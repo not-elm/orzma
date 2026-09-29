@@ -6,7 +6,7 @@ use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled, WebviewMouseDisabled};
 use crate::input::mouse::TerminalSurfaces;
 use crate::input::mouse::separator::{GrabbedSeparator, SeparatorHit, SeparatorNodes};
-use crate::input::{InputPhase, current_modifiers};
+use crate::input::{InputPhase, current_modifiers, link_modifier_held};
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::topmost_surface_at;
 use crate::surface::geometry::{cell_at_local, cell_pitch_phys, phys_to_pane_local};
@@ -22,7 +22,6 @@ use bevy_orzma_tty_renderer::prelude::{
     HyperlinkHoverState, TerminalCellMetricsResource, TerminalCells, TerminalView,
 };
 use bevy_orzmux::prelude::{OrzmuxSeparator, PaneGeometry, SplitOrientation};
-use orzma_configs::shortcuts::Modifiers;
 use orzma_vt::prelude::{GridColumn, ViewportLine, ViewportPoint};
 
 /// Adds hyperlink hover detection and cursor-icon control for every
@@ -40,28 +39,6 @@ impl Plugin for HyperlinkInputPlugin {
                     .run_if(hover_needs_refresh())
                     .in_set(InputPhase::Hover),
             );
-    }
-}
-
-/// Returns `true` when the platform's hyperlink-activation modifier is
-/// currently held: Cmd (`meta`) on macOS, Ctrl elsewhere.
-pub(crate) fn link_modifier_held(mods: &Modifiers) -> bool {
-    if cfg!(target_os = "macos") {
-        mods.meta
-    } else {
-        mods.ctrl
-    }
-}
-
-/// Test-only input: presses the platform's hyperlink-activation modifier
-/// in `app`'s keyboard state.
-#[cfg(test)]
-pub(crate) fn hold_link_modifier(app: &mut App) {
-    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-    if cfg!(target_os = "macos") {
-        keys.press(KeyCode::SuperLeft);
-    } else {
-        keys.press(KeyCode::ControlLeft);
     }
 }
 
@@ -385,40 +362,12 @@ fn watch_primary_window_cursor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::hold_link_modifier;
     use bevy_orzmux::prelude::SplitId;
     use orzma_vt::prelude::{DetectedUrl, HyperlinkId, HyperlinkUri};
 
-    fn empty() -> Modifiers {
-        Modifiers::default()
-    }
-
     fn id(value: u32) -> HyperlinkId {
         HyperlinkId::new(value).expect("nonzero")
-    }
-
-    #[test]
-    fn link_modifier_held_returns_false_when_no_modifier() {
-        assert!(!link_modifier_held(&empty()));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn link_modifier_held_macos_requires_meta() {
-        let mut mods = empty();
-        mods.ctrl = true;
-        assert!(!link_modifier_held(&mods));
-        mods.meta = true;
-        assert!(link_modifier_held(&mods));
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn link_modifier_held_non_macos_requires_ctrl() {
-        let mut mods = empty();
-        mods.meta = true;
-        assert!(!link_modifier_held(&mods));
-        mods.ctrl = true;
-        assert!(link_modifier_held(&mods));
     }
 
     #[test]

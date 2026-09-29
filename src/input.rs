@@ -75,3 +75,70 @@ pub(crate) fn current_modifiers(keys: &ButtonInput<KeyCode>) -> Modifiers {
         meta: keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight),
     }
 }
+
+/// Returns `true` when the platform's hyperlink-activation modifier is
+/// currently held: Cmd (`meta`) on macOS, Ctrl elsewhere.
+fn link_modifier_held(mods: &Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        mods.meta
+    } else {
+        mods.ctrl
+    }
+}
+
+/// Test-only input: presses the platform's hyperlink-activation modifier
+/// in `app`'s keyboard state.
+#[cfg(test)]
+fn hold_link_modifier(app: &mut App) {
+    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+    if cfg!(target_os = "macos") {
+        keys.press(KeyCode::SuperLeft);
+    } else {
+        keys.press(KeyCode::ControlLeft);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty() -> Modifiers {
+        Modifiers::default()
+    }
+
+    /// Asserts that the link modifier reads as released while no modifier
+    /// key is held.
+    ///
+    /// Case: the user moves the pointer over a URL without holding any key.
+    #[test]
+    fn link_modifier_held_returns_false_when_no_modifier() {
+        assert!(!link_modifier_held(&empty()));
+    }
+
+    /// Asserts that on macOS the link modifier is Cmd, not Ctrl.
+    ///
+    /// Case: a macOS user holds Ctrl over a URL, then adds Cmd.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn link_modifier_held_macos_requires_meta() {
+        let mut mods = empty();
+        mods.ctrl = true;
+        assert!(!link_modifier_held(&mods));
+        mods.meta = true;
+        assert!(link_modifier_held(&mods));
+    }
+
+    /// Asserts that off macOS the link modifier is Ctrl, not the Super key.
+    ///
+    /// Case: a Linux or Windows user holds the Super key over a URL, then
+    /// adds Ctrl.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn link_modifier_held_non_macos_requires_ctrl() {
+        let mut mods = empty();
+        mods.meta = true;
+        assert!(!link_modifier_held(&mods));
+        mods.ctrl = true;
+        assert!(link_modifier_held(&mods));
+    }
+}

@@ -9,8 +9,8 @@ use super::{
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::current_modifiers;
 use crate::input::focus::PaneClicked;
-use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
+use crate::input::link_modifier_held;
 use crate::input::mouse::MousePhase;
 use crate::input::mouse::gesture::{HeldPointer, OrzmaMouseGesture};
 use crate::input::mouse::separator::GrabbedSeparator;
@@ -440,7 +440,7 @@ mod tests {
     use super::*;
     use crate::action::terminal::TerminalOpenUri;
     use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled};
-    use crate::input::hyperlink::hold_link_modifier;
+    use crate::input::hold_link_modifier;
     use crate::input::mouse::test_support::{set_phys_cursor, test_metrics};
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::message::Messages;
