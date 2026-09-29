@@ -79,7 +79,8 @@ before the `[vi-mode]` keys and keeps firing while held.
 
 Earlier releases wrote a repeatable leader binding as `<Leader:r>x`. That
 spelling is not accepted: a configuration that still uses it is ignored as a
-whole (see [Validation](configuration.md#validation)), so rewrite `<Leader:r>x`
+whole — orzma warns and starts with defaults (see
+[Validation](configuration.md#validation)), so rewrite `<Leader:r>x`
 as `r:<Leader>x` when you upgrade. A direct chord you bound yourself also stops
 repeating while held until you add `r:` to it.
 
