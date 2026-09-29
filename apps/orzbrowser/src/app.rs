@@ -53,6 +53,10 @@ pub(crate) enum Cmd {
     Quit,
     /// Replace the forward keys of the given webview with the given set.
     SetForwardKeys(Target, KeySet),
+    /// Turn the page preload's scroll keys on or off.
+    SetPageScrollKeys(bool),
+    /// Take focus from the page's focused text field.
+    BlurPageInput,
     /// Give the given webview keyboard focus.
     Focus(Target),
     /// Take keyboard focus back from either webview to the TUI.
@@ -69,11 +73,12 @@ pub(crate) struct App {
     address_epoch: u32,
     holder: Option<Target>,
     awaiting: Option<Target>,
-    refocus_page: bool,
+    pane_focused: bool,
     page_placed: bool,
     chrome_ready: bool,
     page_keys: KeySet,
     chrome_keys: KeySet,
+    page_scroll_keys: bool,
 }
 
 impl App {
@@ -87,11 +92,12 @@ impl App {
             address_epoch: 0,
             holder: None,
             awaiting: None,
-            refocus_page: false,
+            pane_focused: true,
             page_placed: true,
             chrome_ready: false,
             page_keys: KeySet::Normal,
             chrome_keys: KeySet::Normal,
+            page_scroll_keys: true,
         }
     }
 
@@ -104,6 +110,7 @@ impl App {
             address_epoch: 1,
             awaiting: Some(Target::Chrome),
             chrome_keys: KeySet::Empty,
+            page_scroll_keys: false,
             ..Self::new(url)
         }
     }
@@ -149,6 +156,25 @@ impl App {
     /// leaving a text mode gives the keyboard to the TUI instead of the page.
     pub fn set_page_placed(&mut self, placed: bool) {
         self.page_placed = placed;
+    }
+
+    /// Whether the page's preload should handle the scroll keys: in Normal
+    /// mode while the pane holds the keyboard.
+    pub fn page_scroll_keys(&self) -> bool {
+        self.mode == Mode::Normal && self.pane_focused
+    }
+
+    /// Records whether orzbrowser's pane holds the keyboard. In Normal mode a
+    /// gain gives the page keyboard focus; while the pane lacks the keyboard,
+    /// the page is never asked for focus.
+    pub fn on_pane_focus(&mut self, focused: bool) -> Vec<Cmd> {
+        self.pane_focused = focused;
+        let cmds = if focused {
+            self.claim_page_focus()
+        } else {
+            vec![]
+        };
+        self.with_key_sets(cmds)
     }
 
     /// Processes an [`Action`] and returns the side effects to perform.
@@ -197,7 +223,8 @@ impl App {
     /// While a focus request of this app is unanswered, no mode is cancelled.
     /// Otherwise a chrome that lost focus closes the address bar, a page that
     /// lost focus leaves Insert mode, and a gain on either webview cancels
-    /// Hint and Help.
+    /// Hint and Help. In Normal mode a chrome that gained focus hands it to
+    /// the page, even while a request is unanswered.
     pub fn on_focus_drain(&mut self, drain: FocusDrain) -> Vec<Cmd> {
         if drain.is_empty() {
             return vec![];
@@ -209,28 +236,14 @@ impl App {
         {
             self.awaiting = None;
         }
-        if self.awaiting.is_some() {
-            return vec![];
-        }
-        let cmds = match self.mode {
-            Mode::Address if self.holder != Some(Target::Chrome) => {
-                self.mode = Mode::Normal;
-                vec![]
-            }
-            Mode::Insert if self.holder != Some(Target::Page) => {
-                self.mode = Mode::Normal;
-                vec![]
-            }
-            Mode::Hint if drain.saw_any_true() => {
-                self.mode = Mode::Normal;
-                vec![Cmd::HintHide]
-            }
-            Mode::Help if drain.saw_any_true() => {
-                self.mode = Mode::Normal;
-                vec![]
-            }
-            _ => vec![],
+        let mut cmds = if self.awaiting.is_some() {
+            vec![]
+        } else {
+            self.cancel_modes_after(&drain)
         };
+        if self.mode == Mode::Normal && self.holder == Some(Target::Chrome) {
+            cmds.extend(self.claim_page_focus());
+        }
         self.with_key_sets(cmds)
     }
 
@@ -269,10 +282,7 @@ impl App {
         self.with_key_sets(cmds)
     }
 
-    /// Applies a `hintResult` reported by the page: a hint that focused a
-    /// form field switches to Insert mode with the page focused; any other
-    /// result returns to Normal, refocusing the page if it held focus when
-    /// Hint mode began. A no-op outside Hint mode.
+    /// Applies a `hintResult` reported by the page: a hint that focused a form field switches to Insert mode with the page focused; any other result returns to Normal with the page focused. A no-op outside Hint mode.
     pub fn on_hint_result(&mut self, kind: &str) -> Vec<Cmd> {
         if self.mode != Mode::Hint {
             return vec![];
@@ -282,7 +292,7 @@ impl App {
             vec![self.request_focus(Target::Page)]
         } else {
             self.mode = Mode::Normal;
-            self.take_refocus().into_iter().collect()
+            vec![self.normal_focus()]
         };
         self.with_key_sets(cmds)
     }
@@ -290,6 +300,28 @@ impl App {
     /// Records a page-driven URL change reported via `urlChanged`.
     pub fn on_page_url_changed(&mut self, url: String) {
         self.url = url;
+    }
+
+    fn cancel_modes_after(&mut self, drain: &FocusDrain) -> Vec<Cmd> {
+        match self.mode {
+            Mode::Address if self.holder != Some(Target::Chrome) => {
+                self.mode = Mode::Normal;
+                vec![]
+            }
+            Mode::Insert if self.holder != Some(Target::Page) => {
+                self.mode = Mode::Normal;
+                vec![]
+            }
+            Mode::Hint if drain.saw_any_true() => {
+                self.mode = Mode::Normal;
+                vec![Cmd::HintHide]
+            }
+            Mode::Help if drain.saw_any_true() => {
+                self.mode = Mode::Normal;
+                vec![]
+            }
+            _ => vec![],
+        }
     }
 
     fn chrome_ready(&mut self) -> Vec<Cmd> {
@@ -310,7 +342,6 @@ impl App {
 
     fn open_address(&mut self) -> Vec<Cmd> {
         self.mode = Mode::Address;
-        self.refocus_page = self.holder == Some(Target::Page);
         self.seed = self.url.clone();
         self.address_epoch = self.address_epoch.wrapping_add(1);
         if self.chrome_ready {
@@ -323,7 +354,7 @@ impl App {
 
     fn leave_address(&mut self, navigate: Option<Cmd>) -> Vec<Cmd> {
         self.mode = Mode::Normal;
-        let focus = self.take_refocus().unwrap_or_else(|| self.blur());
+        let focus = self.normal_focus();
         navigate.into_iter().chain([focus]).collect()
     }
 
@@ -339,17 +370,15 @@ impl App {
             Mode::Address => self.leave_address(None),
             Mode::Insert => {
                 self.mode = Mode::Normal;
-                vec![self.blur()]
+                vec![Cmd::BlurPageInput, self.normal_focus()]
             }
             Mode::Hint => {
                 self.mode = Mode::Normal;
-                let mut cmds = vec![Cmd::HintHide];
-                cmds.extend(self.take_refocus());
-                cmds
+                vec![Cmd::HintHide, self.normal_focus()]
             }
             Mode::Help => {
                 self.mode = Mode::Normal;
-                self.take_refocus().into_iter().collect()
+                vec![self.normal_focus()]
             }
             Mode::Normal => vec![],
         }
@@ -377,19 +406,34 @@ impl App {
         vec![self.enter_text_mode(Mode::Help)]
     }
 
-    /// Enters Hint or Help, remembering whether the page held focus, and
-    /// returns the `Blur` that takes the keyboard from the webviews.
+    /// Enters Hint or Help and returns the `Blur` that takes the keyboard from the webviews.
     fn enter_text_mode(&mut self, mode: Mode) -> Cmd {
         self.mode = mode;
-        self.refocus_page = self.holder == Some(Target::Page);
         self.blur()
     }
 
-    /// The command that refocuses the page when it held focus when the current
-    /// mode began and still has rows, clearing the flag.
-    fn take_refocus(&mut self) -> Option<Cmd> {
-        let refocus = mem::take(&mut self.refocus_page) && self.page_placed;
-        refocus.then(|| self.request_focus(Target::Page))
+    /// The focus for entering Normal mode: the page when it has rows and the
+    /// pane holds the keyboard, otherwise the TUI.
+    fn normal_focus(&mut self) -> Cmd {
+        if self.page_placed && self.pane_focused {
+            self.request_focus(Target::Page)
+        } else {
+            self.blur()
+        }
+    }
+
+    /// Asks for page focus when Normal mode should give the page the keyboard
+    /// but the page does not hold it.
+    fn claim_page_focus(&mut self) -> Vec<Cmd> {
+        let claim = self.mode == Mode::Normal
+            && self.pane_focused
+            && self.page_placed
+            && self.holder != Some(Target::Page);
+        if claim {
+            vec![self.request_focus(Target::Page)]
+        } else {
+            vec![]
+        }
     }
 
     /// Returns the command that focuses `target`, waiting for its gain unless
@@ -408,8 +452,9 @@ impl App {
         Cmd::Blur
     }
 
-    /// Puts a `SetForwardKeys` first in `cmds` for each webview whose key set
-    /// the current mode changes.
+    /// Puts the commands that sync the webviews with the current mode first
+    /// in `cmds`: whether the page's preload handles the scroll keys, then a
+    /// `SetForwardKeys` for each webview whose key set the mode changes.
     fn with_key_sets(&mut self, mut cmds: Vec<Cmd>) -> Vec<Cmd> {
         let chrome = KeySet::for_chrome(self.mode);
         if chrome != self.chrome_keys {
@@ -420,6 +465,11 @@ impl App {
         if page != self.page_keys {
             self.page_keys = page;
             cmds.insert(0, Cmd::SetForwardKeys(Target::Page, page));
+        }
+        let scroll_keys = self.page_scroll_keys();
+        if scroll_keys != self.page_scroll_keys {
+            self.page_scroll_keys = scroll_keys;
+            cmds.insert(0, Cmd::SetPageScrollKeys(scroll_keys));
         }
         cmds
     }
@@ -515,8 +565,9 @@ mod tests {
         assert_eq!(a.on_action(Action::Quit), vec![Cmd::Quit]);
     }
 
-    /// Asserts that opening the address bar empties the chrome's forward keys,
-    /// focuses the chrome, and seeds the input with the current URL.
+    /// Asserts that opening the address bar turns the page's scroll keys off,
+    /// empties the chrome's forward keys, focuses the chrome, and seeds the
+    /// input with the current URL.
     ///
     /// Case: the user presses `o` to type a new address.
     #[test]
@@ -524,7 +575,11 @@ mod tests {
         let mut a = ready_app();
         assert_eq!(
             a.on_action(Action::OpenAddress),
-            vec![chrome_keys(KeySet::Empty), Cmd::Focus(Target::Chrome)]
+            vec![
+                Cmd::SetPageScrollKeys(false),
+                chrome_keys(KeySet::Empty),
+                Cmd::Focus(Target::Chrome)
+            ]
         );
         assert_eq!(a.mode(), Mode::Address);
         assert_eq!(a.seed(), URL);
@@ -541,7 +596,7 @@ mod tests {
         let mut a = app();
         assert_eq!(
             a.on_action(Action::OpenAddress),
-            vec![chrome_keys(KeySet::Empty)]
+            vec![Cmd::SetPageScrollKeys(false), chrome_keys(KeySet::Empty)]
         );
         assert_eq!(
             a.on_chrome_event(ChromeEvent::Ready),
@@ -570,21 +625,23 @@ mod tests {
         assert_eq!(a.mode(), Mode::Address);
     }
 
-    /// Asserts that submitting an address or a search navigates, returns the
-    /// chrome keys, and gives the keyboard back to the TUI.
+    /// Asserts that submitting an address or a search navigates, turns the
+    /// page's scroll keys back on, returns the chrome keys, and gives the
+    /// keyboard to the page.
     ///
     /// Case: the user types a domain, and later a phrase, and presses Enter.
     #[test]
-    fn submitting_navigates_and_returns_the_keyboard() {
+    fn submitting_navigates_and_focuses_the_page() {
         let mut a = ready_app();
         a.on_action(Action::OpenAddress);
         a.on_focus_drain(drain(&[], &[true]));
         assert_eq!(
             a.on_address_target(AddressTarget::Open("https://docs.rs/".to_owned())),
             vec![
+                Cmd::SetPageScrollKeys(true),
                 chrome_keys(KeySet::Normal),
                 Cmd::Navigate("https://docs.rs/".to_owned()),
-                Cmd::Blur
+                Cmd::Focus(Target::Page)
             ]
         );
         assert_eq!(a.mode(), Mode::Normal);
@@ -594,9 +651,10 @@ mod tests {
         assert_eq!(
             a.on_address_target(AddressTarget::Search(search.clone())),
             vec![
+                Cmd::SetPageScrollKeys(true),
                 chrome_keys(KeySet::Normal),
                 Cmd::Navigate(search),
-                Cmd::Blur
+                Cmd::Focus(Target::Page)
             ]
         );
     }
@@ -612,12 +670,21 @@ mod tests {
         a.on_action(Action::OpenAddress);
         assert_eq!(
             a.on_address_target(AddressTarget::Open(URL.to_owned())),
-            vec![chrome_keys(KeySet::Normal), Cmd::Reload, Cmd::Blur]
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                chrome_keys(KeySet::Normal),
+                Cmd::Reload,
+                Cmd::Focus(Target::Page)
+            ]
         );
         a.on_action(Action::OpenAddress);
         assert_eq!(
             a.on_address_target(AddressTarget::Empty),
-            vec![chrome_keys(KeySet::Normal), Cmd::Blur]
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                chrome_keys(KeySet::Normal),
+                Cmd::Focus(Target::Page)
+            ]
         );
     }
 
@@ -642,27 +709,40 @@ mod tests {
         );
     }
 
-    /// Asserts that closing the address bar gives the keyboard back to a page
-    /// that held it when the bar opened.
+    /// Asserts that closing the address bar gives the keyboard to the page,
+    /// whether or not the page held it when the bar opened.
     ///
-    /// Case: the user clicks the page, presses `o`, and presses Esc.
+    /// Case: the user presses `o` right after launch and presses Esc; later
+    /// the user clicks the page, presses `o`, and presses Esc.
     #[test]
-    fn closing_the_address_bar_refocuses_a_page_that_held_focus() {
+    fn closing_the_address_bar_focuses_the_page() {
         let mut a = ready_app();
-        a.on_focus_drain(drain(&[true], &[]));
-        assert_eq!(
-            a.on_action(Action::OpenAddress),
-            vec![chrome_keys(KeySet::Empty), Cmd::Focus(Target::Chrome)]
-        );
-        assert_eq!(a.on_focus_drain(drain(&[false], &[true])), vec![]);
+        a.on_action(Action::OpenAddress);
         assert_eq!(
             a.on_chrome_event(ChromeEvent::Cancel),
-            vec![chrome_keys(KeySet::Normal), Cmd::Focus(Target::Page)]
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                chrome_keys(KeySet::Normal),
+                Cmd::Focus(Target::Page)
+            ]
+        );
+
+        let mut a = ready_app();
+        a.on_focus_drain(drain(&[true], &[]));
+        a.on_action(Action::OpenAddress);
+        a.on_focus_drain(drain(&[false], &[true]));
+        assert_eq!(
+            a.on_chrome_event(ChromeEvent::Cancel),
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                chrome_keys(KeySet::Normal),
+                Cmd::Focus(Target::Page)
+            ]
         );
     }
 
-    /// Asserts that closing the address bar blurs instead of refocusing a
-    /// page that has no rows.
+    /// Asserts that closing the address bar blurs instead of focusing a page
+    /// that has no rows.
     ///
     /// Case: the user clicks the page, presses `o`, shrinks the pane to two
     /// rows, and presses Esc.
@@ -675,7 +755,11 @@ mod tests {
         a.set_page_placed(false);
         assert_eq!(
             a.on_chrome_event(ChromeEvent::Cancel),
-            vec![chrome_keys(KeySet::Normal), Cmd::Blur]
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                chrome_keys(KeySet::Normal),
+                Cmd::Blur
+            ]
         );
     }
 
@@ -698,7 +782,7 @@ mod tests {
         assert_eq!(a.mode(), Mode::Address);
         assert_eq!(
             a.on_focus_drain(drain(&[true], &[false])),
-            vec![chrome_keys(KeySet::Normal)]
+            vec![Cmd::SetPageScrollKeys(true), chrome_keys(KeySet::Normal)]
         );
         assert_eq!(a.mode(), Mode::Normal);
     }
@@ -715,30 +799,13 @@ mod tests {
         a.on_focus_drain(drain(&[], &[true]));
         assert_eq!(
             a.on_focus_drain(drain(&[true], &[])),
-            vec![chrome_keys(KeySet::Normal)]
-        );
-        assert_eq!(a.mode(), Mode::Normal);
-    }
-
-    /// Asserts that opening the address bar while the chrome already holds
-    /// focus does not wait for a gain, so a later click on the page closes it.
-    ///
-    /// Case: the user clicks the chrome outside the omnibox, presses `o`, and
-    /// then clicks the page.
-    #[test]
-    fn opening_the_address_bar_from_a_focused_chrome_does_not_wait() {
-        let mut a = ready_app();
-        a.on_focus_drain(drain(&[], &[true]));
-        a.on_action(Action::OpenAddress);
-        assert_eq!(
-            a.on_focus_drain(drain(&[true], &[false])),
-            vec![chrome_keys(KeySet::Normal)]
+            vec![Cmd::SetPageScrollKeys(true), chrome_keys(KeySet::Normal)]
         );
         assert_eq!(a.mode(), Mode::Normal);
     }
 
     /// Asserts that a key reaching the TUI in the address bar refocuses the
-    /// chrome, and that Esc there closes the address bar.
+    /// chrome, and that Esc there closes the address bar and focuses the page.
     ///
     /// Case: the user types right after pressing `o`, then presses Esc before
     /// the chrome takes the keyboard.
@@ -753,7 +820,11 @@ mod tests {
         );
         assert_eq!(
             a.on_action(Action::Escape),
-            vec![chrome_keys(KeySet::Normal), Cmd::Blur]
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                chrome_keys(KeySet::Normal),
+                Cmd::Focus(Target::Page)
+            ]
         );
         assert_eq!(a.mode(), Mode::Normal);
     }
@@ -762,20 +833,21 @@ mod tests {
     /// focus does not wait for a gain, so a later click on the page closes the
     /// address bar.
     ///
-    /// Case: the user clicks the chrome, presses `o`, and types `j` before the
-    /// chrome's forward keys change, then clicks the page.
+    /// Case: the user presses `o`, the chrome takes the keyboard, a `j` typed
+    /// before the chrome's forward keys changed reaches the TUI, and the user
+    /// then clicks the page.
     #[test]
     fn refocusing_a_focused_chrome_does_not_wait() {
         let mut a = ready_app();
-        a.on_focus_drain(drain(&[], &[true]));
         a.on_action(Action::OpenAddress);
+        a.on_focus_drain(drain(&[], &[true]));
         assert_eq!(
             a.on_action(Action::RefocusChrome),
             vec![Cmd::Focus(Target::Chrome)]
         );
         assert_eq!(
             a.on_focus_drain(drain(&[true], &[false])),
-            vec![chrome_keys(KeySet::Normal)]
+            vec![Cmd::SetPageScrollKeys(true), chrome_keys(KeySet::Normal)]
         );
         assert_eq!(a.mode(), Mode::Normal);
     }
@@ -803,7 +875,11 @@ mod tests {
         let mut a = ready_app();
         assert_eq!(
             a.on_chrome_event(ChromeEvent::OpenAddress),
-            vec![chrome_keys(KeySet::Empty), Cmd::Focus(Target::Chrome)]
+            vec![
+                Cmd::SetPageScrollKeys(false),
+                chrome_keys(KeySet::Empty),
+                Cmd::Focus(Target::Chrome)
+            ]
         );
         let mut a = ready_app();
         a.on_action(Action::EnterInsert);
@@ -826,26 +902,38 @@ mod tests {
         assert_eq!(a.url(), "https://example.com/next");
     }
 
-    /// Asserts that Insert mode hands the keyboard to the page with Esc as its
-    /// only forward key, and takes it back on Esc.
+    /// Asserts that Insert mode turns the page's scroll keys off and hands the
+    /// keyboard to the page with Esc as its only forward key, and that Esc
+    /// turns them back on, takes focus from the page's text field, and keeps
+    /// the page focused.
     ///
     /// Case: the user presses `i` to type into a search box, then Esc.
     #[test]
-    fn insert_mode_hands_the_keyboard_to_the_page_and_back() {
+    fn insert_mode_hands_the_keyboard_to_the_page_and_esc_keeps_it() {
         let mut a = app();
         assert_eq!(
             a.on_action(Action::EnterInsert),
-            vec![page_keys(KeySet::Insert), Cmd::Focus(Target::Page)]
+            vec![
+                Cmd::SetPageScrollKeys(false),
+                page_keys(KeySet::Insert),
+                Cmd::Focus(Target::Page)
+            ]
         );
         assert_eq!(
             a.on_action(Action::Escape),
-            vec![page_keys(KeySet::Normal), Cmd::Blur]
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                page_keys(KeySet::Normal),
+                Cmd::BlurPageInput,
+                Cmd::Focus(Target::Page)
+            ]
         );
         assert_eq!(a.mode(), Mode::Normal);
     }
 
     /// Asserts that Insert mode waits for the page's gain, then returns to
-    /// Normal when the chrome takes focus.
+    /// Normal when the chrome takes focus and hands the keyboard back to the
+    /// page.
     ///
     /// Case: the user presses `i`, then clicks the chrome.
     #[test]
@@ -856,7 +944,11 @@ mod tests {
         assert_eq!(a.mode(), Mode::Insert);
         assert_eq!(
             a.on_focus_drain(drain(&[false], &[true])),
-            vec![page_keys(KeySet::Normal)]
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                page_keys(KeySet::Normal),
+                Cmd::Focus(Target::Page)
+            ]
         );
         assert_eq!(a.mode(), Mode::Normal);
     }
@@ -876,7 +968,9 @@ mod tests {
         assert_eq!(a.mode(), Mode::Normal);
     }
 
-    /// Asserts that Hint and Help take the keyboard back from the webviews.
+    /// Asserts that Hint and Help turn the page's scroll keys off before
+    /// anything else and take the keyboard back from the webviews, and that
+    /// leaving Hint gives it to the page.
     ///
     /// Case: the user presses `f`, cancels, and presses `?`.
     #[test]
@@ -884,14 +978,25 @@ mod tests {
         let mut a = app();
         assert_eq!(
             a.on_action(Action::EnterHint),
-            vec![Cmd::HintShow, Cmd::Blur]
+            vec![Cmd::SetPageScrollKeys(false), Cmd::HintShow, Cmd::Blur]
         );
-        assert_eq!(a.on_action(Action::Escape), vec![Cmd::HintHide]);
-        assert_eq!(a.on_action(Action::OpenHelp), vec![Cmd::Blur]);
+        assert_eq!(
+            a.on_action(Action::Escape),
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                Cmd::HintHide,
+                Cmd::Focus(Target::Page)
+            ]
+        );
+        assert_eq!(
+            a.on_action(Action::OpenHelp),
+            vec![Cmd::SetPageScrollKeys(false), Cmd::Blur]
+        );
         assert_eq!(a.mode(), Mode::Help);
     }
 
-    /// Asserts that a click on either webview cancels Hint and Help.
+    /// Asserts that a click on either webview cancels Hint and Help, and that
+    /// a click on the chrome hands the keyboard to the page.
     ///
     /// Case: the user clicks the chrome while picking a hint, and clicks the
     /// page while reading the help.
@@ -899,15 +1004,26 @@ mod tests {
     fn a_click_cancels_hint_and_help() {
         let mut a = app();
         a.on_action(Action::EnterHint);
-        assert_eq!(a.on_focus_drain(drain(&[], &[true])), vec![Cmd::HintHide]);
+        assert_eq!(
+            a.on_focus_drain(drain(&[], &[true])),
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                Cmd::HintHide,
+                Cmd::Focus(Target::Page)
+            ]
+        );
         assert_eq!(a.mode(), Mode::Normal);
         a.on_action(Action::OpenHelp);
-        assert_eq!(a.on_focus_drain(drain(&[true], &[])), vec![]);
+        assert_eq!(
+            a.on_focus_drain(drain(&[true], &[])),
+            vec![Cmd::SetPageScrollKeys(true)]
+        );
         assert_eq!(a.mode(), Mode::Normal);
     }
 
     /// Asserts that a hint on a form field enters Insert mode, other hints
-    /// return to Normal, and a result after leaving Hint is ignored.
+    /// return to Normal with the page focused, and a result after leaving Hint
+    /// is ignored.
     ///
     /// Case: the user follows a hint onto a text input, onto a link, and
     /// presses Esc just before the page reports a hint.
@@ -924,7 +1040,11 @@ mod tests {
         for kind in ["navigated", "clicked", "empty"] {
             let mut a = app();
             a.on_action(Action::EnterHint);
-            assert_eq!(a.on_hint_result(kind), vec![], "{kind}");
+            assert_eq!(
+                a.on_hint_result(kind),
+                vec![Cmd::SetPageScrollKeys(true), Cmd::Focus(Target::Page)],
+                "{kind}"
+            );
             assert_eq!(a.mode(), Mode::Normal, "{kind}");
         }
 
@@ -935,29 +1055,155 @@ mod tests {
         assert_eq!(a.mode(), Mode::Normal);
     }
 
-    /// Asserts that leaving Hint or Help gives the keyboard back to a page
-    /// that held it.
+    /// Asserts that leaving Hint or Help gives the keyboard to the page.
     ///
-    /// Case: the user clicks the page, then opens the hints or the help and
-    /// leaves each with its own way out.
+    /// Case: the user opens the hints or the help and leaves each with its own
+    /// way out.
     #[test]
-    fn leaving_hint_or_help_refocuses_a_page_that_held_focus() {
+    fn leaving_hint_or_help_focuses_the_page() {
         let mut a = app();
-        a.on_focus_drain(drain(&[true], &[]));
         a.on_action(Action::EnterHint);
         assert_eq!(
             a.on_action(Action::Escape),
-            vec![Cmd::HintHide, Cmd::Focus(Target::Page)]
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                Cmd::HintHide,
+                Cmd::Focus(Target::Page)
+            ]
         );
 
         let mut a = app();
-        a.on_focus_drain(drain(&[true], &[]));
         a.on_action(Action::EnterHint);
-        assert_eq!(a.on_hint_result("clicked"), vec![Cmd::Focus(Target::Page)]);
+        assert_eq!(
+            a.on_hint_result("clicked"),
+            vec![Cmd::SetPageScrollKeys(true), Cmd::Focus(Target::Page)]
+        );
 
         let mut a = app();
-        a.on_focus_drain(drain(&[true], &[]));
         a.on_action(Action::OpenHelp);
-        assert_eq!(a.on_action(Action::Escape), vec![Cmd::Focus(Target::Page)]);
+        assert_eq!(
+            a.on_action(Action::Escape),
+            vec![Cmd::SetPageScrollKeys(true), Cmd::Focus(Target::Page)]
+        );
+    }
+    /// Asserts that a click on the toolbar outside the omnibox hands the
+    /// keyboard back to the page.
+    ///
+    /// Case: the user clicks the mode badge while browsing.
+    #[test]
+    fn a_toolbar_click_in_normal_mode_refocuses_the_page() {
+        let mut a = ready_app();
+        assert_eq!(
+            a.on_focus_drain(drain(&[], &[true])),
+            vec![Cmd::Focus(Target::Page)]
+        );
+        assert_eq!(a.on_focus_drain(drain(&[true], &[false])), vec![]);
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    /// Asserts that a toolbar click hands the keyboard back to the page even
+    /// while a page focus request is still unanswered.
+    ///
+    /// Case: the user closes the hints with Esc and clicks the mode badge
+    /// before the page reports its focus gain.
+    #[test]
+    fn a_toolbar_click_while_the_page_focus_is_pending_refocuses_the_page() {
+        let mut a = ready_app();
+        a.on_action(Action::EnterHint);
+        a.on_action(Action::Escape);
+        assert_eq!(
+            a.on_focus_drain(drain(&[], &[true])),
+            vec![Cmd::Focus(Target::Page)]
+        );
+    }
+
+    /// Asserts that an omnibox click still ends with the chrome focused in the
+    /// address bar when the chrome's gain arrives before the `openAddress`
+    /// report.
+    ///
+    /// Case: the user clicks the omnibox while browsing, and the chrome's
+    /// focus gain lands in the pass before its report.
+    #[test]
+    fn an_omnibox_click_ends_with_the_chrome_focused() {
+        let mut a = ready_app();
+        a.on_focus_drain(drain(&[], &[true]));
+        assert_eq!(
+            a.on_chrome_event(ChromeEvent::OpenAddress),
+            vec![
+                Cmd::SetPageScrollKeys(false),
+                chrome_keys(KeySet::Empty),
+                Cmd::Focus(Target::Chrome)
+            ]
+        );
+        assert_eq!(
+            a.on_focus_drain(drain(&[true, false], &[false, true])),
+            vec![]
+        );
+        assert_eq!(a.mode(), Mode::Address);
+    }
+
+    /// Asserts that Insert mode left because the page lost focus to something
+    /// other than the chrome does not ask for page focus.
+    ///
+    /// Case: the user types into the page in Insert mode and clicks another
+    /// pane.
+    #[test]
+    fn losing_the_page_elsewhere_leaves_insert_without_a_request() {
+        let mut a = app();
+        a.on_action(Action::EnterInsert);
+        a.on_focus_drain(drain(&[true], &[]));
+        assert_eq!(
+            a.on_focus_drain(drain(&[false], &[])),
+            vec![Cmd::SetPageScrollKeys(true), page_keys(KeySet::Normal)]
+        );
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    /// Asserts that leaving a mode while the pane lacks the keyboard blurs
+    /// instead of focusing the page.
+    ///
+    /// Case: the user presses `f`, picks a link, and switches to another pane
+    /// before the page reports the hint.
+    #[test]
+    fn leaving_a_mode_without_the_pane_blurs() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_pane_focus(false), vec![]);
+        assert_eq!(a.on_hint_result("clicked"), vec![Cmd::Blur]);
+    }
+
+    /// Asserts that the pane losing the keyboard turns the page's scroll keys
+    /// off, and that regaining it in Normal mode turns them on and focuses the
+    /// page once.
+    ///
+    /// Case: the user switches to another pane and back with the pane
+    /// shortcuts while browsing.
+    #[test]
+    fn regaining_the_pane_focuses_the_page() {
+        let mut a = app();
+        assert_eq!(a.on_pane_focus(false), vec![Cmd::SetPageScrollKeys(false)]);
+        assert_eq!(
+            a.on_pane_focus(true),
+            vec![Cmd::SetPageScrollKeys(true), Cmd::Focus(Target::Page)]
+        );
+        assert_eq!(a.on_focus_drain(drain(&[true], &[])), vec![]);
+        assert_eq!(a.on_pane_focus(true), vec![]);
+    }
+
+    /// Asserts that the page handles its scroll keys only in Normal mode while
+    /// the pane holds the keyboard.
+    ///
+    /// Case: the user browses, presses `i` to type, presses Esc, and switches
+    /// to another app with a key still down.
+    #[test]
+    fn the_page_scroll_keys_follow_the_mode_and_the_pane() {
+        let mut a = app();
+        assert!(a.page_scroll_keys());
+        a.on_action(Action::EnterInsert);
+        assert!(!a.page_scroll_keys());
+        a.on_action(Action::Escape);
+        assert!(a.page_scroll_keys());
+        a.on_pane_focus(false);
+        assert!(!a.page_scroll_keys());
     }
 }

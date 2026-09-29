@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event, KeyEventKind};
+use ratatui::crossterm::event::{self, DisableFocusChange, EnableFocusChange, Event, KeyEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -121,7 +121,7 @@ fn run() -> anyhow::Result<()> {
     let (views, inbox) = Views::register(&orzma, &app, chrome_html, page_js, &engine)?;
 
     enable_raw_mode()?;
-    if let Err(e) = execute!(stdout(), EnterAlternateScreen) {
+    if let Err(e) = execute!(stdout(), EnterAlternateScreen, EnableFocusChange) {
         // NOTE: EnterAlternateScreen failed after raw mode was enabled — undo raw mode
         // to avoid leaving the shell in an unusable state.
         let _ = disable_raw_mode();
@@ -132,12 +132,12 @@ fn run() -> anyhow::Result<()> {
     let result = event_loop(app, &views, &inbox, &orzma);
 
     let _ = disable_raw_mode();
-    let _ = execute!(stdout(), LeaveAlternateScreen);
+    let _ = execute!(stdout(), DisableFocusChange, LeaveAlternateScreen);
     result
 }
 
 /// Runs the app until it quits. Each pass reads the focus changes first, then
-/// the webviews' reports, then one key.
+/// the webviews' reports, then one terminal event (a key or a pane focus change).
 fn event_loop(mut app: App, views: &Views, inbox: &Inbox, orzma: &Orzma) -> anyhow::Result<()> {
     let backend = OrzmaBackend::new(CrosstermBackend::new(stdout()), orzma);
     let mut terminal = Terminal::new(backend)?;
@@ -166,18 +166,23 @@ fn event_loop(mut app: App, views: &Views, inbox: &Inbox, orzma: &Orzma) -> anyh
         })?;
         app.set_page_placed(page_placed);
 
-        // NOTE: a key release is dropped here rather than mapped to
-        // `Action::Ignore`: any action clears a pending `g`, so the release
-        // ConPTY reports after each press would keep `gg` from completing.
-        if event::poll(Duration::from_millis(33))?
-            && let Event::Key(key) = event::read()?
-            && key.kind != KeyEventKind::Release
-        {
+        if event::poll(Duration::from_millis(33))? {
+            let event = event::read()?;
             if apply_focus_changes(&mut app, views, orzma)?.is_break() {
                 return Ok(());
             }
-            let action = keymap::map(app.mode(), key);
-            if run_cmds(app.on_action(action), views, orzma)?.is_break() {
+            let cmds = match event {
+                // NOTE: a key release is dropped here rather than mapped to
+                // `Action::Ignore`: any action clears a pending `g`, so the release
+                // ConPTY reports after each press would keep `gg` from completing.
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    app.on_action(keymap::map(app.mode(), key))
+                }
+                Event::FocusGained => app.on_pane_focus(true),
+                Event::FocusLost => app.on_pane_focus(false),
+                _ => vec![],
+            };
+            if run_cmds(cmds, views, orzma)?.is_break() {
                 return Ok(());
             }
         }
@@ -353,6 +358,12 @@ fn run_cmd(cmd: Cmd, views: &Views, orzma: &Orzma) -> anyhow::Result<ControlFlow
                 .of(target)
                 .set_forward_keys(keymap::forward_chords(set));
         }
+        Cmd::SetPageScrollKeys(enabled) => {
+            let _ = views.page.emit("keys", &json!({ "enabled": enabled }));
+        }
+        Cmd::BlurPageInput => {
+            let _ = views.page.emit("blurInput", &json!({}));
+        }
         Cmd::Focus(target) => {
             let _ = views.of(target).focus();
         }
@@ -381,7 +392,7 @@ fn install_panic_hook() {
     let prev = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(stdout(), LeaveAlternateScreen);
+        let _ = execute!(stdout(), DisableFocusChange, LeaveAlternateScreen);
         prev(info);
     }));
 }
