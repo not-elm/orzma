@@ -17,7 +17,7 @@ use bevy::window::CursorMoved;
 use bevy_orzma_tty_renderer::prelude::{TerminalCellMetricsResource, TerminalCells, TerminalView};
 use bevy_orzmux::prelude::{CellSide, RequestTtyPointer};
 use orzma_tty::prelude::{CellCoord, PointerInput, ProtocolModifiers, TerminalModifiers};
-use orzma_vt::prelude::ViewportCell;
+use orzma_vt::prelude::{GridColumn, ViewportLine, ViewportPoint};
 
 mod button;
 mod gesture;
@@ -261,7 +261,10 @@ impl<'a> CellContext<'a> {
             .map(|(_id, uri)| uri.as_str().to_string())
             .or_else(|| {
                 self.cells
-                    .detected_url_at(ViewportCell { row, col })
+                    .detected_url_at(ViewportPoint {
+                        line: ViewportLine(row),
+                        column: GridColumn(col),
+                    })
                     .map(|url| url.uri)
             })
     }

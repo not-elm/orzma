@@ -4,7 +4,7 @@
 use crate::error::RendererResult;
 use bevy::prelude::Component;
 use orzma_vt::prelude::{
-    Cell, CellWidth, DetectedUrl, Frame, HyperlinkId, HyperlinkUri, Palette, Run, ViewportCell,
+    Cell, CellWidth, DetectedUrl, Frame, HyperlinkId, HyperlinkUri, Palette, Run, ViewportPoint,
 };
 use std::collections::HashMap;
 
@@ -52,7 +52,7 @@ impl TerminalCells {
 
     /// The URL shown in plain text at the visible cell `at`; `None` when
     /// the cell shows no URL or the URL may run past the viewport.
-    pub fn detected_url_at(&self, at: ViewportCell) -> Option<DetectedUrl> {
+    pub fn detected_url_at(&self, at: ViewportPoint) -> Option<DetectedUrl> {
         DetectedUrl::at(&self.cells, &self.wraps, self.continues_from_above, at)
     }
 

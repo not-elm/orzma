@@ -23,7 +23,7 @@ use bevy_orzma_tty_renderer::prelude::{
 };
 use bevy_orzmux::prelude::{OrzmuxSeparator, PaneGeometry, SplitOrientation};
 use orzma_configs::shortcuts::Modifiers;
-use orzma_vt::prelude::ViewportCell;
+use orzma_vt::prelude::{GridColumn, ViewportLine, ViewportPoint};
 
 /// Adds hyperlink hover detection and cursor-icon control for every
 /// terminal surface.
@@ -296,9 +296,12 @@ impl HoverTargetParams<'_, '_> {
         let id = cell
             .and_then(|(row, col)| cells.hyperlink_at(row, col))
             .map(|(id, _uri)| id);
-        let detected = cell
-            .filter(|_| hover.modifier_held)
-            .and_then(|(row, col)| cells.detected_url_at(ViewportCell { row, col }));
+        let detected = cell.filter(|_| hover.modifier_held).and_then(|(row, col)| {
+            cells.detected_url_at(ViewportPoint {
+                line: ViewportLine(row),
+                column: GridColumn(col),
+            })
+        });
         let has_link = id.is_some() || detected.is_some();
         hover.entity = Some(entity);
         hover.hyperlink_id = id;
@@ -383,7 +386,7 @@ fn watch_primary_window_cursor(
 mod tests {
     use super::*;
     use bevy_orzmux::prelude::SplitId;
-    use orzma_vt::prelude::{DetectedUrl, HyperlinkId, HyperlinkUri, ViewportCell};
+    use orzma_vt::prelude::{DetectedUrl, HyperlinkId, HyperlinkUri};
 
     fn empty() -> Modifiers {
         Modifiers::default()
@@ -1344,8 +1347,14 @@ mod tests {
             hover.detected,
             Some(DetectedUrl {
                 uri: "http://a.b".to_string(),
-                first: ViewportCell { row: 0, col: 0 },
-                last: ViewportCell { row: 0, col: 9 },
+                first: ViewportPoint {
+                    line: ViewportLine(0),
+                    column: GridColumn(0),
+                },
+                last: ViewportPoint {
+                    line: ViewportLine(0),
+                    column: GridColumn(9),
+                },
             })
         );
         assert_eq!(

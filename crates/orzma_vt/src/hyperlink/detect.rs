@@ -2,18 +2,10 @@
 //! maps a match back to the viewport cells showing it.
 
 use crate::screen::cell::{Cell, GlyphClass};
+use crate::screen::grid::coords::GridColumn;
+use crate::screen::viewport::{ViewportLine, ViewportPoint};
 use std::iter;
 use std::ops::Range;
-
-/// A viewport cell: a zero-based row counted from the top of the
-/// viewport and a zero-based column.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ViewportCell {
-    /// The row, counted from the top of the viewport.
-    pub row: u16,
-    /// The column.
-    pub col: u16,
-}
 
 /// A URL shown in the viewport's plain text, with the cells that show its
 /// first and last characters.
@@ -22,9 +14,9 @@ pub struct DetectedUrl {
     /// The URL as displayed.
     pub uri: String,
     /// The cell showing the URL's first character.
-    pub first: ViewportCell,
+    pub first: ViewportPoint,
     /// The cell showing the URL's last character.
-    pub last: ViewportCell,
+    pub last: ViewportPoint,
 }
 
 impl DetectedUrl {
@@ -48,13 +40,15 @@ impl DetectedUrl {
         rows: &[Vec<Cell>],
         wraps: &[Option<u16>],
         continues_from_above: bool,
-        at: ViewportCell,
+        at: ViewportPoint,
     ) -> Option<Self> {
-        let cell = rows.get(usize::from(at.row))?.get(usize::from(at.col))?;
+        let cell = rows
+            .get(usize::from(at.line.0))?
+            .get(usize::from(at.column.0))?;
         if cell.hyperlink_id.is_some() || !cell.chars().next().is_some_and(is_url_body) {
             return None;
         }
-        LogicalLine::around(rows, wraps, continues_from_above, at.row)?.url_at(at)
+        LogicalLine::around(rows, wraps, continues_from_above, at.line)?.url_at(at)
     }
 }
 
@@ -106,7 +100,7 @@ impl UrlMatch {
 struct LogicalLine {
     text: String,
     /// The cell each byte of `text` came from, one entry per byte.
-    origins: Vec<ViewportCell>,
+    origins: Vec<ViewportPoint>,
     /// Whether the line continues above the first row it holds.
     cut_above: bool,
     /// Whether the line continues below the last row it holds.
@@ -114,16 +108,16 @@ struct LogicalLine {
 }
 
 impl LogicalLine {
-    /// The logical line holding viewport row `row`; `None` when `row` is
-    /// outside `rows`.
+    /// The logical line holding `line`; `None` when `line` is outside
+    /// `rows`.
     fn around(
         rows: &[Vec<Cell>],
         wraps: &[Option<u16>],
         continues_from_above: bool,
-        row: u16,
+        line: ViewportLine,
     ) -> Option<Self> {
         let wrap = |index: usize| wraps.get(index).copied().flatten();
-        let row = usize::from(row);
+        let row = usize::from(line.0);
         if row >= rows.len() {
             return None;
         }
@@ -147,9 +141,9 @@ impl LogicalLine {
             let limit =
                 wrap(index).map_or(cells.len(), |count| usize::from(count).min(cells.len()));
             for (col, cell) in cells.iter().enumerate().take(limit) {
-                let at = ViewportCell {
-                    row: index as u16,
-                    col: col as u16,
+                let at = ViewportPoint {
+                    line: ViewportLine(index as u16),
+                    column: GridColumn(col as u16),
                 };
                 line.push_cell(cell, at);
             }
@@ -158,7 +152,7 @@ impl LogicalLine {
     }
 
     /// The URL covering the cell `at`, unless an edge rule drops it.
-    fn url_at(&self, at: ViewportCell) -> Option<DetectedUrl> {
+    fn url_at(&self, at: ViewportPoint) -> Option<DetectedUrl> {
         let target = self.origins.iter().position(|origin| *origin == at)?;
         let found = UrlMatch::scan(&self.text)
             .take_while(|found| found.url.start <= target)
@@ -185,7 +179,7 @@ impl LogicalLine {
     }
 
     /// Appends the characters `cell` shows, or a blank for an OSC 8 cell.
-    fn push_cell(&mut self, cell: &Cell, at: ViewportCell) {
+    fn push_cell(&mut self, cell: &Cell, at: ViewportPoint) {
         if cell.hyperlink_id.is_some() {
             self.push(' ', at);
             return;
@@ -195,7 +189,7 @@ impl LogicalLine {
         }
     }
 
-    fn push(&mut self, c: char, at: ViewportCell) {
+    fn push(&mut self, c: char, at: ViewportPoint) {
         self.text.push(c);
         self.origins.resize(self.text.len(), at);
     }

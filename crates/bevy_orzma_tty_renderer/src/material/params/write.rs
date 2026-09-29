@@ -15,7 +15,7 @@ use crate::{
     system_set::MaterialStage,
 };
 use bevy::{prelude::*, window::PrimaryWindow};
-use orzma_vt::prelude::{DetectedUrl, ViewportCell};
+use orzma_vt::prelude::{DetectedUrl, ViewportPoint};
 
 /// Padding colour used for the area outside a terminal grid (and the whole
 /// quad while a grid is unpainted) when the terminal's default background
@@ -122,7 +122,9 @@ fn write_terminal_params(
 /// The first and last cells of `url` as indices into a row-major grid
 /// `cols` cells wide.
 fn linear_span(url: &DetectedUrl, cols: u16) -> UVec2 {
-    let index = |cell: ViewportCell| u32::from(cell.row) * u32::from(cols) + u32::from(cell.col);
+    let index = |point: ViewportPoint| {
+        u32::from(point.line.0) * u32::from(cols) + u32::from(point.column.0)
+    };
     UVec2::new(index(url.first), index(url.last))
 }
 
@@ -131,7 +133,7 @@ mod tests {
     use super::*;
     use crate::font::TerminalFonts;
     use bevy::asset::uuid_handle;
-    use orzma_vt::prelude::HyperlinkId;
+    use orzma_vt::prelude::{GridColumn, HyperlinkId, ViewportLine};
 
     /// An app running only the uniform write, for one pane and no primary
     /// window; returns the pane and its material.
@@ -250,8 +252,14 @@ mod tests {
             hover.modifier_held = true;
             hover.detected = Some(DetectedUrl {
                 uri: "https://a.b".to_string(),
-                first: ViewportCell { row: 0, col: 2 },
-                last: ViewportCell { row: 1, col: 3 },
+                first: ViewportPoint {
+                    line: ViewportLine(0),
+                    column: GridColumn(2),
+                },
+                last: ViewportPoint {
+                    line: ViewportLine(1),
+                    column: GridColumn(3),
+                },
             });
         }
         app.update();

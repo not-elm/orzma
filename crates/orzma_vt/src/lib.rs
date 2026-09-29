@@ -35,7 +35,7 @@ pub mod prelude {
     };
     pub use crate::error::{GridSizeError, RunError, StampError, VtError, VtResult};
     pub use crate::frame::{DirtyRow, Frame};
-    pub use crate::hyperlink::detect::{DetectedUrl, UrlMatch, ViewportCell};
+    pub use crate::hyperlink::detect::{DetectedUrl, UrlMatch};
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::placement::{
         AnchoredPlacement, InstanceId, MAX_COLS, MAX_PLACEMENTS, MAX_ROWS, PlacementSize,
@@ -51,7 +51,7 @@ pub mod prelude {
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
     pub use crate::screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion};
-    pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine};
+    pub use crate::screen::viewport::{DisplayOffset, Scroll, ViewportLine, ViewportPoint};
     pub use crate::{InterpretOutput, OrzmaVt, ResizeChanged, Vt, VtSignal};
 }
 
