@@ -147,8 +147,8 @@ impl App {
 
     /// Records whether the page has any rows on screen.
     ///
-    /// While it has none, Insert and Hint cannot be entered, and leaving a
-    /// text mode gives the keyboard to the TUI instead of the page.
+    /// While it has none, Insert, Hint, and Help cannot be entered, and
+    /// leaving a text mode gives the keyboard to the TUI instead of the page.
     pub fn set_page_placed(&mut self, placed: bool) {
         self.page_placed = placed;
     }
@@ -184,7 +184,7 @@ impl App {
             Action::EnterHint => self.enter_hint(),
             Action::HintKey(c) => vec![Cmd::HintKey(c)],
             Action::HintBackspace => vec![Cmd::HintBackspace],
-            Action::OpenHelp => vec![self.enter_text_mode(Mode::Help)],
+            Action::OpenHelp => self.open_help(),
             Action::Ignore => vec![],
         };
         self.with_key_sets(cmds)
@@ -381,6 +381,13 @@ impl App {
             return vec![];
         }
         vec![Cmd::HintShow, self.enter_text_mode(Mode::Hint)]
+    }
+
+    fn open_help(&mut self) -> Vec<Cmd> {
+        if !self.page_placed {
+            return vec![];
+        }
+        vec![self.enter_text_mode(Mode::Help)]
     }
 
     /// Enters Hint or Help, remembering whether the page held focus, and
@@ -858,15 +865,18 @@ mod tests {
         assert_eq!(a.mode(), Mode::Normal);
     }
 
-    /// Asserts that Insert and Hint are ignored while the page has no rows.
+    /// Asserts that Insert, Hint, and Help are ignored while the page has no
+    /// rows.
     ///
-    /// Case: the user shrinks the pane to two rows and presses `i` and `f`.
+    /// Case: the user shrinks the pane to two rows and presses `i`, `f`, and
+    /// `?`.
     #[test]
-    fn insert_and_hint_are_ignored_while_the_page_has_no_rows() {
+    fn insert_hint_and_help_are_ignored_while_the_page_has_no_rows() {
         let mut a = app();
         a.set_page_placed(false);
         assert_eq!(a.on_action(Action::EnterInsert), vec![]);
         assert_eq!(a.on_action(Action::EnterHint), vec![]);
+        assert_eq!(a.on_action(Action::OpenHelp), vec![]);
         assert_eq!(a.mode(), Mode::Normal);
     }
 

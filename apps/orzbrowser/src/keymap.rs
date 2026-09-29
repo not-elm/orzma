@@ -3,8 +3,11 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui_orzma::KeyChord;
+use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// The input mode, sent to the chrome page by its camelCase name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) enum Mode {
     #[default]
     Normal,

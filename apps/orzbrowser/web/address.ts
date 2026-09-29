@@ -50,6 +50,14 @@ export class AddressBar {
         this.host.openAddress();
       }
     });
+    // NOTE: the chrome forwards no keys while editing, so Enter and Esc reach
+    // only the input's keydown handler; a click elsewhere in the chrome must
+    // not take focus from the input, or the keyboard can no longer leave.
+    omnibox.ownerDocument.addEventListener('mousedown', (e) => {
+      if (this.editing && e.target !== this.input) {
+        e.preventDefault();
+      }
+    });
   }
 
   /**

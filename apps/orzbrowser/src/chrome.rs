@@ -4,28 +4,12 @@ use crate::app::App;
 use crate::keymap::Mode;
 use serde::Serialize;
 
-/// The mode the chrome shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum ChromeMode {
-    /// Browsing with the vim keys.
-    Normal,
-    /// Typing into the page.
-    Insert,
-    /// Picking a link hint.
-    Hint,
-    /// Typing into the address bar.
-    Address,
-    /// Reading the help.
-    Help,
-}
-
 /// Everything the chrome page draws (`chrome` event).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Chrome {
     /// The current mode.
-    pub(crate) mode: ChromeMode,
+    pub(crate) mode: Mode,
     /// The URL loaded in the page.
     pub(crate) url: String,
     /// The first key of a pending two-key chord.
@@ -46,23 +30,11 @@ impl Chrome {
     /// The chrome `app` shows.
     pub fn build(app: &App) -> Self {
         Self {
-            mode: app.mode().into(),
+            mode: app.mode(),
             url: app.url().to_owned(),
             pending_key: app.pending_key(),
             seed: app.seed().to_owned(),
             address_epoch: app.address_epoch(),
-        }
-    }
-}
-
-impl From<Mode> for ChromeMode {
-    fn from(mode: Mode) -> Self {
-        match mode {
-            Mode::Normal => Self::Normal,
-            Mode::Insert => Self::Insert,
-            Mode::Hint => Self::Hint,
-            Mode::Address => Self::Address,
-            Mode::Help => Self::Help,
         }
     }
 }
@@ -93,7 +65,7 @@ mod tests {
 
     fn chrome(epoch: u32) -> Chrome {
         Chrome {
-            mode: ChromeMode::Address,
+            mode: Mode::Address,
             url: "https://example.com/".to_owned(),
             pending_key: Some('g'),
             seed: "https://example.com/".to_owned(),
@@ -119,19 +91,22 @@ mod tests {
         );
     }
 
-    /// Asserts that every mode maps to its chrome mode.
+    /// Asserts that every mode is sent by the name the chrome page expects.
     ///
     /// Case: the app moves through each mode while the chrome shows the badge.
     #[test]
-    fn each_mode_maps_to_a_chrome_mode() {
-        for (mode, chrome_mode) in [
-            (Mode::Normal, ChromeMode::Normal),
-            (Mode::Insert, ChromeMode::Insert),
-            (Mode::Hint, ChromeMode::Hint),
-            (Mode::Address, ChromeMode::Address),
-            (Mode::Help, ChromeMode::Help),
+    fn each_mode_serializes_by_its_page_name() {
+        for (mode, name) in [
+            (Mode::Normal, "normal"),
+            (Mode::Insert, "insert"),
+            (Mode::Hint, "hint"),
+            (Mode::Address, "address"),
+            (Mode::Help, "help"),
         ] {
-            assert_eq!(ChromeMode::from(mode), chrome_mode);
+            assert_eq!(
+                serde_json::to_value(mode).expect("a mode serializes"),
+                json!(name)
+            );
         }
     }
 

@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -145,13 +145,7 @@ fn event_loop(mut app: App, views: &Views, inbox: &Inbox, orzma: &Orzma) -> anyh
     let mut sync = ChromeSync::default();
 
     loop {
-        // NOTE: read the page's focus changes before the chrome's; `FocusDrain`
-        // relies on this order when both webviews end a pass on a gain.
-        let drain = FocusDrain::from_changes(
-            views.page.read_focus_changes(),
-            views.chrome.read_focus_changes(),
-        );
-        if run_cmds(app.on_focus_drain(drain), views, orzma)?.is_break() {
+        if apply_focus_changes(&mut app, views, orzma)?.is_break() {
             return Ok(());
         }
         if apply_reports(&mut app, &mut sync, views, inbox, orzma)?.is_break() {
@@ -173,15 +167,14 @@ fn event_loop(mut app: App, views: &Views, inbox: &Inbox, orzma: &Orzma) -> anyh
         })?;
         app.set_page_placed(page_placed);
 
+        // NOTE: a key release is dropped here rather than mapped to
+        // `Action::Ignore`: any action clears a pending `g`, so the release
+        // ConPTY reports after each press would keep `gg` from completing.
         if event::poll(Duration::from_millis(33))?
             && let Event::Key(key) = event::read()?
+            && key.kind != KeyEventKind::Release
         {
-            // NOTE: the page's changes first, as above.
-            let drain = FocusDrain::from_changes(
-                views.page.read_focus_changes(),
-                views.chrome.read_focus_changes(),
-            );
-            if run_cmds(app.on_focus_drain(drain), views, orzma)?.is_break() {
+            if apply_focus_changes(&mut app, views, orzma)?.is_break() {
                 return Ok(());
             }
             let action = keymap::map(app.mode(), key);
@@ -190,6 +183,22 @@ fn event_loop(mut app: App, views: &Views, inbox: &Inbox, orzma: &Orzma) -> anyh
             }
         }
     }
+}
+
+/// Applies the focus changes both webviews reported since the last call;
+/// `Break` when a resulting [`Cmd`] exits the app.
+fn apply_focus_changes(
+    app: &mut App,
+    views: &Views,
+    orzma: &Orzma,
+) -> anyhow::Result<ControlFlow<()>> {
+    // NOTE: read the page's focus changes before the chrome's; `FocusDrain`
+    // relies on this order when both webviews end a pass on a gain.
+    let drain = FocusDrain::from_changes(
+        views.page.read_focus_changes(),
+        views.chrome.read_focus_changes(),
+    );
+    run_cmds(app.on_focus_drain(drain), views, orzma)
 }
 
 /// Applies the reports the webviews sent since the last pass; `Break` when a

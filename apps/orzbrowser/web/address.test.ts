@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { AddressBar, type AddressHost, type Preview } from './address';
 import type { Chrome } from './chrome';
 
@@ -24,6 +24,14 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve };
 }
 
+const liveBars: AddressBar[] = [];
+
+afterEach(() => {
+  for (const bar of liveBars.splice(0)) {
+    bar.apply(chrome({ mode: 'normal' }));
+  }
+});
+
 function setup(host: Partial<AddressHost> = {}) {
   document.body.innerHTML = OMNIBOX;
   const omnibox = document.querySelector('.omnibox') as HTMLElement;
@@ -48,6 +56,7 @@ function setup(host: Partial<AddressHost> = {}) {
       calls.openAddress += 1;
     },
   });
+  liveBars.push(bar);
   const input = omnibox.querySelector('input') as HTMLInputElement;
   const preview = omnibox.querySelector('.preview') as HTMLElement;
   return { bar, omnibox, input, preview, calls };
@@ -150,6 +159,20 @@ describe('AddressBar', () => {
     expect(input.value).toBe('file:///etc');
     expect(preview.textContent).toBe('Unsupported scheme: file');
     expect(preview.classList.contains('rejected')).toBe(true);
+  });
+
+  it('keeps the input focused when the rest of the chrome is pressed while editing', () => {
+    const { bar, omnibox, input } = setup();
+    const press = (target: HTMLElement) => {
+      const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    bar.apply(chrome());
+    expect(press(omnibox)).toBe(true);
+    expect(press(input)).toBe(false);
+    bar.apply(chrome({ mode: 'normal' }));
+    expect(press(omnibox)).toBe(false);
   });
 
   it('opens the address bar on an omnibox click only outside address mode', () => {
