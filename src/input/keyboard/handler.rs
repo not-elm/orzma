@@ -3,9 +3,9 @@
 
 use crate::action::vi::ResolvedViModeKeys;
 use crate::action::vi::mode::ViModeState;
-use crate::input::current_modifiers;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
+use crate::input::keyboard::held_modifiers::{AltPolicy, HeldModifiers};
 use crate::input::keyboard::key_effect::{
     BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch,
 };
@@ -15,7 +15,7 @@ use crate::input::shortcuts::{
 };
 use crate::ui::tab_bar::rename::WorkspaceRename;
 use bevy::ecs::system::SystemParam;
-use bevy::input::keyboard::{KeyCode, KeyboardInput};
+use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
@@ -41,13 +41,15 @@ impl Plugin for KeyboardHandlerPlugin {
 }
 
 /// The classifier inputs used to resolve the frame's key effects: the
-/// shortcut table, resolved vi-mode keys, held modifier keys, and the
-/// real-time clock the leader timeout is measured against.
+/// shortcut table, resolved vi-mode keys, held physical and logical keys, the
+/// Alt policy, and the real-time clock the leader timeout is measured against.
 #[derive(SystemParam)]
 struct ClassifyInputs<'w> {
     shortcuts: Res<'w, Shortcuts>,
     resolved_vi_mode: Res<'w, ResolvedViModeKeys>,
     bevy_keys: Res<'w, ButtonInput<KeyCode>>,
+    logical_keys: Res<'w, ButtonInput<Key>>,
+    alt_policy: Res<'w, AltPolicy>,
     time: Res<'w, Time<Real>>,
 }
 
@@ -97,9 +99,10 @@ fn resolve_key_effects(
         .and_then(|entity| forward_keys.get(entity).ok())
         .map(|chords| chords.0.as_slice())
         .unwrap_or(&[]);
-    let mods = current_modifiers(&inputs.bevy_keys);
+    let held_mods = HeldModifiers::from_input(&inputs.bevy_keys, &inputs.logical_keys);
     let ctx = BatchContext {
-        mods,
+        held: held_mods,
+        alt_policy: *inputs.alt_policy,
         now: inputs.time.elapsed(),
         in_vi_mode,
         has_selection,
@@ -139,16 +142,16 @@ fn resolve_key_effects(
                     effect,
                     focused,
                     in_vi_mode,
-                    mods,
                 });
             }
         }
     }
+    let raw = held_mods.raw();
     let ms = ModifiersState {
-        alt: mods.alt,
-        ctrl: mods.ctrl,
-        shift: mods.shift,
-        logo: mods.meta,
+        alt: raw.alt,
+        ctrl: raw.ctrl,
+        shift: raw.shift,
+        logo: raw.meta,
     };
     match focused_webview.0 {
         Some(webview) => cef_filter.set(
@@ -169,6 +172,7 @@ fn clear_cef_filter(cef_filter: &mut CefKeyboardFilter) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::keyboard::held_modifiers::AltPolicy;
     use crate::input::shortcuts::{
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
@@ -178,6 +182,7 @@ mod tests {
     use bevy::input::keyboard::Key;
     use bevy_orzma_webview::{ChordKey, NormalizedChord};
     use bevy_orzmux::prelude::WorkspaceId;
+    use orzma_configs::keyboard::OptionAsAlt;
     use orzma_configs::shortcuts::{FontSizeStep, Modifiers, PaneDirection};
     use orzma_vt::prelude::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
     use std::time::Duration;
@@ -188,7 +193,6 @@ mod tests {
         effects: Vec<KeyEffect>,
         focused: Option<Entity>,
         in_vi_mode: Option<bool>,
-        mods: Option<Modifiers>,
     }
 
     impl Captured {
@@ -209,6 +213,13 @@ mod tests {
                 _ => None,
             })
         }
+
+        fn last_typed_mods(&self) -> Option<Modifiers> {
+            self.effects.iter().rev().find_map(|effect| match effect {
+                KeyEffect::Type { mods, .. } => Some(*mods),
+                _ => None,
+            })
+        }
     }
 
     fn capture_messages(mut cap: ResMut<Captured>, mut effects: MessageReader<KeyEffectMessage>) {
@@ -216,7 +227,6 @@ mod tests {
             cap.effects.push(m.effect.clone());
             cap.focused = m.focused;
             cap.in_vi_mode = Some(m.in_vi_mode);
-            cap.mods = Some(m.mods);
         }
     }
 
@@ -232,6 +242,8 @@ mod tests {
             .add_message::<KeyEffectMessage>()
             .add_message::<AppExit>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<Key>>()
+            .init_resource::<AltPolicy>()
             .init_resource::<ImeState>()
             .init_resource::<FocusedWebview>()
             .init_resource::<CefKeyboardFilter>()
@@ -307,9 +319,9 @@ mod tests {
         );
         assert_eq!(cap.focused, Some(term));
         assert_eq!(
-            cap.mods,
+            cap.last_typed_mods(),
             Some(Modifiers::default()),
-            "no modifier keys are held, so the message carries the default modifiers"
+            "no modifier keys are held, so the typed key carries the default modifiers"
         );
     }
 
@@ -534,6 +546,10 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("c".into()),
                 key_code: KeyCode::KeyC,
+                mods: Modifiers {
+                    ctrl: true,
+                    ..Modifiers::default()
+                },
             }]
         );
     }
@@ -627,6 +643,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("j".into()),
                 key_code: KeyCode::KeyJ,
+                mods: Modifiers::default(),
             }],
             "a declared forward chord must reach the applier as a KeyEffectMessage"
         );
@@ -779,5 +796,25 @@ mod tests {
             app.world().resource::<DeliverProbe>().saw_claim,
             "resolve_key_effects must populate CefKeyboardFilter before KeyboardDeliverSet runs"
         );
+    }
+
+    /// Asserts that the system reads the Alt policy and the held keys, so a
+    /// character composed with a non-Alt Option key is typed without Alt.
+    ///
+    /// Case: a macOS user with `option_as_alt = "right"` types `˙` with left
+    /// Option+h into the focused terminal.
+    #[test]
+    fn a_composing_option_key_is_typed_without_alt() {
+        let mut app = resolve_app(Shortcuts::default());
+        app.insert_resource(AltPolicy::for_option_as_alt(OptionAsAlt::Right));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::AltLeft);
+        press_key(&mut app, KeyCode::KeyH, Key::Character("˙".into()));
+        app.update();
+        let cap = app.world().resource::<Captured>();
+        assert_eq!(cap.last_typed(), Some(Key::Character("˙".into())));
+        assert_eq!(cap.last_typed_mods(), Some(Modifiers::default()));
     }
 }
