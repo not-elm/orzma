@@ -171,6 +171,7 @@ impl App {
             Action::HintKey(c) => vec![Cmd::HintKey(c)],
             Action::HintBackspace => vec![Cmd::HintBackspace],
             Action::OpenHelp => vec![self.enter_text_mode(Mode::Help)],
+            Action::RefocusChrome => vec![],
             Action::Ignore => vec![],
         };
         self.with_key_set(cmds)

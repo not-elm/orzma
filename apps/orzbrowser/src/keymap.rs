@@ -27,6 +27,7 @@ pub(crate) enum Action {
     HistoryBack,
     HistoryForward,
     OpenAddress,
+    RefocusChrome,
     Reload,
     EnterInsert,
     EnterHint,
@@ -59,10 +60,7 @@ pub(crate) fn map(mode: Mode, key: KeyEvent) -> Action {
         Mode::Address => match key.code {
             KeyCode::Char('c') if ctrl => Action::Quit,
             KeyCode::Esc => Action::Escape,
-            KeyCode::Enter => Action::AddressConfirm,
-            KeyCode::Backspace => Action::AddressBackspace,
-            KeyCode::Char(c) => Action::AddressChar(c),
-            _ => Action::Ignore,
+            _ => Action::RefocusChrome,
         },
         Mode::Help => match key.code {
             KeyCode::Char('c') if ctrl => Action::Quit,
@@ -111,37 +109,56 @@ fn map_hint(ctrl: bool, code: KeyCode) -> Action {
     }
 }
 
-/// Which forward-key list the page carries.
+/// Which forward-key list a webview carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum KeySet {
     /// The Normal-mode vim keys.
     Normal,
     /// Esc alone, so every other key types into the page.
     Insert,
+    /// Nothing, so every key types into the chrome's address input.
+    Empty,
 }
 
 impl KeySet {
     /// The forward-key set the page carries while the app is in `mode`.
     pub(crate) fn of(mode: Mode) -> Self {
+        Self::for_page(mode)
+    }
+
+    /// The forward-key set the page carries while the app is in `mode`.
+    pub fn for_page(mode: Mode) -> Self {
         if mode == Mode::Insert {
             Self::Insert
         } else {
             Self::Normal
         }
     }
+
+    /// The forward-key set the chrome carries while the app is in `mode`.
+    pub fn for_chrome(mode: Mode) -> Self {
+        if mode == Mode::Address {
+            Self::Empty
+        } else {
+            Self::Normal
+        }
+    }
 }
 
-/// The chords passed through to the TUI while the page holds keyboard focus.
+/// The chords passed through to the TUI while a webview carrying `set`
+/// holds keyboard focus.
 ///
-/// Ctrl+C is in neither list, so while the page is focused it copies the
-/// page's selection instead of quitting.
+/// Ctrl+C is in no list, so while a webview is focused it copies the
+/// webview's selection instead of quitting.
 pub(crate) fn forward_chords(set: KeySet) -> Vec<KeyChord> {
     let plain = |code| KeyChord {
         mods: KeyModifiers::NONE,
         code,
     };
-    if set == KeySet::Insert {
-        return vec![plain(KeyCode::Esc)];
+    match set {
+        KeySet::Empty => return vec![],
+        KeySet::Insert => return vec![plain(KeyCode::Esc)],
+        KeySet::Normal => {}
     }
     let shift = |c| KeyChord {
         mods: KeyModifiers::SHIFT,
@@ -246,19 +263,24 @@ mod tests {
         assert_eq!(map(Mode::Insert, key('j')), Action::Ignore);
     }
 
+    /// Asserts that a key reaching the TUI in address mode refocuses the
+    /// chrome, except Esc, which cancels, and Ctrl-C, which quits.
+    ///
+    /// Case: the user types right after pressing `o`, before the chrome page
+    /// takes the keyboard.
     #[test]
     fn address_mode_keys() {
-        assert_eq!(map(Mode::Address, key('h')), Action::AddressChar('h'));
-        assert_eq!(map(Mode::Address, key('/')), Action::AddressChar('/'));
-        assert_eq!(
-            map(Mode::Address, special(KeyCode::Backspace)),
-            Action::AddressBackspace
-        );
+        assert_eq!(map(Mode::Address, key('h')), Action::RefocusChrome);
         assert_eq!(
             map(Mode::Address, special(KeyCode::Enter)),
-            Action::AddressConfirm
+            Action::RefocusChrome
+        );
+        assert_eq!(
+            map(Mode::Address, special(KeyCode::Backspace)),
+            Action::RefocusChrome
         );
         assert_eq!(map(Mode::Address, special(KeyCode::Esc)), Action::Escape);
+        assert_eq!(map(Mode::Address, ctrl('c')), Action::Quit);
     }
 
     #[test]
@@ -325,7 +347,7 @@ mod tests {
         }
         let repeat =
             KeyEvent::new_with_kind(KeyCode::Char('a'), KeyModifiers::NONE, KeyEventKind::Repeat);
-        assert_eq!(map(Mode::Address, repeat), Action::AddressChar('a'));
+        assert_eq!(map(Mode::Address, repeat), Action::RefocusChrome);
     }
 
     fn event_of(chord: &KeyChord) -> KeyEvent {
@@ -365,5 +387,24 @@ mod tests {
         };
         assert!(!forward_chords(KeySet::Normal).contains(&ctrl_c));
         assert!(!forward_chords(KeySet::Insert).contains(&ctrl_c));
+    }
+
+    /// Asserts which forward-key set each webview carries in each mode.
+    ///
+    /// Case: the user moves between Normal, Insert, Hint, Help, and the
+    /// address bar while either webview may hold focus.
+    #[test]
+    fn each_webview_carries_its_mode_key_set() {
+        for (mode, page, chrome) in [
+            (Mode::Normal, KeySet::Normal, KeySet::Normal),
+            (Mode::Insert, KeySet::Insert, KeySet::Normal),
+            (Mode::Hint, KeySet::Normal, KeySet::Normal),
+            (Mode::Help, KeySet::Normal, KeySet::Normal),
+            (Mode::Address, KeySet::Normal, KeySet::Empty),
+        ] {
+            assert_eq!(KeySet::for_page(mode), page, "{mode:?}");
+            assert_eq!(KeySet::for_chrome(mode), chrome, "{mode:?}");
+        }
+        assert!(forward_chords(KeySet::Empty).is_empty());
     }
 }
