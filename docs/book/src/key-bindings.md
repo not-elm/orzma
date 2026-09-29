@@ -11,7 +11,8 @@ Most actions are bound to the *leader* followed by one more key, written
 modifier: `Cmd` on macOS and `Alt` on Windows and Linux. Press and release the modifier
 with no other key or mouse button in between, then press the action's key.
 Holding the modifier works as usual, so `Alt+h` still reaches the shell as a
-meta-prefixed key.
+meta-prefixed key (on macOS, with the Option key that `option_as_alt` makes
+Alt).
 
 After a tap, the next keystroke either runs a `<Leader>` action or is
 swallowed if no action matches; the leader does not time out while it waits,

@@ -66,13 +66,13 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
                     trigger_vi_mode_action(&mut commands, entity, *action);
                 }
             }
-            KeyEffect::Type { logical, .. } => {
+            KeyEffect::Type { logical, mods, .. } => {
                 if msg.focused.is_some()
                     && let Some(key) = bevy_key_to_terminal_key(logical)
                 {
                     commands.trigger(RequestActiveKeyInput {
                         key,
-                        modifiers: terminal_modifiers(msg.mods),
+                        modifiers: terminal_modifiers(*mods),
                     });
                 }
             }
@@ -242,34 +242,22 @@ mod tests {
         (app, term)
     }
 
-    fn meta_mods() -> Modifiers {
-        Modifiers {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            meta: true,
-        }
-    }
-
-    fn dispatch(
-        app: &mut App,
-        effects: Vec<KeyEffect>,
-        focused: Option<Entity>,
-        in_vi_mode: bool,
-        mods: Modifiers,
-    ) {
+    fn dispatch(app: &mut App, effects: Vec<KeyEffect>, focused: Option<Entity>, in_vi_mode: bool) {
         for effect in effects {
             app.world_mut().write_message(KeyEffectMessage {
                 effect,
                 focused,
                 in_vi_mode,
-                mods,
             });
         }
     }
 
     fn type_effect(logical: Key, key_code: KeyCode) -> KeyEffect {
-        KeyEffect::Type { logical, key_code }
+        KeyEffect::Type {
+            logical,
+            key_code,
+            mods: Modifiers::default(),
+        }
     }
 
     fn action_effect(action: Shortcut, via_leader: bool) -> KeyEffect {
@@ -289,7 +277,6 @@ mod tests {
             vec![type_effect(Key::Character("a".into()), KeyCode::KeyA)],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -313,6 +300,7 @@ mod tests {
                 KeyEffect::Type {
                     logical: Key::Character("x".into()),
                     key_code: KeyCode::KeyX,
+                    mods: Modifiers::default(),
                 },
                 KeyEffect::Shortcut {
                     action: Shortcut::SelectPane(PaneDirection::Right),
@@ -321,11 +309,11 @@ mod tests {
                 KeyEffect::Type {
                     logical: Key::Character("y".into()),
                     key_code: KeyCode::KeyY,
+                    mods: Modifiers::default(),
                 },
             ],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -356,7 +344,6 @@ mod tests {
             ],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         let c = app.world().resource::<Captured>();
@@ -385,7 +372,6 @@ mod tests {
             )],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -412,7 +398,6 @@ mod tests {
             )],
             Some(term),
             false,
-            Modifiers::default(),
         );
         dispatch(
             &mut app,
@@ -422,7 +407,6 @@ mod tests {
             )],
             Some(term),
             true,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -448,7 +432,6 @@ mod tests {
             vec![action_effect(Shortcut::Paste, false)],
             Some(term),
             false,
-            meta_mods(),
         );
         app.update();
         assert_eq!(
@@ -466,7 +449,6 @@ mod tests {
             vec![action_effect(Shortcut::Copy, false)],
             Some(term),
             false,
-            meta_mods(),
         );
         app.update();
         assert_eq!(
@@ -484,7 +466,6 @@ mod tests {
             vec![action_effect(Shortcut::Copy, false)],
             Some(term),
             true,
-            meta_mods(),
         );
         app.update();
         assert_eq!(
@@ -502,7 +483,6 @@ mod tests {
             vec![action_effect(Shortcut::Paste, false)],
             Some(term),
             true,
-            meta_mods(),
         );
         app.update();
         assert_eq!(
@@ -520,7 +500,6 @@ mod tests {
             vec![action_effect(Shortcut::Paste, true)],
             Some(term),
             true,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -538,7 +517,6 @@ mod tests {
             vec![action_effect(Shortcut::EnterViMode, false)],
             Some(term),
             true,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -565,7 +543,6 @@ mod tests {
                 vec![action_effect(Shortcut::FontSize(step), false)],
                 Some(term),
                 false,
-                Modifiers::default(),
             );
             app.update();
 
@@ -607,7 +584,6 @@ mod tests {
                 .collect(),
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -646,7 +622,6 @@ mod tests {
             vec![action_effect(Shortcut::RenameWorkspace, true)],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(app.world().resource::<RenameStarts>().0, vec![None]);

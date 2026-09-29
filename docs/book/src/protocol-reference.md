@@ -227,10 +227,10 @@ the initial list;
   include `"shift"` in `mods` to match Shift+Tab;
 - one ASCII punctuation character such as `/`, `?`, `[`, `]`, `:` — matched
   against the character the key produced, whichever key produced it, with
-  Shift ignored and the other modifiers exact. Characters typed through a dead
-  key or AltGr do not match. On macOS, a character typed with the Option key
-  does not match a punctuation chord unless `option_as_alt` is in effect for
-  that side.
+  Shift ignored and the other modifiers exact. A character typed through
+  AltGr, or on macOS with the Option key that `option_as_alt` leaves for typing
+  characters, counts as unmodified, so it matches a chord with no modifiers.
+  Characters typed through a dead key do not match.
 
 Unrecognized chords are silently ignored. The key-up of a forwarded key may
 still reach the page.

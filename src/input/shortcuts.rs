@@ -75,8 +75,6 @@ pub(in crate::input) struct KeyEffectMessage {
     pub focused: Option<Entity>,
     /// Whether the focused surface is in vi mode.
     pub in_vi_mode: bool,
-    /// The frame's modifier snapshot.
-    pub mods: Modifiers,
 }
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
