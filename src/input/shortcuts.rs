@@ -249,19 +249,21 @@ pub(crate) struct Shortcuts {
 }
 
 impl Shortcuts {
-    /// Returns the GUI action bound to `(keycode, mods)` in the direct table, if
-    /// any.
-    pub fn match_gui_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
-        Self::find_entry(&self.direct, keycode, mods).map(|s| s.action)
+    /// Returns the direct-table binding for `(keycode, mods)`, if any.
+    pub fn match_gui_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<DirectMatch> {
+        Self::find_entry(&self.direct, keycode, mods).map(|entry| DirectMatch {
+            action: entry.action,
+            repeat: entry.repeat,
+        })
     }
 
-    /// Returns the direct-table action bound to `(keycode, mods)` when it
-    /// fires while a webview holds keyboard focus: `ReleaseWebviewFocus`
-    /// always does, `Copy` and `Paste` never do, and any other action does
-    /// only while `direct-chords-over-webview` is on.
-    pub fn match_over_webview(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
+    /// Returns the direct-table binding for `(keycode, mods)` when it fires
+    /// while a webview holds keyboard focus: `ReleaseWebviewFocus` always
+    /// does, `Copy` and `Paste` never do, and any other action does only while
+    /// `direct-chords-over-webview` is on.
+    pub fn match_over_webview(&self, keycode: KeyCode, mods: Modifiers) -> Option<DirectMatch> {
         self.match_gui_action(keycode, mods)
-            .filter(|action| match action {
+            .filter(|hit| match hit.action {
                 Shortcut::ReleaseWebviewFocus => true,
                 Shortcut::Copy | Shortcut::Paste => false,
                 Shortcut::FontSize(_)
@@ -316,24 +318,40 @@ impl Shortcuts {
     }
 }
 
-/// Outcome of one `step_leader` call for a single pressed key. `Passthrough`
-/// means the key is not leader-related and the caller proceeds with its normal
-/// dispatch.
+/// A direct-table hit: the bound action and whether it fires again on OS key
+/// repeats while its chord is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DirectMatch {
+    pub(crate) action: Shortcut,
+    pub(crate) repeat: bool,
+}
+
+impl DirectMatch {
+    /// Whether the binding fires for a key press that is (`is_repeat`) or is
+    /// not an OS key repeat.
+    pub fn fires(&self, is_repeat: bool) -> bool {
+        self.repeat || !is_repeat
+    }
+}
+
+/// Outcome of one `step_leader` call for a single pressed key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LeaderStep {
     /// A leader-scoped binding matched; run this action.
     RunAction(Shortcut),
-    /// Consume the key with no effect (the leader itself, or an unmatched second
-    /// key that abandons the sequence).
+    /// Consume the key with no effect: the leader itself.
     Swallow,
+    /// The leader was pending and the key matched no leader-scoped binding.
+    /// The caller dispatches the key when its own table binds it, and
+    /// swallows it otherwise.
+    Abandoned,
     /// Not leader-related; fall through to the caller's normal dispatch.
     Passthrough,
 }
 
 /// Advances the orzma leader state machine for one pressed key, threading
 /// `phase` across frames. `now` is the caller's `Time<Real>::elapsed()`.
-/// Swallows the leader itself and any unmatched second key; drives the
-/// `r:<Leader>` repeat window (fire-and-extend inside the window, close and
-/// re-evaluate on any other key); returns `Passthrough` for unrelated keys.
+/// Swallows the leader itself and returns `Abandoned` for a second key no leader binding uses; drives the `r:<Leader>` repeat window (fire-and-extend inside the window, close and re-evaluate on any other key); returns `Passthrough` for unrelated keys.
 pub(crate) fn step_leader(
     phase: &mut LeaderPhase,
     shortcuts: &Shortcuts,
@@ -374,7 +392,7 @@ pub(crate) fn step_leader(
                 }
                 LeaderStep::RunAction(entry.action)
             }
-            None => LeaderStep::Swallow,
+            None => LeaderStep::Abandoned,
         };
     }
     if shortcuts.is_leader(keycode, mods) {
@@ -469,6 +487,23 @@ pub(crate) fn test_shortcuts_with_direct_chord(
 
 #[cfg(test)]
 impl Shortcuts {
+    /// Returns this table with one more direct chord.
+    pub fn with_direct_chord(
+        mut self,
+        keycode: KeyCode,
+        modifiers: Modifiers,
+        action: Shortcut,
+        repeat: bool,
+    ) -> Self {
+        self.direct.push(OrzmaShortcut {
+            keycode,
+            modifiers,
+            action,
+            repeat,
+        });
+        self
+    }
+
     /// Returns this table with `direct-chords-over-webview` set to `enabled`.
     pub fn with_direct_chords_over_webview(self, enabled: bool) -> Self {
         Self {
@@ -1373,7 +1408,8 @@ mod tests {
             let keycode =
                 key_to_keycode(&chord.key).expect("a default chord maps to a physical key");
             assert_eq!(
-                r.match_gui_action(keycode, chord.modifiers),
+                r.match_gui_action(keycode, chord.modifiers)
+                    .map(|hit| hit.action),
                 Some(action),
                 "the default chord for {label:?} ({chord}) must resolve to its own action"
             );
@@ -1384,11 +1420,13 @@ mod tests {
     fn match_gui_action_requires_exact_modifiers() {
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyV, mods(false, true, false, true)),
+            r.match_gui_action(KeyCode::KeyV, mods(false, true, false, true))
+                .map(|hit| hit.action),
             None
         );
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyQ, mods(false, true, false, true)),
+            r.match_gui_action(KeyCode::KeyQ, mods(false, true, false, true))
+                .map(|hit| hit.action),
             None
         );
     }
@@ -1397,11 +1435,13 @@ mod tests {
     fn unmatched_chord_is_none() {
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyH, mods(false, false, false, true)),
+            r.match_gui_action(KeyCode::KeyH, mods(false, false, false, true))
+                .map(|hit| hit.action),
             None
         );
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyA, mods(false, false, false, false)),
+            r.match_gui_action(KeyCode::KeyA, mods(false, false, false, false))
+                .map(|hit| hit.action),
             None
         );
     }
@@ -1475,8 +1515,13 @@ mod tests {
         assert_eq!(phase, LeaderPhase::Idle);
     }
 
+    /// Asserts that a key with no leader binding abandons a pending leader
+    /// and clears it.
+    ///
+    /// Case: a user taps the leader and then presses `z`, which no leader
+    /// binding uses.
     #[test]
-    fn pending_plus_unbound_key_swallows_and_clears_pending() {
+    fn pending_plus_unbound_key_abandons_and_clears_pending() {
         let sc = leader_fixture();
         let mut phase = LeaderPhase::Pending;
         let step = step_leader(
@@ -1486,7 +1531,7 @@ mod tests {
             mods(false, false, false, false),
             ms(0),
         );
-        assert!(matches!(step, LeaderStep::Swallow));
+        assert_eq!(step, LeaderStep::Abandoned);
         assert_eq!(phase, LeaderPhase::Idle);
     }
 
