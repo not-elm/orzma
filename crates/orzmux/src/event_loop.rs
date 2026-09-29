@@ -102,12 +102,13 @@ pub enum OrzmuxCommand {
         /// The pasted text.
         text: String,
     },
-    /// Route one frame's wheel notches over a pane by the pane's live VT
+    /// Route one frame's wheel travel over a pane by the pane's live VT
     /// modes.
     Wheel {
         /// The pane under the cursor.
         pane: PaneId,
-        /// The notches and the modifiers and cell they were gathered with.
+        /// The notches and reports, and the modifiers and cell they were
+        /// gathered with.
         input: WheelInput,
     },
     /// Routes one pointer event over a pane by the pane's live VT modes:
@@ -1165,11 +1166,12 @@ mod tests {
         );
     }
 
-    /// One wheel-up notch over cell (1, 1) with nothing held.
+    /// One wheel-up notch and report over cell (1, 1) with nothing held.
     fn wheel_up() -> WheelInput {
         WheelInput {
             up: 1,
-            right: 0,
+            report_up: 1,
+            report_right: 0,
             mods: WheelModifiers::default(),
             cell: Some(CellCoord { col: 1, row: 1 }),
             report_mods: ProtocolModifiers::default(),

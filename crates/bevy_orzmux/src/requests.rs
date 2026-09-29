@@ -188,7 +188,8 @@ mod tests {
             terminal: pane,
             input: WheelInput {
                 up: 1,
-                right: 0,
+                report_up: 1,
+                report_right: 0,
                 mods: WheelModifiers::default(),
                 cell: Some(CellCoord { col: 1, row: 1 }),
                 report_mods: ProtocolModifiers::default(),

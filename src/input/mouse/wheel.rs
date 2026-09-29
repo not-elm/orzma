@@ -84,7 +84,8 @@ fn dispatch_mouse_wheel(
         terminal: wt.target,
         input: WheelInput {
             up,
-            right,
+            report_up: up,
+            report_right: right,
             mods,
             cell,
             report_mods: protocol_mods(&held),
@@ -303,7 +304,7 @@ mod tests {
         let sent = dispatch(&mut app, 0.0, 1.0);
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].up, 2);
-        assert_eq!(sent[0].right, 0);
+        assert_eq!(sent[0].report_right, 0);
     }
 
     /// Asserts that wheel-up and wheel-down send vertical notches of
@@ -332,7 +333,7 @@ mod tests {
         let sent = dispatch(&mut app, 0.5, 0.0);
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].up, 0);
-        assert_eq!(sent[0].right, -1);
+        assert_eq!(sent[0].report_right, -1);
     }
 
     /// Asserts that the dominant-axis lock zeroes the vertical component
@@ -346,7 +347,7 @@ mod tests {
         let mut app = make_wheel_app();
         let sent = dispatch(&mut app, -2.0, 0.6);
         assert!(sent.iter().all(|input| input.up == 0));
-        assert!(sent.iter().any(|input| input.right != 0));
+        assert!(sent.iter().any(|input| input.report_right != 0));
     }
 
     /// Asserts that a vertical-dominant gesture keeps its vertical
@@ -360,7 +361,7 @@ mod tests {
         let sent = dispatch(&mut app, 0.6, -2.0);
         assert_eq!(sent.len(), 1);
         assert!(sent[0].up != 0);
-        assert_eq!(sent[0].right, 0);
+        assert_eq!(sent[0].report_right, 0);
     }
 
     /// Asserts that a diagonal gesture with the axis lock disabled sends
@@ -375,7 +376,7 @@ mod tests {
         let sent = dispatch(&mut app, 0.5, -0.5);
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].up, -1);
-        assert_eq!(sent[0].right, -1);
+        assert_eq!(sent[0].report_right, -1);
     }
 
     /// Asserts that a request carries the cell under the cursor.
@@ -420,10 +421,10 @@ mod tests {
         assert!(sent[0].mods.shift);
         if cfg!(target_os = "macos") {
             assert_eq!(sent[0].up, 2);
-            assert_eq!(sent[0].right, 0);
+            assert_eq!(sent[0].report_right, 0);
         } else {
             assert_eq!(sent[0].up, 0);
-            assert_eq!(sent[0].right, -2);
+            assert_eq!(sent[0].report_right, -2);
         }
     }
 

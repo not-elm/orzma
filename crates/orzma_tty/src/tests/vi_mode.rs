@@ -111,7 +111,8 @@ fn the_wheel_in_vi_mode_scrolls_while_the_app_tracks_the_mouse() {
     term.switch_vi_mode(ViModeSwitch::Enter);
     let wheel = WheelInput {
         up: 1,
-        right: 0,
+        report_up: 1,
+        report_right: 0,
         mods: WheelModifiers::default(),
         cell: Some(CellCoord { col: 1, row: 1 }),
         report_mods: ProtocolModifiers::default(),

@@ -427,13 +427,14 @@ impl<V: Vt> OrzmaTty<V> {
             .enqueue_write(PtyInput::encode_key(key, mods, modes).into_bytes())
     }
 
-    /// Routes one frame's wheel notches by the VT's current modes and
+    /// Routes one frame's wheel travel by the VT's current modes and
     /// applies the result.
     ///
-    /// Vertical notches become wheel reports while a mouse tracking level
-    /// is in force and Shift is not held, cursor keys while alternate
-    /// scroll is in effect, and a viewport scroll otherwise; horizontal
-    /// notches become reports only. Cursor keys snap a scrolled-back
+    /// While a mouse tracking level is in force and Shift is not held, the
+    /// frame's `report_up` and `report_right` become wheel reports.
+    /// Otherwise its `up` notches become cursor keys while alternate scroll
+    /// is in effect, and a viewport scroll elsewhere; horizontal travel
+    /// has no other route. Cursor keys snap a scrolled-back
     /// viewport to the live tail first; reports and viewport scrolls leave
     /// it where it is. Whatever both axes encode is queued for the PTY as
     /// one write. `Ok` means the bytes were queued, not that they reached
@@ -451,8 +452,8 @@ impl<V: Vt> OrzmaTty<V> {
         let modes = self.routing_modes();
         let mut bytes = Vec::new();
         for decision in [
-            WheelDecision::route(modes, input.up, input.mods, cfg),
-            WheelDecision::route_horizontal(modes, input.right, input.mods, cfg),
+            WheelDecision::route(modes, input.up, input.report_up, input.mods, cfg),
+            WheelDecision::route_horizontal(modes, input.report_right, input.mods, cfg),
         ] {
             self.stage_wheel_decision(&mut bytes, decision, input, modes);
         }

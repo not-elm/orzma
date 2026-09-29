@@ -3,25 +3,26 @@
 
 use super::*;
 
-/// A wheel frame of `up` vertical and `right` horizontal notches over
-/// cell (6, 4), with no modifiers held.
+/// A wheel frame of `up` vertical notches, as many vertical reports, and
+/// `right` horizontal reports over cell (6, 4), with no modifiers held.
 fn wheel(up: i32, right: i32) -> WheelInput {
     WheelInput {
         up,
-        right,
+        report_up: up,
+        report_right: right,
         mods: WheelModifiers::default(),
         cell: Some(CellCoord { col: 6, row: 4 }),
         report_mods: ProtocolModifiers::default(),
     }
 }
 
-/// Asserts that `send_wheel` over a tracking terminal writes one
-/// wheel-up report per notch, all in one write, and scrolls nothing.
+/// Asserts that `send_wheel` over a tracking terminal writes each of the
+/// frame's wheel-up reports, all in one write, and scrolls nothing.
 ///
-/// Case: nvim runs with `mouse=nvi`, and the user spins the wheel up
-/// two notches over its buffer.
+/// Case: nvim runs with `mouse=nvi`, and the user swipes up two cells
+/// over its buffer.
 #[test]
-fn send_wheel_over_a_tracking_terminal_writes_a_report_per_notch() {
+fn send_wheel_over_a_tracking_terminal_writes_its_reports_in_one_write() {
     let (mut term, sink) = tracking_term();
     term.send_wheel(wheel(2, 0), &WheelConfig::default())
         .expect("send_wheel");
@@ -29,6 +30,25 @@ fn send_wheel_over_a_tracking_terminal_writes_a_report_per_notch() {
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<64;6;4M");
     assert_eq!(sink.writes(), 1);
     assert!(term.vt.scrolls.is_empty());
+}
+
+/// Asserts that `send_wheel` over a tracking terminal writes one report
+/// per report the frame carries, whatever its notch count.
+///
+/// Case: nvim tracks the mouse, and the user swipes the trackpad up one
+/// cell, which the host counts as three notches and one report.
+#[test]
+fn send_wheel_over_a_tracking_terminal_writes_the_reports_not_the_notches() {
+    let (mut term, sink) = tracking_term();
+    let input = WheelInput {
+        up: 3,
+        report_up: 1,
+        ..wheel(0, 0)
+    };
+    term.send_wheel(input, &WheelConfig::default())
+        .expect("send_wheel");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<64;6;4M");
 }
 
 /// Asserts that a wheel report carries the modifier bits the host
@@ -132,13 +152,13 @@ fn send_wheel_with_shift_over_a_tracking_alternate_screen_writes_cursor_keys() {
     assert_eq!(sink.contents(), b"\x1b[A".repeat(6));
 }
 
-/// Asserts that horizontal notches become wheel-left / wheel-right
+/// Asserts that horizontal reports become wheel-left / wheel-right
 /// reports over a tracking terminal and nothing otherwise.
 ///
 /// Case: the user swipes a trackpad sideways over nvim, then over a
 /// shell prompt.
 #[test]
-fn send_wheel_routes_horizontal_notches_to_reports_only() {
+fn send_wheel_routes_horizontal_reports_only_over_a_tracking_terminal() {
     let (mut term, sink) = tracking_term();
     term.send_wheel(wheel(0, 1), &WheelConfig::default())
         .expect("send_wheel");
@@ -181,7 +201,7 @@ fn send_wheel_on_the_primary_screen_scrolls_the_viewport() {
 /// goes out as one write with the vertical reports first.
 ///
 /// Case: a diagonal trackpad swipe over nvim with the axis lock
-/// disabled leaves one notch on each axis.
+/// disabled covers one cell on each axis.
 #[test]
 fn send_wheel_writes_both_axes_in_one_write_vertical_first() {
     let (mut term, sink) = tracking_term();
