@@ -14,9 +14,12 @@ path = "src/main.rs"
 [dependencies]
 ratatui_orzma = { path = "../../sdk/ratatui_orzma" }
 ratatui = "0.29"
+serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 crossbeam-channel = "0.5"
+url = "2"
+percent-encoding = "2"
 
 [lints]
 workspace = true

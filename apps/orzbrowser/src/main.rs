@@ -1,7 +1,9 @@
 //! orzbrowser — a TUI browser for remote URLs in orzma panes.
 
+mod address;
 mod app;
 mod keymap;
+mod protocol;
 mod ui;
 
 use crate::app::{App, Cmd, ScrollAction};
