@@ -35,7 +35,8 @@ pub mod prelude {
     };
     pub use crate::error::{GridSizeError, RunError, StampError, VtError, VtResult};
     pub use crate::frame::{DirtyRow, Frame};
-    pub use crate::hyperlink::detect::{DetectedUrl, UrlMatch};
+    pub use crate::hyperlink::detected_url::DetectedUrl;
+    pub use crate::hyperlink::url_match::UrlMatch;
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
     pub use crate::placement::{
         AnchoredPlacement, InstanceId, MAX_COLS, MAX_PLACEMENTS, MAX_ROWS, PlacementSize,

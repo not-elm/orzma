@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::hyperlink::HyperlinkId;
-use crate::screen::cell::CellWidth;
+use crate::screen::cell::{CellWidth, GlyphClass};
 
 /// The cells of a viewport row showing `text` from column zero, padded
 /// with blanks to `cols`; a width-2 character takes its body and the

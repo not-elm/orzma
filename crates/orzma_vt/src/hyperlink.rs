@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-pub mod detect;
+pub mod detected_url;
+pub mod url_match;
 
 /// OSC 8 hyperlink: an interned id → URI mapping.
 ///
