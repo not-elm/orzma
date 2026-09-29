@@ -64,12 +64,13 @@ impl Views {
         orzma: &Orzma,
         app: &App,
         chrome_html: String,
+        page_js: String,
         engine: &SearchEngine,
     ) -> anyhow::Result<(Self, Inbox)> {
         let (url_tx, urls) = unbounded();
         let (hint_tx, hints) = unbounded();
         let (target_tx, targets) = unbounded();
-        let page = register_page(orzma, app, url_tx, hint_tx)?;
+        let page = register_page(orzma, app, page_js, url_tx, hint_tx)?;
         let chrome = register_chrome(orzma, app, chrome_html, engine, target_tx)?;
         Ok((
             Self { page, chrome },
@@ -109,6 +110,7 @@ fn run() -> anyhow::Result<()> {
         AddressTarget::Invalid(reason) => bail!("{reason}"),
     };
     let chrome_html = assets::chrome_html()?;
+    let page_js = assets::page_js()?;
 
     let orzma = Orzma::connect().map_err(|e| match e {
         OrzmaError::NotInPane(_) => {
@@ -116,7 +118,7 @@ fn run() -> anyhow::Result<()> {
         }
         _ => anyhow!("{e}"),
     })?;
-    let (views, inbox) = Views::register(&orzma, &app, chrome_html, &engine)?;
+    let (views, inbox) = Views::register(&orzma, &app, chrome_html, page_js, &engine)?;
 
     enable_raw_mode()?;
     if let Err(e) = execute!(stdout(), EnterAlternateScreen) {
@@ -250,6 +252,7 @@ fn push_chrome(sent_chrome: &mut Option<Chrome>, chrome_view: &WebviewHandle, ap
 fn register_page(
     orzma: &Orzma,
     app: &App,
+    page_js: String,
     url_tx: Sender<String>,
     hint_tx: Sender<HintOutcome>,
 ) -> anyhow::Result<WebviewHandle> {
@@ -257,7 +260,7 @@ fn register_page(
         Webview::url(app.url())
             .interactive(true)
             .forward_keys(keymap::forward_chords(app.page_keys()))
-            .preload([ORZMA_HINTS_JS])
+            .preload([ORZMA_HINTS_JS.to_owned(), page_js])
             .on("urlChanged", move |args: Value| -> Result<(), RpcError> {
                 if let Some(u) = args["url"].as_str() {
                     let _ = url_tx.send(u.to_owned());

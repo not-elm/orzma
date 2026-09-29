@@ -854,14 +854,22 @@ class OrzbrowserWebAssetsGuard(unittest.TestCase):
     def test_missing_chrome_page_raises(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            (d / ".gitkeep").write_text("")
+            (d / "page.js").write_text("void 0")
             with self.assertRaises(SystemExit):
                 bm.verify_orzbrowser_web_assets(d)
 
-    def test_present_chrome_page_ok(self):
+    def test_missing_page_script_raises(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             (d / "chrome.html").write_text("<html></html>")
+            with self.assertRaises(SystemExit):
+                bm.verify_orzbrowser_web_assets(d)
+
+    def test_present_web_assets_ok(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "chrome.html").write_text("<html></html>")
+            (d / "page.js").write_text("void 0")
             bm.verify_orzbrowser_web_assets(d)
 
 

@@ -24,3 +24,14 @@ await writeFile(
   html.replace('<!-- BUNDLE -->', () => `<script>${script}</script>`),
 );
 console.log('orzbrowser chrome page written to assets/chrome.html');
+
+const pageScript = await build({
+  entryPoints: [join(here, 'web', 'page', 'main.ts')],
+  bundle: true,
+  format: 'iife',
+  minify: true,
+  legalComments: 'eof',
+  write: false,
+});
+await writeFile(join(out, 'page.js'), pageScript.outputFiles[0].text);
+console.log('orzbrowser page script written to assets/page.js');

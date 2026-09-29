@@ -434,11 +434,16 @@ def verify_orzmd_web_assets(assets_dir: Path | None = None) -> None:
         )
 
 
+ORZBROWSER_WEB_ASSETS = ("chrome.html", "page.js")
+
+
 def verify_orzbrowser_web_assets(assets_dir: Path | None = None) -> None:
     assets = assets_dir if assets_dir is not None else REPO_ROOT / "apps" / "orzbrowser" / "assets"
-    if not (assets / "chrome.html").is_file():
+    missing = [name for name in ORZBROWSER_WEB_ASSETS if not (assets / name).is_file()]
+    if missing:
+        listed = ", ".join(f"apps/orzbrowser/assets/{name}" for name in missing)
         raise SystemExit(
-            "orzbrowser chrome page missing: apps/orzbrowser/assets/chrome.html was not built. "
+            f"orzbrowser web assets missing: {listed} not built. "
             "Run `pnpm build` (or `just orzbrowser-web`) before staging, "
             "or orzbrowser will fail to start."
         )
