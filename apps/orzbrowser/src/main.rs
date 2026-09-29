@@ -13,7 +13,7 @@ use crate::address::{AddressTarget, SearchEngine};
 use crate::app::{App, Cmd, ScrollAction};
 use crate::chrome::Chrome;
 use crate::focus::{FocusDrain, Target};
-use crate::protocol::{AddressRequest, ChromeEvent, Preview};
+use crate::protocol::{AddressRequest, ChromeEvent, PageEvent, Preview};
 use anyhow::{anyhow, bail};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::Terminal;
@@ -229,6 +229,11 @@ fn apply_reports(
             views.page.navigate(url)?;
         }
     }
+    for event in views.page.read_events::<PageEvent>() {
+        if run_cmds(app.on_page_event(event), views, orzma)?.is_break() {
+            return Ok(ControlFlow::Break(()));
+        }
+    }
     for event in views.chrome.read_events::<ChromeEvent>() {
         if event == ChromeEvent::Ready {
             *sent_chrome = None;
@@ -280,7 +285,8 @@ fn register_page(
                     });
                 }
                 Ok(())
-            }),
+            })
+            .add_event::<PageEvent>("page"),
     )?;
     Ok(view)
 }
@@ -360,6 +366,9 @@ fn run_cmd(cmd: Cmd, views: &Views, orzma: &Orzma) -> anyhow::Result<ControlFlow
         }
         Cmd::SetPageScrollKeys(enabled) => {
             let _ = views.page.emit("keys", &json!({ "enabled": enabled }));
+        }
+        Cmd::CancelChord => {
+            let _ = views.page.emit("cancelChord", &json!({}));
         }
         Cmd::BlurPageInput => {
             let _ = views.page.emit("blurInput", &json!({}));

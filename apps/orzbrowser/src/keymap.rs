@@ -109,6 +109,9 @@ fn map_hint(ctrl: bool, code: KeyCode) -> Action {
 pub(crate) enum KeySet {
     /// The Normal-mode vim keys.
     Normal,
+    /// The Normal-mode keys the TUI handles while the page holds focus; the
+    /// page's preload handles the scroll keys itself.
+    PageNormal,
     /// Esc alone, so every other key types into the page.
     Insert,
     /// Nothing, so every key types into the chrome's address input.
@@ -121,7 +124,7 @@ impl KeySet {
         if mode == Mode::Insert {
             Self::Insert
         } else {
-            Self::Normal
+            Self::PageNormal
         }
     }
 
@@ -141,47 +144,71 @@ impl KeySet {
 /// Ctrl+C is in no list, so while a webview is focused it copies the
 /// webview's selection instead of quitting.
 pub(crate) fn forward_chords(set: KeySet) -> Vec<KeyChord> {
-    let plain = |code| KeyChord {
+    match set {
+        KeySet::Empty => vec![],
+        KeySet::Insert => vec![plain_chord(KeyCode::Esc)],
+        KeySet::PageNormal => command_chords(),
+        KeySet::Normal => scroll_chords()
+            .into_iter()
+            .chain(command_chords())
+            .collect(),
+    }
+}
+
+/// The Normal-mode scroll keys, which the page's preload handles while the
+/// page holds focus.
+fn scroll_chords() -> Vec<KeyChord> {
+    vec![
+        plain_chord(KeyCode::Char('j')),
+        plain_chord(KeyCode::Down),
+        plain_chord(KeyCode::Char('k')),
+        plain_chord(KeyCode::Up),
+        plain_chord(KeyCode::Char(' ')),
+        plain_chord(KeyCode::PageDown),
+        plain_chord(KeyCode::PageUp),
+        ctrl_chord('d'),
+        ctrl_chord('u'),
+        ctrl_chord('f'),
+        ctrl_chord('b'),
+        plain_chord(KeyCode::Char('g')),
+        shift_chord('g'),
+    ]
+}
+
+/// The Normal-mode keys the TUI handles whichever view holds focus.
+fn command_chords() -> Vec<KeyChord> {
+    vec![
+        shift_chord('h'),
+        shift_chord('l'),
+        plain_chord(KeyCode::Char('o')),
+        plain_chord(KeyCode::Char(':')),
+        plain_chord(KeyCode::Char('r')),
+        plain_chord(KeyCode::Char('i')),
+        plain_chord(KeyCode::Char('f')),
+        plain_chord(KeyCode::Char('?')),
+        plain_chord(KeyCode::Char('q')),
+    ]
+}
+
+fn plain_chord(code: KeyCode) -> KeyChord {
+    KeyChord {
         mods: KeyModifiers::NONE,
         code,
-    };
-    match set {
-        KeySet::Empty => return vec![],
-        KeySet::Insert => return vec![plain(KeyCode::Esc)],
-        KeySet::Normal => {}
     }
-    let shift = |c| KeyChord {
+}
+
+fn shift_chord(c: char) -> KeyChord {
+    KeyChord {
         mods: KeyModifiers::SHIFT,
         code: KeyCode::Char(c),
-    };
-    let ctrl = |c| KeyChord {
+    }
+}
+
+fn ctrl_chord(c: char) -> KeyChord {
+    KeyChord {
         mods: KeyModifiers::CONTROL,
         code: KeyCode::Char(c),
-    };
-    vec![
-        plain(KeyCode::Char('j')),
-        plain(KeyCode::Down),
-        plain(KeyCode::Char('k')),
-        plain(KeyCode::Up),
-        plain(KeyCode::Char(' ')),
-        plain(KeyCode::PageDown),
-        plain(KeyCode::PageUp),
-        ctrl('d'),
-        ctrl('u'),
-        ctrl('f'),
-        ctrl('b'),
-        plain(KeyCode::Char('g')),
-        shift('g'),
-        shift('h'),
-        shift('l'),
-        plain(KeyCode::Char('o')),
-        plain(KeyCode::Char(':')),
-        plain(KeyCode::Char('r')),
-        plain(KeyCode::Char('i')),
-        plain(KeyCode::Char('f')),
-        plain(KeyCode::Char('?')),
-        plain(KeyCode::Char('q')),
-    ]
+    }
 }
 
 #[cfg(test)]
@@ -343,6 +370,7 @@ mod tests {
         };
         assert!(!forward_chords(KeySet::Normal).contains(&ctrl_c));
         assert!(!forward_chords(KeySet::Insert).contains(&ctrl_c));
+        assert!(!forward_chords(KeySet::PageNormal).contains(&ctrl_c));
     }
 
     /// Asserts which forward-key set each webview carries in each mode.
@@ -352,15 +380,39 @@ mod tests {
     #[test]
     fn each_webview_carries_its_mode_key_set() {
         for (mode, page, chrome) in [
-            (Mode::Normal, KeySet::Normal, KeySet::Normal),
+            (Mode::Normal, KeySet::PageNormal, KeySet::Normal),
             (Mode::Insert, KeySet::Insert, KeySet::Normal),
-            (Mode::Hint, KeySet::Normal, KeySet::Normal),
-            (Mode::Help, KeySet::Normal, KeySet::Normal),
-            (Mode::Address, KeySet::Normal, KeySet::Empty),
+            (Mode::Hint, KeySet::PageNormal, KeySet::Normal),
+            (Mode::Help, KeySet::PageNormal, KeySet::Normal),
+            (Mode::Address, KeySet::PageNormal, KeySet::Empty),
         ] {
             assert_eq!(KeySet::for_page(mode), page, "{mode:?}");
             assert_eq!(KeySet::for_chrome(mode), chrome, "{mode:?}");
         }
         assert!(forward_chords(KeySet::Empty).is_empty());
+    }
+
+    /// Asserts that the page's Normal set is the Normal set without the
+    /// scroll keys.
+    ///
+    /// Case: the page holds focus while the user scrolls with `j` and opens
+    /// the address bar with `o`.
+    #[test]
+    fn the_page_keeps_its_scroll_keys() {
+        let page = forward_chords(KeySet::PageNormal);
+        let scrolls = [
+            Action::ScrollLineDown,
+            Action::ScrollLineUp,
+            Action::ScrollHalfDown,
+            Action::ScrollHalfUp,
+            Action::ScrollPageDown,
+            Action::ScrollPageUp,
+            Action::GoBottom,
+            Action::Prefix('g'),
+        ];
+        for chord in forward_chords(KeySet::Normal) {
+            let scrolls_the_page = scrolls.contains(&map(Mode::Normal, event_of(&chord)));
+            assert_eq!(page.contains(&chord), !scrolls_the_page, "{chord:?}");
+        }
     }
 }

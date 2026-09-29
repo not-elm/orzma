@@ -47,6 +47,20 @@ pub(crate) enum ChromeEvent {
     OpenAddress,
 }
 
+/// A report from the page's preload (`page` event of the page webview),
+/// tagged by `kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum PageEvent {
+    /// The preload started in the page's top frame.
+    Ready,
+    /// The first key of a pending chord, or `None` once it resolves.
+    Pending {
+        /// The pending key.
+        key: Option<char>,
+    },
+}
+
 impl Preview {
     /// What the address bar shows for `target`.
     pub fn of(target: &AddressTarget, engine: &SearchEngine) -> Self {
@@ -163,5 +177,24 @@ mod tests {
         let request: AddressRequest =
             serde_json::from_value(json!({ "text": "rust" })).expect("a request parses");
         assert_eq!(request.text, "rust");
+    }
+
+    /// Asserts that the page's `ready` and `pending` reports parse, with a
+    /// pending key or `null`.
+    ///
+    /// Case: the page loads, and the user presses `g` and then `g` again.
+    #[test]
+    fn page_events_parse_by_kind() {
+        let parse =
+            |value| serde_json::from_value::<PageEvent>(value).expect("a page event parses");
+        assert_eq!(parse(json!({ "kind": "ready" })), PageEvent::Ready);
+        assert_eq!(
+            parse(json!({ "kind": "pending", "key": "g" })),
+            PageEvent::Pending { key: Some('g') }
+        );
+        assert_eq!(
+            parse(json!({ "kind": "pending", "key": null })),
+            PageEvent::Pending { key: None }
+        );
     }
 }

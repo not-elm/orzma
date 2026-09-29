@@ -4,7 +4,7 @@
 use crate::address::AddressTarget;
 use crate::focus::{FocusDrain, Target};
 use crate::keymap::{Action, KeySet, Mode};
-use crate::protocol::ChromeEvent;
+use crate::protocol::{ChromeEvent, PageEvent};
 use std::mem;
 
 /// Scroll direction / magnitude for the webview.
@@ -53,6 +53,8 @@ pub(crate) enum Cmd {
     Quit,
     /// Replace the forward keys of the given webview with the given set.
     SetForwardKeys(Target, KeySet),
+    /// Drop the page's pending chord.
+    CancelChord,
     /// Turn the page preload's scroll keys on or off.
     SetPageScrollKeys(bool),
     /// Take focus from the page's focused text field.
@@ -68,6 +70,7 @@ pub(crate) enum Cmd {
 pub(crate) struct App {
     mode: Mode,
     pending_prefix: Option<char>,
+    page_pending: Option<char>,
     url: String,
     seed: String,
     address_epoch: u32,
@@ -87,6 +90,7 @@ impl App {
         Self {
             mode: Mode::Normal,
             pending_prefix: None,
+            page_pending: None,
             url,
             seed: String::new(),
             address_epoch: 0,
@@ -95,7 +99,7 @@ impl App {
             pane_focused: true,
             page_placed: true,
             chrome_ready: false,
-            page_keys: KeySet::Normal,
+            page_keys: KeySet::PageNormal,
             chrome_keys: KeySet::Normal,
             page_scroll_keys: true,
         }
@@ -125,9 +129,14 @@ impl App {
         &self.url
     }
 
-    /// The first key of a pending two-key chord.
+    /// The first key of a pending two-key chord: the TUI's, else the page's
+    /// in Normal mode.
     pub fn pending_key(&self) -> Option<char> {
-        self.pending_prefix
+        self.pending_prefix.or_else(|| {
+            (self.mode == Mode::Normal)
+                .then_some(self.page_pending)
+                .flatten()
+        })
     }
 
     /// The text the address input starts with when the address bar opens.
@@ -177,15 +186,25 @@ impl App {
         self.with_key_sets(cmds)
     }
 
-    /// Processes an [`Action`] and returns the side effects to perform.
+    /// Processes an [`Action`] and returns the side effects to perform. In
+    /// Normal mode an action also drops the page's pending chord.
     pub fn on_action(&mut self, action: Action) -> Vec<Cmd> {
+        let cancel_page_chord = self.mode == Mode::Normal && self.page_pending.take().is_some();
+        let mut cmds = self.action_cmds(action);
+        if cancel_page_chord {
+            cmds.insert(0, Cmd::CancelChord);
+        }
+        self.with_key_sets(cmds)
+    }
+
+    fn action_cmds(&mut self, action: Action) -> Vec<Cmd> {
         if let Some(prefix) = self.pending_prefix.take()
             && let Action::Prefix(c) = action
             && c == prefix
         {
             return self.resolve_chord(c);
         }
-        let cmds = match action {
+        match action {
             Action::Prefix(c) => {
                 self.pending_prefix = Some(c);
                 vec![]
@@ -210,8 +229,7 @@ impl App {
             Action::HintBackspace => vec![Cmd::HintBackspace],
             Action::OpenHelp => self.open_help(),
             Action::Ignore => vec![],
-        };
-        self.with_key_sets(cmds)
+        }
     }
 
     // TODO: a click that focuses a text input on the page leaves the app in
@@ -278,6 +296,25 @@ impl App {
             ChromeEvent::Cancel if self.mode == Mode::Address => self.leave_address(None),
             ChromeEvent::OpenAddress if self.mode == Mode::Normal => self.open_address(),
             ChromeEvent::Cancel | ChromeEvent::OpenAddress => vec![],
+        };
+        self.with_key_sets(cmds)
+    }
+
+    /// Applies a report from the page's preload. A ready means a fresh page
+    /// whose scroll keys start off: they are told again, the page's pending
+    /// chord is dropped, and the page is focused in Normal mode. A pending
+    /// report records the chord key the toolbar shows.
+    pub fn on_page_event(&mut self, event: PageEvent) -> Vec<Cmd> {
+        let cmds = match event {
+            PageEvent::Ready => {
+                self.page_scroll_keys = false;
+                self.page_pending = None;
+                self.claim_page_focus()
+            }
+            PageEvent::Pending { key } => {
+                self.page_pending = key;
+                vec![]
+            }
         };
         self.with_key_sets(cmds)
     }
@@ -923,7 +960,7 @@ mod tests {
             a.on_action(Action::Escape),
             vec![
                 Cmd::SetPageScrollKeys(true),
-                page_keys(KeySet::Normal),
+                page_keys(KeySet::PageNormal),
                 Cmd::BlurPageInput,
                 Cmd::Focus(Target::Page)
             ]
@@ -946,7 +983,7 @@ mod tests {
             a.on_focus_drain(drain(&[false], &[true])),
             vec![
                 Cmd::SetPageScrollKeys(true),
-                page_keys(KeySet::Normal),
+                page_keys(KeySet::PageNormal),
                 Cmd::Focus(Target::Page)
             ]
         );
@@ -1154,7 +1191,7 @@ mod tests {
         a.on_focus_drain(drain(&[true], &[]));
         assert_eq!(
             a.on_focus_drain(drain(&[false], &[])),
-            vec![Cmd::SetPageScrollKeys(true), page_keys(KeySet::Normal)]
+            vec![Cmd::SetPageScrollKeys(true), page_keys(KeySet::PageNormal)]
         );
         assert_eq!(a.mode(), Mode::Normal);
     }
@@ -1205,5 +1242,71 @@ mod tests {
         assert!(a.page_scroll_keys());
         a.on_pane_focus(false);
         assert!(!a.page_scroll_keys());
+    }
+
+    /// Asserts that a page ready turns a fresh page's scroll keys on in Normal
+    /// mode and focuses the page, does neither in the address bar or without
+    /// the pane, and does not refocus a page that holds focus.
+    ///
+    /// Case: orzbrowser launches with an address and the page reloads, a page
+    /// loads while the user works in another pane, and orzbrowser launches
+    /// with the address bar open.
+    #[test]
+    fn a_page_ready_resends_the_scroll_keys_and_focuses_the_page() {
+        let mut a = app();
+        assert_eq!(
+            a.on_page_event(PageEvent::Ready),
+            vec![Cmd::SetPageScrollKeys(true), Cmd::Focus(Target::Page)]
+        );
+        assert_eq!(
+            a.on_page_event(PageEvent::Ready),
+            vec![Cmd::SetPageScrollKeys(true)]
+        );
+
+        let mut a = app();
+        a.on_pane_focus(false);
+        assert_eq!(a.on_page_event(PageEvent::Ready), vec![]);
+
+        let mut a = App::with_address_open(URL.to_owned());
+        assert_eq!(a.on_page_event(PageEvent::Ready), vec![]);
+    }
+
+    /// Asserts that the page's pending `g` shows in Normal mode, that a key
+    /// the TUI handles cancels it, and that a page ready drops it.
+    ///
+    /// Case: the user presses `g` on the page and then `H`; later presses `g`
+    /// and the page reloads.
+    #[test]
+    fn the_page_chord_shows_and_a_tui_key_cancels_it() {
+        let mut a = app();
+        a.on_page_event(PageEvent::Pending { key: Some('g') });
+        assert_eq!(a.pending_key(), Some('g'));
+        assert_eq!(
+            a.on_action(Action::HistoryBack),
+            vec![Cmd::CancelChord, Cmd::HistoryBack]
+        );
+        assert_eq!(a.pending_key(), None);
+
+        a.on_page_event(PageEvent::Pending { key: Some('g') });
+        a.on_page_event(PageEvent::Ready);
+        assert_eq!(a.pending_key(), None);
+    }
+
+    /// Asserts that the TUI's pending key shows whatever the page reports, and
+    /// that the page's shows only in Normal mode.
+    ///
+    /// Case: a stale page report arrives while the user types in Insert mode,
+    /// and the user presses `g` in the TUI before the page takes focus.
+    #[test]
+    fn the_tui_chord_wins_and_the_page_chord_needs_normal_mode() {
+        let mut a = app();
+        a.on_action(Action::EnterInsert);
+        a.on_page_event(PageEvent::Pending { key: Some('g') });
+        assert_eq!(a.pending_key(), None);
+
+        let mut a = app();
+        a.on_action(Action::Prefix('g'));
+        a.on_page_event(PageEvent::Pending { key: None });
+        assert_eq!(a.pending_key(), Some('g'));
     }
 }
