@@ -22,13 +22,13 @@ impl Plugin for HeldModifiersPlugin {
 /// keys kept apart.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HeldModifiers {
-    pub(crate) ctrl: bool,
-    pub(crate) shift: bool,
-    pub(crate) meta: bool,
-    pub(crate) alt_left: bool,
-    pub(crate) alt_right: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+    pub meta: bool,
+    pub alt_left: bool,
+    pub alt_right: bool,
     /// Whether the keyboard layout reports the held right Alt as AltGr.
-    pub(crate) alt_graph: bool,
+    pub alt_graph: bool,
 }
 
 impl HeldModifiers {
@@ -111,8 +111,8 @@ impl From<Modifiers> for HeldModifiers {
 /// character.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AltPolicy {
-    pub(crate) left_always_alt: bool,
-    pub(crate) right_always_alt: bool,
+    pub left_always_alt: bool,
+    pub right_always_alt: bool,
 }
 
 impl Default for AltPolicy {
