@@ -448,5 +448,22 @@ class OrzmdAssets(unittest.TestCase):
             self.assertIsNone(sw.verify_orzmd_web_assets(assets))
 
 
+class OrzbrowserAssets(unittest.TestCase):
+    def test_missing_chrome_page_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            assets = Path(tmp) / "assets"
+            assets.mkdir()
+            (assets / ".gitkeep").touch()
+            with self.assertRaises(SystemExit):
+                sw.verify_orzbrowser_web_assets(assets)
+
+    def test_present_chrome_page_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            assets = Path(tmp) / "assets"
+            assets.mkdir()
+            (assets / "chrome.html").write_text("<html></html>")
+            self.assertIsNone(sw.verify_orzbrowser_web_assets(assets))
+
+
 if __name__ == "__main__":
     unittest.main()

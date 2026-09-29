@@ -850,6 +850,21 @@ class OrzmdWebAssetsGuard(unittest.TestCase):
                 bm.verify_orzmd_web_assets(Path(d) / "does-not-exist")
 
 
+class OrzbrowserWebAssetsGuard(unittest.TestCase):
+    def test_missing_chrome_page_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / ".gitkeep").write_text("")
+            with self.assertRaises(SystemExit):
+                bm.verify_orzbrowser_web_assets(d)
+
+    def test_present_chrome_page_ok(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "chrome.html").write_text("<html></html>")
+            bm.verify_orzbrowser_web_assets(d)
+
+
 class NotarizeGuards(unittest.TestCase):
     def _parse(self, argv):
         return bm.build_arg_parser().parse_args(argv)

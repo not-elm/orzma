@@ -434,6 +434,16 @@ def verify_orzmd_web_assets(assets_dir: Path | None = None) -> None:
         )
 
 
+def verify_orzbrowser_web_assets(assets_dir: Path | None = None) -> None:
+    assets = assets_dir if assets_dir is not None else REPO_ROOT / "apps" / "orzbrowser" / "assets"
+    if not (assets / "chrome.html").is_file():
+        raise SystemExit(
+            "orzbrowser chrome page missing: apps/orzbrowser/assets/chrome.html was not built. "
+            "Run `pnpm build` (or `just orzbrowser-web`) before staging, "
+            "or orzbrowser will fail to start."
+        )
+
+
 def cargo_build(cfg: StageConfig) -> None:
     env = cargo_env(dict(os.environ))
     run(cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE), env=env)
@@ -551,6 +561,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     cfg = resolve_config(args)
     verify_orzmd_web_assets()
+    verify_orzbrowser_web_assets()
     if cfg.render_process_bin is None:
         assert_render_process_matches_lockfile(
             RENDER_PROCESS_VERSION, locked_version(RENDER_PROCESS_CRATE)
