@@ -175,6 +175,18 @@ describe('FindBox', () => {
     expect(t.root.classList.contains('no-results')).toBe(true);
   });
 
+  it('ignores next and prev while closed', () => {
+    const t = setup();
+    t.box.open();
+    t.type('foo');
+    t.flush();
+    t.key('Escape');
+    t.box.nav('next');
+    t.box.nav('prev');
+    expect(t.count()).toBe('');
+    expect(t.root.classList.contains('no-results')).toBe(false);
+  });
+
   it('shows the wrap mark for a moment after wrapping', () => {
     vi.useFakeTimers();
     const t = setup();

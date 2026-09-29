@@ -9,7 +9,7 @@ mod protocol;
 mod watcher;
 
 use crate::app::{App, Cmd};
-use crate::chrome::{Chrome, Toast};
+use crate::chrome::{Chrome, Toast, ToastKind};
 use crate::document::Document;
 use crate::protocol::{
     Content, NavigateRequest, OpenExternal, OpenPath, PageEvent, ScrollTo, StageAssetsRequest,
@@ -108,8 +108,7 @@ impl Session {
         reload_tx: &mpsc::Sender<()>,
     ) {
         let Some(entry) = self.history.pop() else {
-            let id = self.next_toast_id();
-            self.toast = Some(Toast::info(id, "no previous page", Instant::now()));
+            self.show_toast(ToastKind::Info, "no previous page");
             return;
         };
         let scroll = ScrollTo::Ratio { ratio: entry.ratio };
@@ -144,7 +143,7 @@ impl Session {
         self.last_fp = document::fingerprint(target).ok();
         self.missing = false;
         self.toast = None;
-        let content = content_for(&doc, scroll_to, true);
+        let content = Content::of_document(&doc, scroll_to, true);
         if let Ok(mut guard) = shared.lock() {
             *guard = doc;
         }
@@ -176,7 +175,7 @@ impl Session {
         self.last_fp = Some(fp);
         self.missing = false;
         self.toast = None;
-        let content = content_for(&doc, ScrollTo::Preserve, false);
+        let content = Content::of_document(&doc, ScrollTo::Preserve, false);
         if let Ok(mut guard) = shared.lock() {
             *guard = doc;
         }
@@ -203,14 +202,14 @@ impl Session {
 
     /// Shows `text` as an error toast.
     fn show_error(&mut self, text: impl Into<String>) {
-        let id = self.next_toast_id();
-        self.toast = Some(Toast::error(id, text, Instant::now()));
+        self.show_toast(ToastKind::Error, text);
     }
 
-    /// An id no earlier toast of this session had.
-    fn next_toast_id(&mut self) -> u64 {
+    /// Shows `text` as a toast of `kind`, under an id no earlier toast of this
+    /// session had.
+    fn show_toast(&mut self, kind: ToastKind, text: impl Into<String>) {
         self.toast_seq += 1;
-        self.toast_seq
+        self.toast = Some(Toast::new(self.toast_seq, kind, text, Instant::now()));
     }
 
     /// Drops the toast once it has been on screen for its whole lifetime.
@@ -237,12 +236,10 @@ struct Ctx<'a> {
 }
 
 /// Performs `cmds` in order; `Break` when one of them quits the app.
-fn run_cmds(session: &mut Session, cmds: Vec<Cmd>, ctx: &Ctx<'_>) -> ControlFlow<()> {
+fn run_cmds(cmds: Vec<Cmd>, ctx: &Ctx<'_>) -> ControlFlow<()> {
     for cmd in cmds {
         match cmd {
             Cmd::Quit => return ControlFlow::Break(()),
-            Cmd::Reload => session.reload(ctx.shared, ctx.view),
-            Cmd::Back => session.back(ctx.shared, ctx.view, ctx.reload_tx),
             Cmd::Focus => {
                 let _ = ctx.view.focus();
             }
@@ -382,7 +379,7 @@ fn register_view(
             .on("ready", move |(): ()| -> Result<Content, RpcError> {
                 page_ready.store(true, Ordering::Release);
                 let doc = ready_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
-                Ok(content_for(&doc, ScrollTo::Preserve, false))
+                Ok(Content::of_document(&doc, ScrollTo::Preserve, false))
             })
             .on(
                 "stageAssets",
@@ -419,18 +416,17 @@ fn event_loop(
 
     let mut session = Session::new(start_path, current_watcher);
     loop {
-        // NOTE: drain the focus changes even though nothing reads them: the SDK
-        // buffers them per handle and logs a warning once the buffer overflows.
-        let _ = view.read_focus_changes();
         if ctx.page_ready.swap(false, Ordering::AcqRel) {
             let cmds = session.on_ready();
-            if run_cmds(&mut session, cmds, ctx).is_break() {
+            if run_cmds(cmds, ctx).is_break() {
                 return Ok(());
             }
         }
         for event in view.read_events::<PageEvent>() {
-            if run_cmds(&mut session, vec![Cmd::from(event)], ctx).is_break() {
-                return Ok(());
+            match event {
+                PageEvent::Quit => return Ok(()),
+                PageEvent::Reload => session.reload(shared, view),
+                PageEvent::Back => session.back(shared, view, ctx.reload_tx),
             }
         }
         for request in view.read_events::<NavigateRequest>() {
@@ -476,19 +472,10 @@ fn event_loop(
             && key.kind != KeyEventKind::Release
         {
             let cmds = session.state.on_key(key);
-            if run_cmds(&mut session, cmds, ctx).is_break() {
+            if run_cmds(cmds, ctx).is_break() {
                 return Ok(());
             }
         }
-    }
-}
-
-fn content_for(doc: &Document, scroll_to: ScrollTo, navigated: bool) -> Content {
-    Content {
-        markdown: doc.text.clone(),
-        base_dir: doc.base_dir.display().to_string(),
-        scroll_to,
-        navigated,
     }
 }
 

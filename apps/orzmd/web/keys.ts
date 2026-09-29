@@ -78,6 +78,9 @@ type Binding =
   | 'enter'
   | 'search';
 
+/** A binding whose effect depends on whether the outline is open. */
+type ModeBinding = Exclude<Binding, 'search' | Request>;
+
 /** A key press from a DOM keydown or from the TUI, which never reports Meta. */
 type KeyInput = RelayedKey & { meta: boolean };
 
@@ -133,7 +136,7 @@ export function installKeys(
     }
   };
 
-  const inOutline = (binding: Binding): void => {
+  const inOutline = (binding: ModeBinding): void => {
     switch (binding) {
       case 'down':
         view.outline.move(1);
@@ -151,20 +154,12 @@ export function installKeys(
         view.outline.close();
         view.find.clearHighlights();
         break;
-      case 'search':
-        openSearch();
-        break;
-      case 'quit':
-      case 'reload':
-      case 'back':
-        view.request(binding);
-        break;
       default:
         break;
     }
   };
 
-  const inReading = (binding: Binding, press: Press | undefined): void => {
+  const inReading = (binding: ModeBinding, press: Press | undefined): void => {
     switch (binding) {
       case 'g':
       case '[':
@@ -175,9 +170,7 @@ export function installKeys(
         break;
       case 'next':
       case 'prev':
-        if (view.find.stage === 'active') {
-          view.find.nav(binding);
-        }
+        view.find.nav(binding);
         break;
       case 'outline':
         view.outline.open(view.currentHeading());
@@ -186,14 +179,6 @@ export function installKeys(
         view.find.clearHighlights();
         break;
       case 'enter':
-        break;
-      case 'search':
-        openSearch();
-        break;
-      case 'quit':
-      case 'reload':
-      case 'back':
-        view.request(binding);
         break;
       default:
         runScrollAction(view.scroller, binding, press);
@@ -217,6 +202,16 @@ export function installKeys(
       }
       setPending(null);
     }
+    switch (binding) {
+      case 'search':
+        openSearch();
+        return;
+      case 'quit':
+      case 'reload':
+      case 'back':
+        view.request(binding);
+        return;
+    }
     if (view.outline.isOpen()) {
       inOutline(binding);
     } else {
@@ -239,7 +234,7 @@ export function installKeys(
         view.find.backspace();
         break;
       default:
-        if (key.key.length === 1) {
+        if (Array.from(key.key).length === 1) {
           view.find.typeText(key.key);
         }
     }

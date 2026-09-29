@@ -57,6 +57,7 @@ let chrome: Chrome | null = null;
 let pendingKey: string | null = null;
 let currentHeading: number | null = null;
 let headings: HeadingInfo[] = [];
+let headingElements: HTMLElement[] = [];
 // NOTE: keys the TUI relays before the first document has rendered wait here:
 // run earlier, they would act on an empty page, and the render's scroll restore
 // would undo them.
@@ -97,7 +98,7 @@ function scrollRatio(): number {
 }
 
 function headingInfos(): HeadingInfo[] {
-  return headingEls().map((h) => ({
+  return headingElements.map((h) => ({
     level: Number(h.tagName.slice(1)),
     text: h.textContent ?? '',
   }));
@@ -118,10 +119,9 @@ interface ScrollAnchor {
 }
 
 function captureScrollAnchor(): ScrollAnchor {
-  const heads = headingEls();
   let id: string | null = null;
   let offset = 0;
-  for (const h of heads) {
+  for (const h of headingElements) {
     const top = h.getBoundingClientRect().top;
     if (reachedTop(top)) {
       id = h.id;
@@ -197,7 +197,7 @@ function applyScrollTarget(scrollTo: ScrollTo, anchor: ScrollAnchor): void {
 
 function updateCurrentHeading(): void {
   const next = headingTracker.current(
-    headingEls().map((h) => h.getBoundingClientRect().top),
+    headingElements.map((h) => h.getBoundingClientRect().top),
     window.scrollY,
   );
   if (next !== currentHeading) {
@@ -273,10 +273,10 @@ async function setContent(payload: ContentPayload): Promise<void> {
   const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
   installHeadingAnchors(content);
+  headingElements = headingEls();
   headings = headingInfos();
   outlinePanel.setItems(headings);
-  await renderMermaid();
-  await stageLocalImages(content);
+  await Promise.all([renderMermaid(), stageLocalImages(content)]);
   // NOTE: a newer setContent superseded this one during the await (rapid reloads
   // race) — skip the stale scroll so only the latest render positions the viewport.
   if (generation !== renderGeneration) {

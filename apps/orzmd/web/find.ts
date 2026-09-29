@@ -151,8 +151,11 @@ export class FindBox {
     this.deps.scrollTo(this.savedScroll);
   }
 
-  /** Moves to the next or previous match. */
+  /** Moves to the next or previous match. Ignored while the box is closed. */
   nav(dir: 'next' | 'prev'): void {
+    if (this.current === 'closed') {
+      return;
+    }
     this.render(this.search.navigate(dir));
     this.revealCurrent();
   }

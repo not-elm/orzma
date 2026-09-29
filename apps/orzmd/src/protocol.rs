@@ -1,6 +1,7 @@
 //! Wire types for the controller↔page protocol. Emit payloads serialize; call
 //! params deserialize. All field names are camelCase on the wire.
 
+use crate::document::Document;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +62,19 @@ pub(crate) struct Content {
     /// Whether this is another document the user moved to by a link or by
     /// going back; the page closes its search for it.
     pub(crate) navigated: bool,
+}
+
+impl Content {
+    /// The content of `doc`, scrolled to `scroll_to` once rendered;
+    /// `navigated` marks a document the user moved to.
+    pub fn of_document(doc: &Document, scroll_to: ScrollTo, navigated: bool) -> Self {
+        Self {
+            markdown: doc.text.clone(),
+            base_dir: doc.base_dir.display().to_string(),
+            scroll_to,
+            navigated,
+        }
+    }
 }
 
 /// A page request to stage local image files referenced by the current
@@ -168,87 +182,49 @@ mod tests {
     /// including Shift+G, Ctrl+D, Option+[, and Shift+Tab.
     #[test]
     fn relayed_keys_carry_dom_names() {
-        let none = KeyModifiers::NONE;
-        assert_eq!(
-            relayed(KeyCode::Char('j'), none),
-            named("j", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Char('G'), KeyModifiers::SHIFT),
-            named("G", false, false, true)
-        );
-        assert_eq!(
-            relayed(KeyCode::Char(' '), none),
-            named(" ", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            named("d", true, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Char('['), KeyModifiers::ALT),
-            named("[", false, true, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Up, none),
-            named("ArrowUp", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Down, none),
-            named("ArrowDown", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Left, none),
-            named("ArrowLeft", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Right, none),
-            named("ArrowRight", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::PageUp, none),
-            named("PageUp", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::PageDown, none),
-            named("PageDown", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Home, none),
-            named("Home", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::End, none),
-            named("End", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Enter, none),
-            named("Enter", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Esc, none),
-            named("Escape", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Tab, none),
-            named("Tab", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::BackTab, KeyModifiers::SHIFT),
-            named("Tab", false, false, true)
-        );
-        assert_eq!(
-            relayed(KeyCode::BackTab, none),
-            named("Tab", false, false, true)
-        );
-        assert_eq!(
-            relayed(KeyCode::Backspace, none),
-            named("Backspace", false, false, false)
-        );
-        assert_eq!(
-            relayed(KeyCode::Delete, none),
-            named("Delete", false, false, false)
-        );
+        let (none, shift) = (KeyModifiers::NONE, KeyModifiers::SHIFT);
+        let modified = [
+            (KeyCode::Char('j'), none, named("j", false, false, false)),
+            (KeyCode::Char('G'), shift, named("G", false, false, true)),
+            (KeyCode::Char(' '), none, named(" ", false, false, false)),
+            (
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL,
+                named("d", true, false, false),
+            ),
+            (
+                KeyCode::Char('['),
+                KeyModifiers::ALT,
+                named("[", false, true, false),
+            ),
+            (KeyCode::BackTab, shift, named("Tab", false, false, true)),
+            (KeyCode::BackTab, none, named("Tab", false, false, true)),
+        ];
+        for (code, modifiers, expected) in modified {
+            assert_eq!(relayed(code, modifiers), expected, "{code:?} {modifiers:?}");
+        }
+        let unmodified = [
+            (KeyCode::Up, "ArrowUp"),
+            (KeyCode::Down, "ArrowDown"),
+            (KeyCode::Left, "ArrowLeft"),
+            (KeyCode::Right, "ArrowRight"),
+            (KeyCode::PageUp, "PageUp"),
+            (KeyCode::PageDown, "PageDown"),
+            (KeyCode::Home, "Home"),
+            (KeyCode::End, "End"),
+            (KeyCode::Enter, "Enter"),
+            (KeyCode::Esc, "Escape"),
+            (KeyCode::Tab, "Tab"),
+            (KeyCode::Backspace, "Backspace"),
+            (KeyCode::Delete, "Delete"),
+        ];
+        for (code, name) in unmodified {
+            assert_eq!(
+                relayed(code, none),
+                named(name, false, false, false),
+                "{code:?}"
+            );
+        }
     }
 
     /// Asserts that keys without a DOM name here are not relayed.

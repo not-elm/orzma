@@ -20,7 +20,6 @@ export class OutlinePanel {
   private current: number | null = null;
   private markedSelected = -1;
   private markedCurrent = -1;
-  private revealPending = false;
 
   constructor(root: HTMLElement, host: OutlineHost) {
     this.root = root;
@@ -53,9 +52,8 @@ export class OutlinePanel {
     }
     this.selected = this.clamp(current ?? 0);
     this.root.hidden = false;
-    this.revealPending = true;
     this.host.relayout(true);
-    this.render();
+    this.render(true);
   }
 
   /** Hides the panel. Does nothing while it is hidden. */
@@ -119,8 +117,8 @@ export class OutlinePanel {
     return Math.min(Math.max(index, 0), Math.max(this.entries.length - 1, 0));
   }
 
-  /** Applies the marks, scrolling to the selection when it changed or the panel was shown again. Does nothing while hidden. */
-  private render(): void {
+  /** Applies the marks, scrolling to the selection when it changed or `reveal` is set. Does nothing while hidden. */
+  private render(reveal = false): void {
     if (this.root.hidden) {
       return;
     }
@@ -130,13 +128,12 @@ export class OutlinePanel {
       this.entry(currentIndex)?.classList.add('current');
       this.markedCurrent = currentIndex;
     }
-    if (this.selected !== this.markedSelected || this.revealPending) {
+    if (this.selected !== this.markedSelected || reveal) {
       this.entry(this.markedSelected)?.classList.remove('selected');
       const chosen = this.entry(this.selected);
       chosen?.classList.add('selected');
       chosen?.scrollIntoView({ block: 'nearest' });
       this.markedSelected = this.selected;
-      this.revealPending = false;
     }
   }
 

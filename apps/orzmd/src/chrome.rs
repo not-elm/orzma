@@ -47,21 +47,11 @@ pub(crate) struct Chrome {
 }
 
 impl Toast {
-    /// An error message `id` that appeared at `now`.
-    pub fn error(id: u64, text: impl Into<String>, now: Instant) -> Self {
+    /// A message `id` of severity `kind` that appeared at `now`.
+    pub fn new(id: u64, kind: ToastKind, text: impl Into<String>, now: Instant) -> Self {
         Self {
             id,
-            kind: ToastKind::Error,
-            text: text.into(),
-            shown_at: now,
-        }
-    }
-
-    /// An informational message `id` that appeared at `now`.
-    pub fn info(id: u64, text: impl Into<String>, now: Instant) -> Self {
-        Self {
-            id,
-            kind: ToastKind::Info,
+            kind,
             text: text.into(),
             shown_at: now,
         }
@@ -113,7 +103,7 @@ mod tests {
     /// has been deleted.
     #[test]
     fn chrome_serializes_to_camel_case() {
-        let toast = Toast::error(3, "cannot open b.md", Instant::now());
+        let toast = Toast::new(3, ToastKind::Error, "cannot open b.md", Instant::now());
         let value = serde_json::to_value(Chrome::build("a.md", true, Some(&toast)))
             .expect("chrome serializes");
         assert_eq!(
@@ -132,7 +122,7 @@ mod tests {
     #[test]
     fn a_toast_expires_after_four_seconds() {
         let shown = Instant::now();
-        let toast = Toast::info(1, "no previous page", shown);
+        let toast = Toast::new(1, ToastKind::Info, "no previous page", shown);
         assert!(!toast.is_expired(shown + Duration::from_millis(3999)));
         assert!(toast.is_expired(shown + Duration::from_secs(4)));
     }

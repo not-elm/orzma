@@ -220,15 +220,11 @@ describe('installKeys', () => {
     expect(t.log).toEqual(['scrollBy:60:1:press', 'scrollBy:60:1:repeat']);
   });
 
-  it('moves between matches on n and N only while a search is active', () => {
-    const closed = setup();
-    closed.tap({ key: 'n', code: 'KeyN' });
-    expect(closed.log).toEqual([]);
-
-    const active = setup({ stage: 'active' });
-    active.tap({ key: 'n', code: 'KeyN' });
-    active.tap({ key: 'N', code: 'KeyN', shiftKey: true });
-    expect(active.log).toEqual(['find.nav:next', 'find.nav:prev']);
+  it('moves between matches on n and N', () => {
+    const t = setup({ stage: 'active' });
+    t.tap({ key: 'n', code: 'KeyN' });
+    t.tap({ key: 'N', code: 'KeyN', shiftKey: true });
+    expect(t.log).toEqual(['find.nav:next', 'find.nav:prev']);
   });
 
   it('opens the outline on the heading being read with o and Tab', () => {
@@ -419,6 +415,13 @@ describe('installKeys', () => {
       'find.enter',
       'find.escape',
     ]);
+  });
+
+  it('types a relayed character outside the Basic Multilingual Plane into the query', () => {
+    const t = setup({ stage: 'typing' });
+    t.relay({ key: '😀' });
+    t.relay({ key: '𠮷' });
+    expect(t.log).toEqual(['find.type:😀', 'find.type:𠮷']);
   });
 
   it('keeps relayed keys that start a search in order', () => {

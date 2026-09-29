@@ -81,8 +81,10 @@ copied otherwise; a copied image does not refresh until orzmd is restarted.
 | `q` | Quit |
 
 The page handles every key and keeps keyboard focus while you read, so
-`Ctrl-c` no longer quits: on Windows and Linux it copies the page's selection,
-and on macOS you copy with `Cmd-c`. Quit with `q`. Holding a scroll key keeps
+`Ctrl-c` does not quit while the page has focus: on Windows and Linux it copies
+the page's selection, and on macOS you copy with `Cmd-c`. Quit with `q`. While
+the page does not have focus — before it has loaded, or after you come back to
+the pane with the keyboard — `Ctrl-c` still quits. Holding a scroll key keeps
 the page scrolling smoothly until you release it, and each tap moves exactly
 one step. While a search query is being typed, every key, `q` included, goes
 into the find box.

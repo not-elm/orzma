@@ -1,7 +1,7 @@
 //! The App state machine: which keys the TUI hands to the page and when it
 //! asks for page focus.
 
-use crate::protocol::{PageEvent, RelayedKey};
+use crate::protocol::RelayedKey;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::mem;
 
@@ -10,24 +10,10 @@ use std::mem;
 pub(crate) enum Cmd {
     /// Exits the app.
     Quit,
-    /// Re-reads the file from disk and pushes new content.
-    Reload,
-    /// Pops the navigation back stack.
-    Back,
     /// Gives the page keyboard focus.
     Focus,
     /// Hands a key the TUI received to the page (`key` emit).
     Relay(RelayedKey),
-}
-
-impl From<PageEvent> for Cmd {
-    fn from(event: PageEvent) -> Self {
-        match event {
-            PageEvent::Quit => Self::Quit,
-            PageEvent::Reload => Self::Reload,
-            PageEvent::Back => Self::Back,
-        }
-    }
 }
 
 /// Whole-app state.
@@ -38,9 +24,6 @@ pub(crate) struct App {
 }
 
 impl App {
-    /// The most keys held for the page before its first `ready`.
-    const MAX_QUEUED: usize = 64;
-
     /// Takes a key press that reached the TUI. Ctrl+C quits at once. Any other
     /// key with a DOM name is relayed and page focus is requested after the
     /// first `ready`; before it, up to 64 keys wait for that `ready`, and later
@@ -71,6 +54,9 @@ impl App {
         cmds.push(Cmd::Focus);
         cmds
     }
+
+    /// The most keys held for the page before its first `ready`.
+    const MAX_QUEUED: usize = 64;
 }
 
 #[cfg(test)]
@@ -167,15 +153,5 @@ mod tests {
             app.on_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE)),
             vec![]
         );
-    }
-
-    /// Asserts that each page request maps to its command.
-    ///
-    /// Case: the user presses `q`, `r`, and Backspace in the page.
-    #[test]
-    fn page_requests_become_commands() {
-        assert_eq!(Cmd::from(PageEvent::Quit), Cmd::Quit);
-        assert_eq!(Cmd::from(PageEvent::Reload), Cmd::Reload);
-        assert_eq!(Cmd::from(PageEvent::Back), Cmd::Back);
     }
 }
