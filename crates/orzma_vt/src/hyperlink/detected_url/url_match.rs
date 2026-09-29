@@ -33,14 +33,18 @@ impl UrlMatch {
         let mut from = 0;
         iter::from_fn(move || {
             while let Some((start, body)) = next_scheme(bytes, from) {
-                let (end, voided) = body_end(text, body);
-                let url_end = trimmed_end(bytes, body, end);
-                from = end;
-                if !voided && url_end > body {
-                    return Some(Self {
-                        url: start..url_end,
-                        scan_end: end,
-                    });
+                match BodyEnd::find(text, body) {
+                    BodyEnd::Voided(end) => from = end,
+                    BodyEnd::Ends(end) => {
+                        from = end;
+                        let url_end = trimmed_end(bytes, body, end);
+                        if url_end > body {
+                            return Some(Self {
+                                url: start..url_end,
+                                scan_end: end,
+                            });
+                        }
+                    }
                 }
             }
             None
@@ -81,29 +85,39 @@ fn is_word_start(bytes: &[u8], start: usize) -> bool {
         .is_none_or(|byte| !byte.is_ascii_alphanumeric())
 }
 
-/// The byte offset where the URL body starting at `body` ends, and
-/// whether the character found there voids the URL.
-fn body_end(text: &str, body: usize) -> (usize, bool) {
-    let Some(rest) = text.get(body..) else {
-        return (body, false);
-    };
-    let mut open: Vec<char> = Vec::new();
-    for (offset, c) in rest.char_indices() {
-        let at = body + offset;
-        match c {
-            '(' | '[' => open.push(c),
-            ')' | ']' => {
-                let opener = if c == ')' { '(' } else { '[' };
-                if open.last() != Some(&opener) {
-                    return (at, false);
+/// Where a URL body ends, as a byte offset into the scanned text.
+enum BodyEnd {
+    /// The body ends before this offset.
+    Ends(usize),
+    /// The character at this offset voids the URL.
+    Voided(usize),
+}
+
+impl BodyEnd {
+    /// The end of the URL body that starts at byte offset `body` in `text`.
+    fn find(text: &str, body: usize) -> Self {
+        let Some(rest) = text.get(body..) else {
+            return Self::Ends(body);
+        };
+        let mut open: Vec<char> = Vec::new();
+        for (offset, c) in rest.char_indices() {
+            let at = body + offset;
+            match c {
+                '(' | '[' => open.push(c),
+                ')' | ']' => {
+                    let opener = if c == ')' { '(' } else { '[' };
+                    if open.last() != Some(&opener) {
+                        return Self::Ends(at);
+                    }
+                    open.pop();
                 }
-                open.pop();
+                _ if is_url_body(c) => {}
+                _ if voids_url(c) => return Self::Voided(at),
+                _ => return Self::Ends(at),
             }
-            _ if is_url_body(c) => {}
-            _ => return (at, voids_url(c)),
         }
+        Self::Ends(text.len())
     }
-    (text.len(), false)
 }
 
 /// Whether `c`, right after a URL body, voids the URL rather than
