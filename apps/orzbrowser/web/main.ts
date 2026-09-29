@@ -3,9 +3,9 @@ import { AddressBar, type Preview } from './address';
 import { type Chrome, renderChrome } from './chrome';
 
 /** A report to the controller (`page` event), tagged by `kind`. */
-type PageEvent = { kind: 'ready' } | { kind: 'cancel' } | { kind: 'openAddress' };
+type ChromeEvent = { kind: 'ready' } | { kind: 'cancel' } | { kind: 'openAddress' };
 
-function emitPage(event: PageEvent): void {
+function emitPage(event: ChromeEvent): void {
   orzma.emit('page', event);
 }
 
