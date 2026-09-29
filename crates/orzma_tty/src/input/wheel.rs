@@ -117,34 +117,13 @@ impl WheelDecision {
         mods: WheelModifiers,
         cfg: &WheelConfig,
     ) -> Self {
-        if modes.mouse_reporting_active() && !mods.shift {
-            let button = if reports > 0 {
-                MouseButton::WheelUp
-            } else {
-                MouseButton::WheelDown
-            };
-            return Self::report(button, reports, cfg);
+        if app_receives_reports(modes, mods) {
+            return Self::vertical_reports(reports, cfg);
         }
-        if notches == 0 {
-            return Self::Noop;
-        }
-        let up = notches > 0;
-        let lines_per = lines_per_notch(mods, cfg);
         if modes.alternate_scroll_active() {
-            let key = if up {
-                TerminalKey::ArrowUp
-            } else {
-                TerminalKey::ArrowDown
-            };
-            let count = capped(notches, cfg)
-                .saturating_mul(lines_per)
-                .min(MAX_CURSOR_KEYS);
-            return Self::cursor_keys(key, count);
+            return Self::cursor_keys(notches, mods, cfg);
         }
-        match notches.saturating_mul(i32::try_from(lines_per).unwrap_or(i32::MAX)) {
-            0 => Self::Noop,
-            lines => Self::ScrollViewport(lines),
-        }
+        Self::scroll_viewport(notches, mods, cfg)
     }
 
     /// Routes one frame's horizontal reports, where positive means
@@ -160,30 +139,66 @@ impl WheelDecision {
         mods: WheelModifiers,
         cfg: &WheelConfig,
     ) -> Self {
-        if !modes.mouse_reporting_active() || mods.shift {
-            return Self::Noop;
+        if app_receives_reports(modes, mods) {
+            Self::horizontal_reports(reports, cfg)
+        } else {
+            Self::Noop
         }
+    }
+
+    fn vertical_reports(reports: i32, cfg: &WheelConfig) -> Self {
+        let button = if reports > 0 {
+            MouseButton::WheelUp
+        } else {
+            MouseButton::WheelDown
+        };
+        Self::capped_reports(button, reports, cfg)
+    }
+
+    fn horizontal_reports(reports: i32, cfg: &WheelConfig) -> Self {
         let button = if reports > 0 {
             MouseButton::WheelRight
         } else {
             MouseButton::WheelLeft
         };
-        Self::report(button, reports, cfg)
+        Self::capped_reports(button, reports, cfg)
     }
 
-    fn report(button: MouseButton, reports: i32, cfg: &WheelConfig) -> Self {
+    fn capped_reports(button: MouseButton, reports: i32, cfg: &WheelConfig) -> Self {
         match capped(reports, cfg) {
             0 => Self::Noop,
             count => Self::Report { button, count },
         }
     }
 
-    fn cursor_keys(key: TerminalKey, count: u32) -> Self {
+    fn cursor_keys(notches: i32, mods: WheelModifiers, cfg: &WheelConfig) -> Self {
+        let key = if notches > 0 {
+            TerminalKey::ArrowUp
+        } else {
+            TerminalKey::ArrowDown
+        };
+        let count = capped(notches, cfg)
+            .saturating_mul(lines_per_notch(mods, cfg))
+            .min(MAX_CURSOR_KEYS);
         match count {
             0 => Self::Noop,
             count => Self::CursorKeys { key, count },
         }
     }
+
+    fn scroll_viewport(notches: i32, mods: WheelModifiers, cfg: &WheelConfig) -> Self {
+        let lines_per = i32::try_from(lines_per_notch(mods, cfg)).unwrap_or(i32::MAX);
+        match notches.saturating_mul(lines_per) {
+            0 => Self::Noop,
+            lines => Self::ScrollViewport(lines),
+        }
+    }
+}
+
+/// Whether the wheel goes to the application as reports: a mouse
+/// tracking level is in force and Shift is not held.
+fn app_receives_reports(modes: VtModes, mods: WheelModifiers) -> bool {
+    modes.mouse_reporting_active() && !mods.shift
 }
 
 fn lines_per_notch(mods: WheelModifiers, cfg: &WheelConfig) -> u32 {
