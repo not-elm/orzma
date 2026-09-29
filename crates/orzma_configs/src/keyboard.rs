@@ -2,20 +2,21 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Which Option/Alt key(s) macOS treats as Meta (Alt) instead of composing
-/// into special characters. It has no effect on non-macOS platforms, where
-/// Alt is always Meta.
+/// Which Option key(s) macOS treats as Alt (Meta) instead of composing
+/// special characters. An Option key that composes still counts as Alt for a
+/// key that types no character, such as an arrow, or with Ctrl or Cmd held.
+/// It has no effect on other platforms.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionAsAlt {
-    /// Neither Option key acts as Meta; both compose normally (default).
-    #[default]
+    /// Neither Option key acts as Alt; both compose.
     None,
-    /// Only the left Option key acts as Meta; the right one composes.
+    /// Only the left Option key acts as Alt; the right one composes.
     Left,
-    /// Only the right Option key acts as Meta; the left one composes.
+    /// Only the right Option key acts as Alt; the left one composes (default).
+    #[default]
     Right,
-    /// Both Option keys act as Meta.
+    /// Both Option keys act as Alt.
     Both,
 }
 
@@ -23,7 +24,8 @@ pub enum OptionAsAlt {
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct KeyboardConfig {
-    /// Which Option key(s) act as Meta on macOS.
+    /// Which Option key(s) act as Alt (Meta) on macOS: the right one by
+    /// default. Other platforms ignore it.
     pub option_as_alt: OptionAsAlt,
 }
 
@@ -31,9 +33,12 @@ pub struct KeyboardConfig {
 mod tests {
     use super::*;
 
+    /// Asserts that the right Option key acts as Alt by default.
+    ///
+    /// Case: a macOS user starts orzma with no `[keyboard]` table.
     #[test]
-    fn default_is_none() {
-        assert_eq!(KeyboardConfig::default().option_as_alt, OptionAsAlt::None);
+    fn default_is_right() {
+        assert_eq!(KeyboardConfig::default().option_as_alt, OptionAsAlt::Right);
     }
 
     #[test]
