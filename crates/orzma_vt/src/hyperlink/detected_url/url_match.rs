@@ -63,17 +63,22 @@ fn next_scheme(bytes: &[u8], from: usize) -> Option<(usize, usize)> {
     const SCHEMES: [&[u8]; 4] = [b"http://", b"https://", b"ftp://", b"mailto:"];
 
     (from..bytes.len()).find_map(|start| {
-        let bounded = start
-            .checked_sub(1)
-            .and_then(|before| bytes.get(before))
-            .is_none_or(|byte| !byte.is_ascii_alphanumeric());
         let scheme = SCHEMES.iter().find(|scheme| {
             bytes
                 .get(start..start + scheme.len())
                 .is_some_and(|window| window.eq_ignore_ascii_case(scheme))
         })?;
-        bounded.then_some((start, start + scheme.len()))
+        is_word_start(bytes, start).then_some((start, start + scheme.len()))
     })
+}
+
+/// Whether `start` is the start of `bytes` or follows a byte that is not
+/// an ASCII letter or digit.
+fn is_word_start(bytes: &[u8], start: usize) -> bool {
+    start
+        .checked_sub(1)
+        .and_then(|before| bytes.get(before))
+        .is_none_or(|byte| !byte.is_ascii_alphanumeric())
 }
 
 /// The byte offset where the URL body starting at `body` ends, and
