@@ -1,7 +1,6 @@
+import { HeldKeys, type Press, type ScrollAction, type Scroller } from '@orzma/scroller';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { HeldKeys, type Press } from './held';
 import { installKeys, type KeyHandler } from './keys';
-import type { ScrollAction, Scroller } from './scroller';
 
 type Call =
   | ['scrollBy', number | 'viewSize', number, Press | undefined]

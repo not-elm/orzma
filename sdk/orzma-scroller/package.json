@@ -1,0 +1,20 @@
+{
+  "name": "@orzma/scroller",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vimium-style keyboard scrolling shared by the orzmd and orzbrowser pages.",
+  "type": "module",
+  "exports": {
+    ".": "./src/scroller.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "jsdom": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

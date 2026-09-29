@@ -8,6 +8,8 @@
 
 import type { HeldKeys, Press } from './held';
 
+export { HeldKeys, type Press } from './held';
+
 /** The time source and frame scheduler a scroller runs on. */
 export interface Clock {
   /** The current time, on the timebase of `KeyboardEvent.timeStamp`. */

@@ -40,6 +40,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (crate
 `packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@types/node`, `typescript`, `vitest` live under `pnpm-workspace.yaml`'s `catalog:`. Workspace packages are `sdk/*`:
 
 - `sdk/orzma-web` (`@orzma/web`) — in-page TypeScript client for the `window.orzma` bridge (`orzma`, `isOrzmaAvailable`, `OrzmaApi`); tests via `vitest`.
+- `sdk/orzma-scroller` (`@orzma/scroller`) — Vimium-style keyboard scrolling (`installScroller`, `HeldKeys`) shared by the orzbrowser and orzmd pages; private and consumed as TypeScript source; tests via `vitest`.
 
 ### How the pieces connect at runtime
 

@@ -171,4 +171,4 @@ the corresponding entry into the tool-enforced list above.
 
 ## Existing legitimate exceptions
 
-- `apps/orzbrowser/web/page/scroller.ts` starts with a `/*! … */` block comment: it is Vimium's MIT copyright notice for the ported scroller, and esbuild keeps `/*!` comments in the bundle.
+- `sdk/orzma-scroller/src/scroller.ts` starts with a `/*! … */` block comment: it is Vimium's MIT copyright notice for the ported scroller, and esbuild keeps `/*!` comments in the bundle.

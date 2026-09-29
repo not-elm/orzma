@@ -101,8 +101,9 @@ def render_ported_section(licenses_dir: Path) -> str:
     license_text = (licenses_dir / "vimium" / "MIT-LICENSE.txt").read_text(encoding="utf-8")
     lines = [
         "## Ported source\n",
-        "orzbrowser's page scroller (`apps/orzbrowser/web/page/scroller.ts`) is ported\n"
-        "from Vimium's `content_scripts/scroller.js` (https://github.com/philc/vimium).\n"
+        "The page scroller that orzbrowser and orzmd share\n"
+        "(`sdk/orzma-scroller/src/scroller.ts`) is ported from Vimium's\n"
+        "`content_scripts/scroller.js` (https://github.com/philc/vimium).\n"
         "Its license follows.\n",
         _fenced(license_text),
     ]

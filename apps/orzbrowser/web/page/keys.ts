@@ -1,5 +1,10 @@
-import type { HeldKeys, Press } from './held';
-import { runScrollAction, type ScrollAction, type Scroller } from './scroller';
+import {
+  type HeldKeys,
+  type Press,
+  runScrollAction,
+  type ScrollAction,
+  type Scroller,
+} from '@orzma/scroller';
 
 /** What the key handler tells the controller and the parent frame. */
 interface KeyHost {
