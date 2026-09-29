@@ -311,7 +311,7 @@ mod tests {
         let mut app = make_wheel_app();
         let sent = dispatch(&mut app, 0.0, 1.0);
         assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].up, 2);
+        assert_eq!(sent[0].up, 3);
         assert_eq!(sent[0].report_up, 1);
         assert_eq!(sent[0].report_right, 0);
     }
@@ -430,7 +430,7 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert!(sent[0].mods.shift);
         if cfg!(target_os = "macos") {
-            assert_eq!(sent[0].up, 2);
+            assert_eq!(sent[0].up, 3);
             assert_eq!(sent[0].report_up, 1);
             assert_eq!(sent[0].report_right, 0);
         } else {
@@ -454,7 +454,7 @@ mod tests {
         assert_eq!(
             accumulate_wheel(&mut folded, &frame, 16.0, true, &cfg),
             WheelSteps {
-                up: 2,
+                up: 3,
                 report_up: 1,
                 report_right: 0
             }
@@ -466,6 +466,34 @@ mod tests {
                 up: 0,
                 report_up: 0,
                 report_right: -1
+            }
+        );
+    }
+
+    /// Asserts that one cell of trackpad travel split over many small
+    /// frames completes three notches and one report at the defaults.
+    ///
+    /// Case: the user slowly swipes a MacBook trackpad up by one line on a
+    /// 34-pixel line height, which macOS delivers as seventeen 2-pixel
+    /// events in separate frames.
+    #[test]
+    fn one_cell_split_over_frames_completes_three_notches_and_one_report() {
+        let cfg = OrzmaMouseConfig::default();
+        let mut acc = WheelAccumulator::default();
+        let mut total = WheelSteps::default();
+        for _ in 0..17 {
+            let frame = [wheel_event(MouseScrollUnit::Pixel, 0.0, 2.0)];
+            let steps = accumulate_wheel(&mut acc, &frame, 34.0, false, &cfg);
+            total.up += steps.up;
+            total.report_up += steps.report_up;
+            total.report_right += steps.report_right;
+        }
+        assert_eq!(
+            total,
+            WheelSteps {
+                up: 3,
+                report_up: 1,
+                report_right: 0
             }
         );
     }

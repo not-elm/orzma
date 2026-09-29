@@ -132,11 +132,11 @@ option_as_alt = "none"   # "none" | "left" | "right" | "both"
 
 ```toml
 [mouse]
-lines_per_notch = 3              # u32. Lines scrolled per wheel notch.
+lines_per_notch = 1              # u32. Lines scrolled per wheel notch. Mouse reports ignore it.
 fine_modifier = "alt"            # "alt" | "ctrl" | "shift" | "none". Modifier for fine (slow) scroll; "shift" has no effect on macOS.
-fine_lines = 1                   # u32. Lines per notch while fine_modifier is held.
-max_protocol_events_per_frame = 8  # u32. Most wheel notches one routing call turns into mouse reports or alternate-scroll cursor keys, per axis; excess notches are dropped, and cursor keys additionally stop at 240 per call.
-cells_per_notch = 0.5            # f32. Wheel accumulation threshold per notch, on both axes.
+fine_lines = 1                   # u32. Lines per notch while fine_modifier is held. At the defaults it equals lines_per_notch, so the modifier changes nothing.
+max_protocol_events_per_frame = 24  # u32. Per axis and frame, the most mouse reports and the most notches turned into alternate-scroll cursor keys; the excess is dropped, and cursor keys additionally stop at 240 per call.
+cells_per_notch = 0.3333         # f32. Vertical wheel travel, in cells, per notch. Mouse reports ignore it: one is sent per cell of travel on either axis.
 axis_lock_ratio = 0.9            # f32, clamped to 0.0..=1.0; a non-finite value reverts to 0.9. Trackpad dominant-axis lock: horizontal scroll kept only when |x|/hypot(x,y) >= this. 0.0 disables; 1.0 = pure-horizontal only.
 double_click_timeout_ms = 400    # u32. Max ms between clicks to count as double/triple.
 click_drift_px = 8.0             # f32. Max pointer drift (logical px) between clicks of a multi-click.

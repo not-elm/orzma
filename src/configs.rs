@@ -261,6 +261,19 @@ mod tests {
         assert_eq!(out.max_protocol_events_per_frame, 16);
     }
 
+    /// Asserts that the default `[mouse]` block maps to the router's own
+    /// default policy.
+    ///
+    /// Case: a user whose config.toml has no `[mouse]` section starts
+    /// orzma, and the backend is built from the resolved defaults.
+    #[test]
+    fn the_default_mouse_block_maps_to_the_default_wheel_config() {
+        assert_eq!(
+            wheel_config(&MouseConfig::default()),
+            WheelConfig::default()
+        );
+    }
+
     /// Asserts that `cursor_policy` maps each `[cursor]` style setting
     /// to its `CursorShape` counterpart, and that the initial caret
     /// blinks.

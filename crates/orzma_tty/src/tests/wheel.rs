@@ -16,6 +16,16 @@ fn wheel(up: i32, right: i32) -> WheelInput {
     }
 }
 
+/// The routing policy these tests pin: three lines per notch, one fine
+/// line, and at most eight reports or notches per call.
+fn policy() -> WheelConfig {
+    WheelConfig {
+        lines_per_notch: 3,
+        fine_lines: 1,
+        max_protocol_events_per_frame: 8,
+    }
+}
+
 /// Asserts that `send_wheel` over a tracking terminal writes each of the
 /// frame's wheel-up reports, all in one write, and scrolls nothing.
 ///
@@ -24,8 +34,7 @@ fn wheel(up: i32, right: i32) -> WheelInput {
 #[test]
 fn send_wheel_over_a_tracking_terminal_writes_its_reports_in_one_write() {
     let (mut term, sink) = tracking_term();
-    term.send_wheel(wheel(2, 0), &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(wheel(2, 0), &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<64;6;4M");
     assert_eq!(sink.writes(), 1);
@@ -45,8 +54,7 @@ fn send_wheel_over_a_tracking_terminal_writes_the_reports_not_the_notches() {
         report_up: 1,
         ..wheel(0, 0)
     };
-    term.send_wheel(input, &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(input, &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M");
 }
@@ -65,8 +73,7 @@ fn send_wheel_reports_carry_the_gathered_modifier_bits() {
         },
         ..wheel(1, 0)
     };
-    term.send_wheel(input, &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(input, &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<72;6;4M");
 }
@@ -84,8 +91,7 @@ fn send_wheel_drops_reports_without_a_cell() {
         cell: None,
         ..wheel(2, 0)
     };
-    term.send_wheel(input, &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(input, &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"");
 }
@@ -101,16 +107,14 @@ fn send_wheel_drops_reports_without_a_cell() {
 fn send_wheel_over_the_alternate_screen_writes_cursor_keys() {
     let (mut term, sink) = detached_term();
     term.vt.modes.active_screen = ScreenKind::Alternate;
-    term.send_wheel(wheel(2, 0), &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(wheel(2, 0), &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A".repeat(6));
 
     let (mut term, sink) = detached_term();
     term.vt.modes.active_screen = ScreenKind::Alternate;
     term.vt.modes.app_cursor = true;
-    term.send_wheel(wheel(1, 0), &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(wheel(1, 0), &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1bOA".repeat(3));
 }
@@ -125,7 +129,7 @@ fn send_wheel_as_cursor_keys_keeps_the_selection() {
     let (mut term, _sink) = detached_term();
     term.vt.modes.active_screen = ScreenKind::Alternate;
     term.vt.selection_changes = true;
-    term.send_wheel(wheel(-1, 0), &WheelConfig::default())
+    term.send_wheel(wheel(-1, 0), &policy())
         .expect("send_wheel");
     assert!(term.vt.selections.is_empty());
 }
@@ -146,8 +150,7 @@ fn send_wheel_with_shift_over_a_tracking_alternate_screen_writes_cursor_keys() {
         },
         ..wheel(2, 0)
     };
-    term.send_wheel(input, &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(input, &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A".repeat(6));
 }
@@ -160,20 +163,18 @@ fn send_wheel_with_shift_over_a_tracking_alternate_screen_writes_cursor_keys() {
 #[test]
 fn send_wheel_routes_horizontal_reports_only_over_a_tracking_terminal() {
     let (mut term, sink) = tracking_term();
-    term.send_wheel(wheel(0, 1), &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(wheel(0, 1), &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<67;6;4M");
 
     let (mut term, sink) = tracking_term();
-    term.send_wheel(wheel(0, -1), &WheelConfig::default())
+    term.send_wheel(wheel(0, -1), &policy())
         .expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<66;6;4M");
 
     let (mut term, sink) = detached_term();
-    term.send_wheel(wheel(0, 1), &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(wheel(0, 1), &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"");
     assert!(term.vt.scrolls.is_empty());
@@ -189,8 +190,7 @@ fn send_wheel_routes_horizontal_reports_only_over_a_tracking_terminal() {
 fn send_wheel_on_the_primary_screen_scrolls_the_viewport() {
     let (mut term, sink) = detached_term();
     term.vt.scroll_moves = true;
-    term.send_wheel(wheel(2, 0), &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(wheel(2, 0), &policy()).expect("send_wheel");
     assert_eq!(term.vt.scrolls, vec![Scroll::Delta(6)]);
     term.settle_writes();
     assert_eq!(sink.contents(), b"");
@@ -205,8 +205,7 @@ fn send_wheel_on_the_primary_screen_scrolls_the_viewport() {
 #[test]
 fn send_wheel_writes_both_axes_in_one_write_vertical_first() {
     let (mut term, sink) = tracking_term();
-    term.send_wheel(wheel(1, 1), &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(wheel(1, 1), &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<67;6;4M");
     assert_eq!(sink.writes(), 1);
@@ -224,16 +223,14 @@ fn send_wheel_snaps_the_viewport_only_on_the_cursor_key_route() {
     let (mut term, sink) = detached_term();
     term.vt.modes.active_screen = ScreenKind::Alternate;
     term.vt.display_offset = DisplayOffset(5);
-    term.send_wheel(wheel(1, 0), &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(wheel(1, 0), &policy()).expect("send_wheel");
     assert_eq!(term.vt.display_offset, DisplayOffset(0));
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A".repeat(3));
 
     let (mut term, sink) = tracking_term();
     term.vt.display_offset = DisplayOffset(5);
-    term.send_wheel(wheel(1, 0), &WheelConfig::default())
-        .expect("send_wheel");
+    term.send_wheel(wheel(1, 0), &policy()).expect("send_wheel");
     assert_eq!(term.vt.display_offset, DisplayOffset(5));
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M");
@@ -254,15 +251,15 @@ fn send_wheel_reports_a_pty_write_failure() {
     )
     .expect("OrzmaTty::detached");
     term.vt.modes.mouse_tracking = MouseTracking::Drag;
-    term.send_wheel(wheel(1, 0), &WheelConfig::default())
+    term.send_wheel(wheel(1, 0), &policy())
         .expect("the frame is queued before the writer fails");
     term.settle_writes();
     assert!(matches!(
-        term.send_wheel(wheel(1, 0), &WheelConfig::default()),
+        term.send_wheel(wheel(1, 0), &policy()),
         Err(OrzmaTtyError::PtyWrite(_))
     ));
     assert!(matches!(
-        term.send_wheel(wheel(1, 0), &WheelConfig::default()),
+        term.send_wheel(wheel(1, 0), &policy()),
         Err(OrzmaTtyError::PtyWriterClosed)
     ));
 }
