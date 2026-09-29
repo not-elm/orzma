@@ -117,17 +117,12 @@ impl OrzmaConfigs {
 
     fn validate(&self) -> OrzmaConfigsResult<()> {
         let sc = &self.shortcuts;
-        if let Err(dupes) = sc.validate_no_direct_conflicts() {
-            return Err(OrzmaConfigsError::DuplicateChords(dupes));
-        }
-        if let Err(dupes) = sc.validate_no_leader_conflicts() {
-            return Err(OrzmaConfigsError::DuplicatePrefixChords(dupes));
-        }
-        if let Err(dupes) = self.vi_mode.validate_no_duplicate_keys() {
-            return Err(OrzmaConfigsError::DuplicateViModeKeys(dupes));
-        }
+        sc.validate_no_direct_conflicts()?;
+        sc.validate_no_leader_conflicts()?;
+        self.vi_mode.validate_no_duplicate_keys()?;
         if let Some(shortcuts::Leader::Chord(leader)) = sc.leader.as_ref() {
-            if let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
+            if let Some((action, _, _, _)) =
+                sc.direct_chords().find(|(_, chord, _, _)| *chord == leader)
             {
                 return Err(OrzmaConfigsError::LeaderShadowsDirectBinding {
                     chord: leader.clone(),
@@ -336,6 +331,35 @@ mod validate_tests {
     fn validate_accepts_enter_vi_mode_on_leader_e() {
         let toml_str = "[shortcuts]\nenter-vi-mode = \"<Leader>e\"\n";
         assert!(parse_validated(toml_str).is_ok());
+    }
+
+    /// Asserts that a config binding the new stock `Alt` chords to the same
+    /// actions validates.
+    ///
+    /// Case: a macOS user who already moved the pane actions to `ALT+` chords
+    /// upgrades with their config file unchanged.
+    #[test]
+    fn a_config_that_already_binds_the_stock_alt_chords_validates() {
+        let toml_str = "[keyboard]\noption_as_alt = \"both\"\n\n[shortcuts]\nselect-left-pane = \"ALT+h\"\nselect-down-pane = \"ALT+j\"\nselect-up-pane = \"ALT+k\"\nselect-right-pane = \"ALT+l\"\nsplit-vertical-pane = \"ALT+i\"\nsplit-horizontal-pane = \"ALT+o\"\nkill-pane = \"ALT+p\"\n";
+        assert!(parse_validated(toml_str).is_ok());
+    }
+
+    /// Asserts that a config binding a new stock `Alt` chord to another action
+    /// fails validation, naming both actions.
+    ///
+    /// Case: a user bound the vertical split to `Alt+c` before `Alt+c` became
+    /// the stock new-workspace chord.
+    #[test]
+    fn a_custom_binding_on_a_new_stock_alt_chord_fails_validation() {
+        let toml_str = "[shortcuts]\nsplit-vertical-pane = \"Alt+c\"\n";
+        match parse_validated(toml_str).unwrap_err() {
+            OrzmaConfigsError::DuplicateChords(dupes) => {
+                assert_eq!(dupes.len(), 1);
+                assert!(dupes[0].actions.contains(&"split-vertical-pane"));
+                assert!(dupes[0].actions.contains(&"new-workspace"));
+            }
+            other => panic!("expected DuplicateChords, got {other:?}"),
+        }
     }
 }
 

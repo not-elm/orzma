@@ -2,6 +2,7 @@
 //! (case-sensitive characters, symbols allowed) with an optional `Ctrl+`
 //! prefix, a different grammar from `[shortcuts]` chords.
 
+use crate::error::{OrzmaConfigsError, OrzmaConfigsResult, ViModeKeyParseError};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -97,32 +98,16 @@ impl fmt::Display for ViModeKey {
     }
 }
 
-/// Reason a vi-mode key string failed to parse.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ViModeKeyParseError {
-    /// Empty key token.
-    #[error("empty vi-mode key")]
-    Empty,
-    /// A modifier other than `Ctrl` (`Cmd`/`Alt`/`Shift`/aliases).
-    #[error(
-        "modifier {0:?} is not allowed in [vi-mode] (only Ctrl+); express Shift via the character case"
-    )]
-    ForbiddenModifier(String),
-    /// More than one `+`-separated segment beyond `Ctrl+<key>`.
-    #[error("too many tokens in vi-mode key {0:?} (expected [Ctrl+]<key>)")]
-    TooManyTokens(String),
-    /// A multi-character token that is not a known named key.
-    #[error("unknown vi-mode key {0:?} (expected one character or a named key)")]
-    UnknownKey(String),
-    /// `Ctrl+` with a non-alphanumeric character.
-    #[error("Ctrl+{0:?} is not allowed (Ctrl accepts ASCII alphanumerics and named keys only)")]
-    CtrlNonAlphanumeric(String),
-}
-
 /// Parses one `[vi-mode]` key string (`"V"`, `"$"`, `"Ctrl+F"`, `"Escape"`).
-pub fn parse_vi_mode_key(s: &str) -> Result<ViModeKey, ViModeKeyParseError> {
+///
+/// # Errors
+///
+/// Returns [`OrzmaConfigsError::ViModeKey`] when the string is empty, names
+/// a modifier other than `Ctrl`, has more than one `+`, names no known key,
+/// or puts `Ctrl` on a non-alphanumeric character.
+pub fn parse_vi_mode_key(s: &str) -> OrzmaConfigsResult<ViModeKey> {
     if s.is_empty() {
-        return Err(ViModeKeyParseError::Empty);
+        return Err(ViModeKeyParseError::Empty.into());
     }
     // NOTE: a bare "+" would split into two empty tokens and be misread as a
     // forbidden modifier — and a config parse error discards the user's WHOLE
@@ -138,14 +123,12 @@ pub fn parse_vi_mode_key(s: &str) -> Result<ViModeKey, ViModeKeyParseError> {
         [key] => (false, *key),
         [modifier, key] if modifier.eq_ignore_ascii_case("ctrl") => (true, *key),
         [modifier, _] => {
-            return Err(ViModeKeyParseError::ForbiddenModifier(
-                (*modifier).to_string(),
-            ));
+            return Err(ViModeKeyParseError::ForbiddenModifier((*modifier).to_string()).into());
         }
-        _ => return Err(ViModeKeyParseError::TooManyTokens(s.to_string())),
+        _ => return Err(ViModeKeyParseError::TooManyTokens(s.to_string()).into()),
     };
     if key_token.is_empty() {
-        return Err(ViModeKeyParseError::Empty);
+        return Err(ViModeKeyParseError::Empty.into());
     }
     if let Some(named) = ViModeNamedKey::from_token(key_token) {
         return Ok(ViModeKey {
@@ -155,13 +138,11 @@ pub fn parse_vi_mode_key(s: &str) -> Result<ViModeKey, ViModeKeyParseError> {
     }
     let mut chars = key_token.chars();
     let (Some(c), None) = (chars.next(), chars.next()) else {
-        return Err(ViModeKeyParseError::UnknownKey(key_token.to_string()));
+        return Err(ViModeKeyParseError::UnknownKey(key_token.to_string()).into());
     };
     if ctrl {
         if !c.is_ascii_alphanumeric() {
-            return Err(ViModeKeyParseError::CtrlNonAlphanumeric(
-                key_token.to_string(),
-            ));
+            return Err(ViModeKeyParseError::CtrlNonAlphanumeric(key_token.to_string()).into());
         }
         return Ok(ViModeKey {
             ctrl: true,
@@ -446,9 +427,9 @@ vi_mode_fields! {
 }
 
 impl ViModeConfig {
-    /// Detects keys bound to more than one action. The reported entries are in
-    /// a deterministic order.
-    pub(crate) fn validate_no_duplicate_keys(&self) -> Result<(), Vec<DuplicateViModeKey>> {
+    /// Detects keys bound to more than one action, reporting every one as
+    /// [`OrzmaConfigsError::DuplicateViModeKeys`] in a deterministic order.
+    pub(crate) fn validate_no_duplicate_keys(&self) -> OrzmaConfigsResult {
         let mut by_key: BTreeMap<ViModeKey, Vec<&'static str>> = BTreeMap::new();
         for (label, keys, _action) in self.bindings_iter() {
             for key in keys {
@@ -460,7 +441,11 @@ impl ViModeConfig {
             .filter(|(_, labels)| labels.len() >= 2)
             .map(|(key, actions)| DuplicateViModeKey { key, actions })
             .collect();
-        if dupes.is_empty() { Ok(()) } else { Err(dupes) }
+        if dupes.is_empty() {
+            Ok(())
+        } else {
+            Err(OrzmaConfigsError::DuplicateViModeKeys(dupes))
+        }
     }
 }
 
@@ -555,7 +540,9 @@ mod tests {
         assert_eq!(parse_vi_mode_key("ctrl+v").unwrap(), ctrl("v"));
         assert!(matches!(
             parse_vi_mode_key("Ctrl+$"),
-            Err(ViModeKeyParseError::CtrlNonAlphanumeric(_))
+            Err(OrzmaConfigsError::ViModeKey(
+                ViModeKeyParseError::CtrlNonAlphanumeric(_)
+            ))
         ));
     }
 
@@ -563,27 +550,37 @@ mod tests {
     fn parse_rejects_forbidden_modifiers_and_garbage() {
         assert!(matches!(
             parse_vi_mode_key("Cmd+x"),
-            Err(ViModeKeyParseError::ForbiddenModifier(_))
+            Err(OrzmaConfigsError::ViModeKey(
+                ViModeKeyParseError::ForbiddenModifier(_)
+            ))
         ));
         assert!(matches!(
             parse_vi_mode_key("Shift+v"),
-            Err(ViModeKeyParseError::ForbiddenModifier(_))
+            Err(OrzmaConfigsError::ViModeKey(
+                ViModeKeyParseError::ForbiddenModifier(_)
+            ))
         ));
         assert!(matches!(
             parse_vi_mode_key("Alt+j"),
-            Err(ViModeKeyParseError::ForbiddenModifier(_))
+            Err(OrzmaConfigsError::ViModeKey(
+                ViModeKeyParseError::ForbiddenModifier(_)
+            ))
         ));
         assert!(matches!(
             parse_vi_mode_key("ab"),
-            Err(ViModeKeyParseError::UnknownKey(_))
+            Err(OrzmaConfigsError::ViModeKey(
+                ViModeKeyParseError::UnknownKey(_)
+            ))
         ));
         assert!(matches!(
             parse_vi_mode_key(""),
-            Err(ViModeKeyParseError::Empty)
+            Err(OrzmaConfigsError::ViModeKey(ViModeKeyParseError::Empty))
         ));
         assert!(matches!(
             parse_vi_mode_key("Ctrl+Shift+F"),
-            Err(ViModeKeyParseError::TooManyTokens(_))
+            Err(OrzmaConfigsError::ViModeKey(
+                ViModeKeyParseError::TooManyTokens(_)
+            ))
         ));
     }
 
@@ -611,7 +608,10 @@ mod tests {
     #[test]
     fn duplicate_key_across_actions_is_detected() {
         let cfg: ViModeConfig = toml::from_str("yank = \"x\"\nexit = [\"x\", \"q\"]\n").unwrap();
-        let dupes = cfg.validate_no_duplicate_keys().unwrap_err();
+        let Err(OrzmaConfigsError::DuplicateViModeKeys(dupes)) = cfg.validate_no_duplicate_keys()
+        else {
+            panic!("expected DuplicateViModeKeys");
+        };
         assert_eq!(dupes.len(), 1);
         assert_eq!(dupes[0].key, plain("x"));
         assert!(dupes[0].actions.contains(&"yank"));

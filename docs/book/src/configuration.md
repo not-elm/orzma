@@ -124,8 +124,14 @@ size = 11.25              # f32, logical px. Must be 0 < size <= 200, else start
 
 ```toml
 [keyboard]
-# macOS only. Which Option key sends Meta instead of composing.
-option_as_alt = "none"   # "none" | "left" | "right" | "both"
+# macOS only. Which Option key acts as Alt: it sends Meta to the shell and runs
+# Alt+ shortcuts. The other Option key types special characters (Option+g = ©);
+# for shortcut matching it still counts as Alt with a named key such as an
+# arrow, or together with Ctrl or Cmd. On Windows and Linux every Alt key is
+# Alt except AltGr, which types characters.
+# In vi mode an accent key pressed with the composing Option key (e.g. left
+# Option+e under the default) runs as its plain key (e).
+option_as_alt = "right"   # "none" | "left" | "right" | "both"
 ```
 
 ### `[mouse]`
