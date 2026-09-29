@@ -402,6 +402,84 @@ Exceptions:
   value (e.g. an `Option<Entity>` from a query, an accessor returning a
   borrow) is not building a new `T` and is out of scope.
 
+## Constants — declare each `const` in the narrowest scope that holds its uses
+
+A `const` is declared in the narrowest scope that covers every place
+that names it. Module scope is the fallback, not the default: a constant
+at the top of a file reads as shared by the whole module, so one that
+serves a single function, or that describes one type, misleads the
+reader about how far it reaches.
+
+Pick the scope narrowest first:
+
+1. Exactly one function names it — a `const` local to that function.
+2. It states a property of one type — an associated const on that type.
+3. Otherwise — a module-level `const` in the narrowest module that holds
+   its uses.
+
+Required — a constant one function uses is local to it:
+
+- A `const` that exactly one function names is declared inside that
+  function's body. This includes a method: a constant only one method
+  uses is local to it, not an associated const.
+- Declare it at the top of the body, before the first statement, with
+  its `///` doc.
+
+```rust
+/// Whether `c` may appear in a URL body.
+fn is_url_body(c: char) -> bool {
+    /// The printable ASCII characters a URL body never holds.
+    const EXCLUDED_ASCII: [char; 9] = ['<', '>', '"', '`', '{', '}', '|', '\\', '^'];
+
+    c.is_ascii_graphic() && !EXCLUDED_ASCII.contains(&c)
+}
+```
+
+Required — a constant that belongs to a type is an associated const:
+
+- A `const` that states a property of one type's values — a limit, a
+  default, a capacity — and is named by more than one function is an
+  associated const in that type's `impl`, referenced as
+  `Workspace::MAX_NAME_CHARS` (`Self::MAX_NAME_CHARS` inside the
+  `impl`).
+- Name it for what it is, dropping the type name the `T::` prefix
+  already carries: `MAX_WORKSPACE_NAME_CHARS` →
+  `Workspace::MAX_NAME_CHARS`.
+- An associated const used only inside the type's own `impl` stays
+  private; a wider one follows "Visibility — don't restate a type's own
+  ceiling on its members".
+
+| Instead of                                                                   | Use                                                         |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Module-level `const EXCLUDED_ASCII: …` that only `is_url_body` names         | `const EXCLUDED_ASCII: …` at the top of `is_url_body`'s body |
+| Module-level `pub const MAX_WORKSPACE_NAME_CHARS: usize = 64;`               | `impl Workspace { pub const MAX_NAME_CHARS: usize = 64; }`  |
+
+Forbidden:
+
+| Pattern                                                              | Why                                                               |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| A module-level `const` that exactly one function names               | Claims a module-wide reach the constant does not have             |
+| A module-level `const` that states a property of one type            | The constant is discoverable only by grep, not from the type      |
+
+Counting uses:
+
+- Uses are counted across the crate, and tests and intra-doc links count
+  as uses. A constant that a test asserts against cannot be local, so it
+  moves to the associated or module level: `TabStops::DEFAULT_INTERVAL`
+  is named by `TabStops::default` and by its tests.
+- A constant whose type or value names a generic parameter of the
+  enclosing function or `impl` cannot be local (rustc E0401), so it is an
+  associated const.
+
+Not covered by this rule:
+
+- Test-only code: `#[cfg(test)] mod tests { ... }` contents, and any
+  module gated behind `#[cfg(test)]` or a test-support feature
+  (`test_support.rs` and the like).
+- Code that predates this rule keeps its constants where they are until
+  it is touched; a change to a function moves the constants only it
+  names.
+
 ## Visibility — don't restate a type's own ceiling on its members
 
 In an `impl` block on a type that is **not** itself externally `pub`,
@@ -916,6 +994,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Imports — no inline fully-qualified paths in signatures, bodies, or type parameters; add a `use` at the top instead (see "Imports — import, don't inline")
 - Naming — `Query` parameters must not use a `_q` suffix; use a descriptive singular or plural noun (see "Naming — Query parameters")
 - Constructors — a function that builds a value of a local struct/enum must be an associated function on that type (`T::build`), not a free `fn build_t(…) -> T`, and a constructor taking no argument is a `Default` impl, not an inherent `fn new()` (see "Constructors — type-building functions are associated functions")
+- Constants — a `const` that exactly one function names is local to that function, and a `const` that states a property of one type is an associated const on it (`Workspace::MAX_NAME_CHARS`); module scope is the fallback (see "Constants — declare each `const` in the narrowest scope that holds its uses")
 - System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, hand off across the seam via an `EntityEvent`+observer or a `Message` (`MessageWriter`/`MessageReader`) — never inline sequencing — bulky inline blocks extracted to helpers, and each system body kept within ~150 lines (see "System composition — keep systems focused; split by responsibility")
 - Protocol purity — the types that cross the GUI channels (`orzmux::backend`'s `OrzmuxEvent` and its payloads, `orzmux::event_loop`'s `OrzmuxCommand`) carry no `Entity` / bevy types / GPU handles, so the multiplexer backend stays a Bevy-free thread and the channel types can later cross a socket boundary unchanged
 - Error handling — no `debug_assert!`, `unwrap`, `expect`, `panic!` or `assert!` in non-test code to enforce a precondition or reject an input; failures are returned as `Result` with `thiserror` enums and handled at the boundary that cannot recover (see "Error handling — return `Result`, don't assert or unwrap"). Enabling `clippy::unwrap_used` / `clippy::expect_used` workspace-wide would move the unwrap / expect half to the tool-enforced list
