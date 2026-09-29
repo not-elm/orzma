@@ -127,7 +127,8 @@ impl OrzmaConfigs {
             return Err(OrzmaConfigsError::DuplicateViModeKeys(dupes));
         }
         if let Some(shortcuts::Leader::Chord(leader)) = sc.leader.as_ref() {
-            if let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
+            if let Some((action, _, _, _)) =
+                sc.direct_chords().find(|(_, chord, _, _)| *chord == leader)
             {
                 return Err(OrzmaConfigsError::LeaderShadowsDirectBinding {
                     chord: leader.clone(),

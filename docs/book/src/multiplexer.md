@@ -53,7 +53,7 @@ The resize keys move one divider of the active pane 5 cells in the key's
 direction, picking it the way tmux's `resize-pane` does. They are repeatable:
 press the key again within `repeat-time-ms` (500 ms by default), without the
 leader, to keep moving the divider (see
-[Repeatable bindings](key-bindings.md#repeatable-bindings-leaderr)).
+[Repeatable bindings](key-bindings.md#repeatable-bindings-r)).
 
 Left and right look at the row of side-by-side panes the active pane belongs
 to (up and down at its column of stacked panes): the divider after the pane
