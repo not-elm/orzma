@@ -62,12 +62,12 @@ function setup(host: Partial<AddressHost> = {}) {
   return { bar, omnibox, input, preview, calls };
 }
 
-function keydown(input: HTMLInputElement, key: string, isComposing = false, keyCode?: number) {
-  const event = new KeyboardEvent('keydown', { key, isComposing, cancelable: true });
+function keydown(target: HTMLElement, key: string, isComposing = false, keyCode?: number) {
+  const event = new KeyboardEvent('keydown', { key, isComposing, bubbles: true, cancelable: true });
   if (keyCode !== undefined) {
     Object.defineProperty(event, 'keyCode', { value: keyCode });
   }
-  input.dispatchEvent(event);
+  target.dispatchEvent(event);
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -116,6 +116,26 @@ describe('AddressBar', () => {
     keydown(input, 'Escape');
     expect(calls.submit).toEqual(['rust async']);
     expect(calls.cancel).toBe(1);
+  });
+
+  it('still submits and cancels after focus leaves the input', () => {
+    const { bar, input, calls } = setup();
+    bar.apply(chrome());
+    input.value = 'rust async';
+    input.blur();
+    keydown(document.body, 'Enter');
+    keydown(document.body, 'Escape');
+    expect(calls.submit).toEqual(['rust async']);
+    expect(calls.cancel).toBe(1);
+  });
+
+  it('ignores Enter and Esc outside address mode', () => {
+    const { bar, calls } = setup();
+    bar.apply(chrome({ mode: 'normal' }));
+    keydown(document.body, 'Enter');
+    keydown(document.body, 'Escape');
+    expect(calls.submit).toEqual([]);
+    expect(calls.cancel).toBe(0);
   });
 
   it('ignores Enter and Esc while an IME composes', () => {

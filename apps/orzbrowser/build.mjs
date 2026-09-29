@@ -1,18 +1,12 @@
 import { build } from 'esbuild';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, 'assets');
 
-await rm(out, { recursive: true, force: true });
 await mkdir(out, { recursive: true });
-
-// The full clean above wipes the checked-in placeholders, so restore them: the
-// build output must stay gitignored while the empty assets/ dir is preserved.
-await writeFile(join(out, '.gitignore'), '*\n!.gitkeep\n!.gitignore\n');
-await writeFile(join(out, '.gitkeep'), '');
 
 const result = await build({
   entryPoints: [join(here, 'web', 'main.ts')],

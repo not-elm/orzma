@@ -44,16 +44,17 @@ export class AddressBar {
     this.input.addEventListener('compositionend', () => {
       void this.refreshPreview();
     });
-    this.input.addEventListener('keydown', (e) => this.onKeydown(e));
+    const doc = omnibox.ownerDocument;
+    // NOTE: the chrome forwards no keys while editing, so Enter and Esc are
+    // the only way out of the address bar; they are read on the document so
+    // they still work after focus leaves the input, e.g. by Tab.
+    doc.addEventListener('keydown', (e) => this.onKeydown(e));
     omnibox.addEventListener('click', () => {
       if (!this.editing) {
         this.host.openAddress();
       }
     });
-    // NOTE: the chrome forwards no keys while editing, so Enter and Esc reach
-    // only the input's keydown handler; a click elsewhere in the chrome must
-    // not take focus from the input, or the keyboard can no longer leave.
-    omnibox.ownerDocument.addEventListener('mousedown', (e) => {
+    doc.addEventListener('mousedown', (e) => {
       if (this.editing && e.target !== this.input) {
         e.preventDefault();
       }
@@ -81,7 +82,7 @@ export class AddressBar {
   }
 
   private onKeydown(e: KeyboardEvent): void {
-    if (e.isComposing || e.keyCode === 229) {
+    if (!this.editing || e.isComposing || e.keyCode === 229) {
       return;
     }
     if (e.key === 'Enter') {
@@ -93,24 +94,34 @@ export class AddressBar {
     }
   }
 
-  private async refreshPreview(): Promise<void> {
-    const seq = ++this.seq;
-    try {
-      const preview = await this.host.preview(this.input.value);
-      if (seq === this.seq) {
-        this.show(preview, false);
-      }
-    } catch (error) {
-      console.error(error);
-    }
+  private refreshPreview(): Promise<void> {
+    return this.ask(
+      (text) => this.host.preview(text),
+      (preview) => this.show(preview, false),
+    );
   }
 
-  private async submit(): Promise<void> {
+  private submit(): Promise<void> {
+    return this.ask(
+      (text) => this.host.submit(text),
+      (preview) => {
+        if (preview.kind === 'invalid') {
+          this.show(preview, true);
+        }
+      },
+    );
+  }
+
+  /** Sends the input's text through `call` and passes the reply on unless a later call was made. */
+  private async ask(
+    call: (text: string) => Promise<Preview>,
+    onReply: (preview: Preview) => void,
+  ): Promise<void> {
     const seq = ++this.seq;
     try {
-      const preview = await this.host.submit(this.input.value);
-      if (seq === this.seq && preview.kind === 'invalid') {
-        this.show(preview, true);
+      const preview = await call(this.input.value);
+      if (seq === this.seq) {
+        onReply(preview);
       }
     } catch (error) {
       console.error(error);

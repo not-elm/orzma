@@ -53,10 +53,8 @@ pub(crate) enum Cmd {
     Quit,
     /// Replace the forward keys of the given webview with the given set.
     SetForwardKeys(Target, KeySet),
-    /// Give the page keyboard focus.
-    FocusPage,
-    /// Give the chrome keyboard focus.
-    FocusChrome,
+    /// Give the given webview keyboard focus.
+    Focus(Target),
     /// Take keyboard focus back from either webview to the TUI.
     Blur,
 }
@@ -217,7 +215,6 @@ impl App {
         let cmds = match self.mode {
             Mode::Address if self.holder != Some(Target::Chrome) => {
                 self.mode = Mode::Normal;
-                self.refocus_page = false;
                 vec![]
             }
             Mode::Insert if self.holder != Some(Target::Page) => {
@@ -226,12 +223,10 @@ impl App {
             }
             Mode::Hint if drain.saw_any_true() => {
                 self.mode = Mode::Normal;
-                self.refocus_page = false;
                 vec![Cmd::HintHide]
             }
             Mode::Help if drain.saw_any_true() => {
                 self.mode = Mode::Normal;
-                self.refocus_page = false;
                 vec![]
             }
             _ => vec![],
@@ -261,25 +256,15 @@ impl App {
         self.with_key_sets(cmds)
     }
 
-    /// Applies a report from the chrome page: Esc closes the address bar, and
-    /// a click on the omnibox in Normal mode opens it.
+    /// Applies a report from the chrome page: the first ready lets an open
+    /// address bar take keyboard focus, Esc closes the address bar, and a
+    /// click on the omnibox in Normal mode opens it.
     pub fn on_page_event(&mut self, event: PageEvent) -> Vec<Cmd> {
         let cmds = match event {
+            PageEvent::Ready => self.chrome_ready(),
             PageEvent::Cancel if self.mode == Mode::Address => self.leave_address(None),
             PageEvent::OpenAddress if self.mode == Mode::Normal => self.open_address(),
             PageEvent::Cancel | PageEvent::OpenAddress => vec![],
-        };
-        self.with_key_sets(cmds)
-    }
-
-    /// Records that the chrome page is ready; the first time, an open address
-    /// bar takes keyboard focus.
-    pub fn on_chrome_ready(&mut self) -> Vec<Cmd> {
-        let first = !mem::replace(&mut self.chrome_ready, true);
-        let cmds = if first && self.mode == Mode::Address {
-            vec![self.request_focus(Target::Chrome)]
-        } else {
-            vec![]
         };
         self.with_key_sets(cmds)
     }
@@ -294,7 +279,6 @@ impl App {
         }
         let cmds = if kind == "focusedInput" {
             self.mode = Mode::Insert;
-            self.refocus_page = false;
             vec![self.request_focus(Target::Page)]
         } else {
             self.mode = Mode::Normal;
@@ -306,6 +290,15 @@ impl App {
     /// Records a page-driven URL change reported via `urlChanged`.
     pub fn on_page_url_changed(&mut self, url: String) {
         self.url = url;
+    }
+
+    fn chrome_ready(&mut self) -> Vec<Cmd> {
+        let first = !mem::replace(&mut self.chrome_ready, true);
+        if first && self.mode == Mode::Address {
+            vec![self.request_focus(Target::Chrome)]
+        } else {
+            vec![]
+        }
     }
 
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
@@ -330,14 +323,8 @@ impl App {
 
     fn leave_address(&mut self, navigate: Option<Cmd>) -> Vec<Cmd> {
         self.mode = Mode::Normal;
-        let mut cmds: Vec<Cmd> = navigate.into_iter().collect();
-        let refocus = mem::take(&mut self.refocus_page) && self.page_placed;
-        cmds.push(if refocus {
-            self.request_focus(Target::Page)
-        } else {
-            self.blur()
-        });
-        cmds
+        let focus = self.take_refocus().unwrap_or_else(|| self.blur());
+        navigate.into_iter().chain([focus]).collect()
     }
 
     fn refocus_chrome(&mut self) -> Vec<Cmd> {
@@ -398,8 +385,8 @@ impl App {
         self.blur()
     }
 
-    /// `FocusPage` when the page held focus when the text mode began and still
-    /// has rows, clearing the flag.
+    /// The command that refocuses the page when it held focus when the current
+    /// mode began and still has rows, clearing the flag.
     fn take_refocus(&mut self) -> Option<Cmd> {
         let refocus = mem::take(&mut self.refocus_page) && self.page_placed;
         refocus.then(|| self.request_focus(Target::Page))
@@ -409,13 +396,10 @@ impl App {
     /// it already holds focus.
     fn request_focus(&mut self, target: Target) -> Cmd {
         self.awaiting = (self.holder != Some(target)).then_some(target);
-        match target {
-            Target::Page => {
-                self.holder = Some(Target::Page);
-                Cmd::FocusPage
-            }
-            Target::Chrome => Cmd::FocusChrome,
+        if target == Target::Page {
+            self.holder = Some(Target::Page);
         }
+        Cmd::Focus(target)
     }
 
     fn blur(&mut self) -> Cmd {
@@ -456,7 +440,7 @@ mod tests {
     /// An app whose chrome page has reported ready.
     fn ready_app() -> App {
         let mut a = app();
-        a.on_chrome_ready();
+        a.on_page_event(PageEvent::Ready);
         a
     }
 
@@ -540,7 +524,7 @@ mod tests {
         let mut a = ready_app();
         assert_eq!(
             a.on_action(Action::OpenAddress),
-            vec![chrome_keys(KeySet::Empty), Cmd::FocusChrome]
+            vec![chrome_keys(KeySet::Empty), Cmd::Focus(Target::Chrome)]
         );
         assert_eq!(a.mode(), Mode::Address);
         assert_eq!(a.seed(), URL);
@@ -559,8 +543,11 @@ mod tests {
             a.on_action(Action::OpenAddress),
             vec![chrome_keys(KeySet::Empty)]
         );
-        assert_eq!(a.on_chrome_ready(), vec![Cmd::FocusChrome]);
-        assert_eq!(a.on_chrome_ready(), vec![]);
+        assert_eq!(
+            a.on_page_event(PageEvent::Ready),
+            vec![Cmd::Focus(Target::Chrome)]
+        );
+        assert_eq!(a.on_page_event(PageEvent::Ready), vec![]);
     }
 
     /// Asserts that launching without an address opens an empty address bar
@@ -575,7 +562,10 @@ mod tests {
         assert_eq!(a.seed(), "");
         assert_eq!(a.address_epoch(), 1);
         assert_eq!(a.on_focus_drain(drain(&[], &[])), vec![]);
-        assert_eq!(a.on_chrome_ready(), vec![Cmd::FocusChrome]);
+        assert_eq!(
+            a.on_page_event(PageEvent::Ready),
+            vec![Cmd::Focus(Target::Chrome)]
+        );
         assert_eq!(a.on_focus_drain(drain(&[], &[true])), vec![]);
         assert_eq!(a.mode(), Mode::Address);
     }
@@ -662,12 +652,12 @@ mod tests {
         a.on_focus_drain(drain(&[true], &[]));
         assert_eq!(
             a.on_action(Action::OpenAddress),
-            vec![chrome_keys(KeySet::Empty), Cmd::FocusChrome]
+            vec![chrome_keys(KeySet::Empty), Cmd::Focus(Target::Chrome)]
         );
         assert_eq!(a.on_focus_drain(drain(&[false], &[true])), vec![]);
         assert_eq!(
             a.on_page_event(PageEvent::Cancel),
-            vec![chrome_keys(KeySet::Normal), Cmd::FocusPage]
+            vec![chrome_keys(KeySet::Normal), Cmd::Focus(Target::Page)]
         );
     }
 
@@ -757,7 +747,10 @@ mod tests {
         let mut a = ready_app();
         assert_eq!(a.on_action(Action::RefocusChrome), vec![]);
         a.on_action(Action::OpenAddress);
-        assert_eq!(a.on_action(Action::RefocusChrome), vec![Cmd::FocusChrome]);
+        assert_eq!(
+            a.on_action(Action::RefocusChrome),
+            vec![Cmd::Focus(Target::Chrome)]
+        );
         assert_eq!(
             a.on_action(Action::Escape),
             vec![chrome_keys(KeySet::Normal), Cmd::Blur]
@@ -776,7 +769,10 @@ mod tests {
         let mut a = ready_app();
         a.on_focus_drain(drain(&[], &[true]));
         a.on_action(Action::OpenAddress);
-        assert_eq!(a.on_action(Action::RefocusChrome), vec![Cmd::FocusChrome]);
+        assert_eq!(
+            a.on_action(Action::RefocusChrome),
+            vec![Cmd::Focus(Target::Chrome)]
+        );
         assert_eq!(
             a.on_focus_drain(drain(&[true], &[false])),
             vec![chrome_keys(KeySet::Normal)]
@@ -807,7 +803,7 @@ mod tests {
         let mut a = ready_app();
         assert_eq!(
             a.on_page_event(PageEvent::OpenAddress),
-            vec![chrome_keys(KeySet::Empty), Cmd::FocusChrome]
+            vec![chrome_keys(KeySet::Empty), Cmd::Focus(Target::Chrome)]
         );
         let mut a = ready_app();
         a.on_action(Action::EnterInsert);
@@ -839,7 +835,7 @@ mod tests {
         let mut a = app();
         assert_eq!(
             a.on_action(Action::EnterInsert),
-            vec![page_keys(KeySet::Insert), Cmd::FocusPage]
+            vec![page_keys(KeySet::Insert), Cmd::Focus(Target::Page)]
         );
         assert_eq!(
             a.on_action(Action::Escape),
@@ -921,7 +917,7 @@ mod tests {
         a.on_action(Action::EnterHint);
         assert_eq!(
             a.on_hint_result("focusedInput"),
-            vec![page_keys(KeySet::Insert), Cmd::FocusPage]
+            vec![page_keys(KeySet::Insert), Cmd::Focus(Target::Page)]
         );
         assert_eq!(a.mode(), Mode::Insert);
 
@@ -951,17 +947,17 @@ mod tests {
         a.on_action(Action::EnterHint);
         assert_eq!(
             a.on_action(Action::Escape),
-            vec![Cmd::HintHide, Cmd::FocusPage]
+            vec![Cmd::HintHide, Cmd::Focus(Target::Page)]
         );
 
         let mut a = app();
         a.on_focus_drain(drain(&[true], &[]));
         a.on_action(Action::EnterHint);
-        assert_eq!(a.on_hint_result("clicked"), vec![Cmd::FocusPage]);
+        assert_eq!(a.on_hint_result("clicked"), vec![Cmd::Focus(Target::Page)]);
 
         let mut a = app();
         a.on_focus_drain(drain(&[true], &[]));
         a.on_action(Action::OpenHelp);
-        assert_eq!(a.on_action(Action::Escape), vec![Cmd::FocusPage]);
+        assert_eq!(a.on_action(Action::Escape), vec![Cmd::Focus(Target::Page)]);
     }
 }

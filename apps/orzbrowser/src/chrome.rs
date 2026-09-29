@@ -20,12 +20,6 @@ pub(crate) struct Chrome {
     pub(crate) address_epoch: u32,
 }
 
-/// Remembers the last chrome sent, so an unchanged chrome is not sent again.
-#[derive(Debug, Default)]
-pub(crate) struct ChromeSync {
-    last: Option<Chrome>,
-}
-
 impl Chrome {
     /// The chrome `app` shows.
     pub fn build(app: &App) -> Self {
@@ -36,23 +30,6 @@ impl Chrome {
             seed: app.seed().to_owned(),
             address_epoch: app.address_epoch(),
         }
-    }
-}
-
-impl ChromeSync {
-    /// Whether `chrome` differs from the last chrome sent.
-    pub fn is_stale(&self, chrome: &Chrome) -> bool {
-        self.last.as_ref() != Some(chrome)
-    }
-
-    /// Records `chrome` as sent.
-    pub fn mark_sent(&mut self, chrome: Chrome) {
-        self.last = Some(chrome);
-    }
-
-    /// Forgets the last chrome sent, so the next one is sent unconditionally.
-    pub fn forget(&mut self) {
-        self.last = None;
     }
 }
 
@@ -108,22 +85,6 @@ mod tests {
                 json!(name)
             );
         }
-    }
-
-    /// Asserts that a chrome is stale until sent, stale again once it changes,
-    /// and stale after the sync forgets it.
-    ///
-    /// Case: the loop pushes the chrome each pass, the address bar reopens,
-    /// and the page reloads and asks for the chrome again.
-    #[test]
-    fn a_chrome_is_sent_once_per_change() {
-        let mut sync = ChromeSync::default();
-        assert!(sync.is_stale(&chrome(1)));
-        sync.mark_sent(chrome(1));
-        assert!(!sync.is_stale(&chrome(1)));
-        assert!(sync.is_stale(&chrome(2)));
-        sync.forget();
-        assert!(sync.is_stale(&chrome(1)));
     }
 
     /// Asserts that the chrome reflects the app's mode, URL, pending key, seed,

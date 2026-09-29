@@ -11,7 +11,7 @@ mod ui;
 
 use crate::address::{AddressTarget, SearchEngine};
 use crate::app::{App, Cmd, ScrollAction};
-use crate::chrome::{Chrome, ChromeSync};
+use crate::chrome::Chrome;
 use crate::focus::{FocusDrain, Target};
 use crate::protocol::{AddressRequest, PageEvent, Preview};
 use anyhow::{anyhow, bail};
@@ -54,7 +54,6 @@ struct Views {
 struct Inbox {
     urls: Receiver<String>,
     hints: Receiver<HintOutcome>,
-    ready: Receiver<()>,
     targets: Receiver<AddressTarget>,
 }
 
@@ -69,16 +68,14 @@ impl Views {
     ) -> anyhow::Result<(Self, Inbox)> {
         let (url_tx, urls) = unbounded();
         let (hint_tx, hints) = unbounded();
-        let (ready_tx, ready) = unbounded();
         let (target_tx, targets) = unbounded();
         let page = register_page(orzma, app, url_tx, hint_tx)?;
-        let chrome = register_chrome(orzma, app, chrome_html, engine, ready_tx, target_tx)?;
+        let chrome = register_chrome(orzma, app, chrome_html, engine, target_tx)?;
         Ok((
             Self { page, chrome },
             Inbox {
                 urls,
                 hints,
-                ready,
                 targets,
             },
         ))
@@ -142,16 +139,16 @@ fn run() -> anyhow::Result<()> {
 fn event_loop(mut app: App, views: &Views, inbox: &Inbox, orzma: &Orzma) -> anyhow::Result<()> {
     let backend = OrzmaBackend::new(CrosstermBackend::new(stdout()), orzma);
     let mut terminal = Terminal::new(backend)?;
-    let mut sync = ChromeSync::default();
+    let mut sent_chrome = None;
 
     loop {
         if apply_focus_changes(&mut app, views, orzma)?.is_break() {
             return Ok(());
         }
-        if apply_reports(&mut app, &mut sync, views, inbox, orzma)?.is_break() {
+        if apply_reports(&mut app, &mut sent_chrome, views, inbox, orzma)?.is_break() {
             return Ok(());
         }
-        push_chrome(&mut sync, &views.chrome, &app);
+        push_chrome(&mut sent_chrome, &views.chrome, &app);
 
         let mut page_placed = true;
         let chrome_instance = views.chrome.instance_id();
@@ -202,20 +199,15 @@ fn apply_focus_changes(
 }
 
 /// Applies the reports the webviews sent since the last pass; `Break` when a
-/// resulting [`Cmd`] exits the app.
+/// resulting [`Cmd`] exits the app. A `ready` from the chrome page forgets
+/// `sent_chrome`, so the next pass sends the chrome again.
 fn apply_reports(
     app: &mut App,
-    sync: &mut ChromeSync,
+    sent_chrome: &mut Option<Chrome>,
     views: &Views,
     inbox: &Inbox,
     orzma: &Orzma,
 ) -> anyhow::Result<ControlFlow<()>> {
-    while inbox.ready.try_recv().is_ok() {
-        sync.forget();
-        if run_cmds(app.on_chrome_ready(), views, orzma)?.is_break() {
-            return Ok(ControlFlow::Break(()));
-        }
-    }
     while let Ok(url) = inbox.urls.try_recv() {
         app.on_page_url_changed(url);
     }
@@ -231,6 +223,9 @@ fn apply_reports(
         }
     }
     for event in views.chrome.read_events::<PageEvent>() {
+        if event == PageEvent::Ready {
+            *sent_chrome = None;
+        }
         if run_cmds(app.on_page_event(event), views, orzma)?.is_break() {
             return Ok(ControlFlow::Break(()));
         }
@@ -243,11 +238,12 @@ fn apply_reports(
     Ok(ControlFlow::Continue(()))
 }
 
-/// Sends the chrome page the chrome when it changed since the last send.
-fn push_chrome(sync: &mut ChromeSync, chrome_view: &WebviewHandle, app: &App) {
+/// Sends the chrome page the chrome when it differs from `sent_chrome`, and
+/// records it there once sent.
+fn push_chrome(sent_chrome: &mut Option<Chrome>, chrome_view: &WebviewHandle, app: &App) {
     let chrome = Chrome::build(app);
-    if sync.is_stale(&chrome) && chrome_view.emit("chrome", &chrome).is_ok() {
-        sync.mark_sent(chrome);
+    if sent_chrome.as_ref() != Some(&chrome) && chrome_view.emit("chrome", &chrome).is_ok() {
+        *sent_chrome = Some(chrome);
     }
 }
 
@@ -286,7 +282,6 @@ fn register_chrome(
     app: &App,
     html: String,
     engine: &SearchEngine,
-    ready_tx: Sender<()>,
     target_tx: Sender<AddressTarget>,
 ) -> anyhow::Result<WebviewHandle> {
     let preview_engine = engine.clone();
@@ -295,10 +290,6 @@ fn register_chrome(
         Webview::inline(html)
             .interactive(true)
             .forward_keys(keymap::forward_chords(app.chrome_keys()))
-            .on("ready", move |(): ()| -> Result<(), RpcError> {
-                let _ = ready_tx.send(());
-                Ok(())
-            })
             .on(
                 "preview",
                 move |request: AddressRequest| -> Result<Preview, RpcError> {
@@ -311,9 +302,7 @@ fn register_chrome(
                 move |request: AddressRequest| -> Result<Preview, RpcError> {
                     let target = AddressTarget::parse(&request.text, &submit_engine);
                     let preview = Preview::of(&target, &submit_engine);
-                    if !matches!(target, AddressTarget::Invalid(_)) {
-                        let _ = target_tx.send(target);
-                    }
+                    let _ = target_tx.send(target);
                     Ok(preview)
                 },
             )
@@ -361,11 +350,8 @@ fn run_cmd(cmd: Cmd, views: &Views, orzma: &Orzma) -> anyhow::Result<ControlFlow
                 .of(target)
                 .set_forward_keys(keymap::forward_chords(set));
         }
-        Cmd::FocusPage => {
-            let _ = views.page.focus();
-        }
-        Cmd::FocusChrome => {
-            let _ = views.chrome.focus();
+        Cmd::Focus(target) => {
+            let _ = views.of(target).focus();
         }
         Cmd::Blur => {
             let _ = orzma.blur();

@@ -67,18 +67,9 @@ impl PaneLayout {
     /// Gives the chrome the top two rows of `area`, or all of `area` when it
     /// is shorter, and the page the rest.
     pub fn split(area: Rect) -> Self {
-        let chrome_rows = area.height.min(CHROME_ROWS);
-        Self {
-            chrome: Rect {
-                height: chrome_rows,
-                ..area
-            },
-            page: Rect {
-                y: area.y.saturating_add(chrome_rows),
-                height: area.height - chrome_rows,
-                ..area
-            },
-        }
+        let [chrome, page] =
+            Layout::vertical([Constraint::Length(CHROME_ROWS), Constraint::Min(0)]).areas(area);
+        Self { chrome, page }
     }
 }
 
@@ -126,7 +117,7 @@ fn help_lines() -> Vec<Line<'static>> {
             format!("  {title}"),
             Style::default().fg(HELP_KEY).add_modifier(Modifier::BOLD),
         )));
-        for (key, text) in entries.iter() {
+        for &(key, text) in entries.iter() {
             lines.push(help_row(key, text));
         }
         lines.push(Line::from(""));
@@ -135,13 +126,13 @@ fn help_lines() -> Vec<Line<'static>> {
     lines
 }
 
-fn help_row(key: &str, text: &str) -> Line<'static> {
+fn help_row(key: &str, text: &'static str) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("  {key:<width$}", width = HELP_KEY_WIDTH),
             Style::default().fg(HELP_KEY),
         ),
-        Span::styled(text.to_owned(), Style::default().fg(HELP_TEXT)),
+        Span::styled(text, Style::default().fg(HELP_TEXT)),
     ])
 }
 

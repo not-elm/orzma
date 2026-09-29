@@ -3,7 +3,7 @@ import { AddressBar, type Preview } from './address';
 import { type Chrome, renderChrome } from './chrome';
 
 /** A report to the controller (`page` event), tagged by `kind`. */
-type PageEvent = { kind: 'cancel' } | { kind: 'openAddress' };
+type PageEvent = { kind: 'ready' } | { kind: 'cancel' } | { kind: 'openAddress' };
 
 function emitPage(event: PageEvent): void {
   orzma.emit('page', event);
@@ -24,4 +24,4 @@ orzma.on('chrome', (chrome: Chrome) => {
   bar.apply(chrome);
 });
 
-void orzma.call('ready').catch(console.error);
+emitPage({ kind: 'ready' });

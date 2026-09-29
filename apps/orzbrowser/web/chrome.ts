@@ -25,8 +25,6 @@ interface UrlParts {
   rest: string;
 }
 
-const MODES: readonly ChromeMode[] = ['normal', 'insert', 'hint', 'address', 'help'];
-
 const BADGES: Record<ChromeMode, string> = {
   normal: 'NORMAL',
   insert: 'INSERT',
@@ -66,9 +64,7 @@ export function splitUrl(url: string): UrlParts {
 
 /** Draws `chrome` into `root`: the mode class and badge, the pending key, the URL and the key hints. */
 export function renderChrome(root: HTMLElement, chrome: Chrome): void {
-  for (const mode of MODES) {
-    root.classList.toggle(`mode-${mode}`, chrome.mode === mode);
-  }
+  root.className = `mode-${chrome.mode}`;
   setText(root, '.badge', BADGES[chrome.mode]);
   const pending = root.querySelector<HTMLElement>('.pending');
   if (pending !== null) {
