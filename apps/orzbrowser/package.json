@@ -1,0 +1,21 @@
+{
+  "name": "@orzma/orzbrowser-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ./build.mjs",
+    "check-types": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@orzma/web": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "esbuild": "catalog:",
+    "jsdom": "catalog:"
+  }
+}

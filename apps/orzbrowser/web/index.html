@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1117; }
+      #chrome { box-sizing: border-box; height: 100vh; display: flex; align-items: center; gap: 8px;
+                padding: 0 10px; border-bottom: 1px solid #21262d; color: #9198a1;
+                font: 12.5px/1 -apple-system, system-ui, sans-serif; white-space: nowrap; }
+      .badge { flex: none; font: 600 10px/1 ui-monospace, monospace; letter-spacing: .04em;
+               padding: 3px 6px; border-radius: 4px; color: #0d1117; background: #8b949e; }
+      .mode-insert .badge { background: #3fb950; }
+      .mode-hint .badge { background: #d29922; }
+      .mode-address .badge { background: #4493f8; }
+      kbd { font: 11px ui-monospace, monospace; color: #f0f6fc; border: 1px solid #30363d;
+            border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; }
+      .pending { flex: none; }
+      .omnibox { flex: 1 1 auto; min-width: 0; box-sizing: border-box; height: min(26px, calc(100vh - 8px));
+                 display: flex; align-items: center; padding: 0 10px; cursor: text;
+                 background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
+      .mode-address .omnibox { border-color: #4493f8; box-shadow: 0 0 0 2px #1f6feb55; }
+      .url-view, .address-view { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; }
+      .mode-address .url-view, #chrome:not(.mode-address) .address-view { display: none; }
+      .not-secure { flex: none; color: #d29922; font-weight: 600; }
+      .host { flex: none; color: #f0f6fc; font-weight: 600; }
+      .rest { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #6e7681; }
+      .search-icon { flex: none; width: 13px; height: 13px; color: #9198a1; }
+      .address-input { flex: 1 1 auto; min-width: 0; border: 0; outline: 0; padding: 0;
+                       background: transparent; color: #f0f6fc; font: inherit; }
+      .preview { flex: none; font-size: 11.5px; color: #9198a1; }
+      .preview.invalid { color: #d29922; }
+      .preview.rejected { color: #ff7b72; font-weight: 600; }
+      .hints { flex: none; display: flex; gap: 10px; color: #6e7681; font-size: 11.5px; }
+    </style>
+  </head>
+  <body>
+    <header id="chrome" class="mode-normal">
+      <span class="badge">NORMAL</span>
+      <kbd class="pending" hidden></kbd>
+      <div class="omnibox">
+        <div class="url-view">
+          <span class="not-secure" hidden>Not secure</span>
+          <span class="host"></span>
+          <span class="rest"></span>
+        </div>
+        <div class="address-view">
+          <svg class="search-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5 14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <input class="address-input" type="text" autocomplete="off" spellcheck="false"
+                 aria-label="Search or enter address" placeholder="Search or type a URL" />
+          <span class="preview" hidden></span>
+        </div>
+      </div>
+      <span class="hints"></span>
+    </header>
+    <!-- BUNDLE -->
+  </body>
+</html>
