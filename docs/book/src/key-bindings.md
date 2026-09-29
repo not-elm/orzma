@@ -14,18 +14,20 @@ Holding the modifier works as usual, so `Alt+h` still reaches the shell as a
 meta-prefixed key (on macOS, with the Option key that `option_as_alt` makes
 Alt).
 
-After a tap, the next keystroke either runs a `<Leader>` action or is
-swallowed if no action matches; the leader does not time out while it waits,
-even if you switch to another window and back. Switching windows before you
-release the modifier cancels the tap.
+After a tap, the next keystroke runs a `<Leader>` action when one matches.
+Otherwise it runs the key's direct chord, if it has one, and is swallowed if it
+has none. The leader does not time out while it waits, even if you switch to
+another window and back. Switching windows before you release the modifier
+cancels the tap.
 
 - `leader` sets the leader: a modifier to tap (`"Cmd"`, `"Ctrl"`, or
   `"Alt"`; `"Shift"` is not allowed), a chord such as `"Ctrl+A"` (press the
   chord, then the action's key), or `""` to turn the leader off.
 - `leader-tap-timeout-ms` is how long a tap may last before it no longer
   counts, 300 ms by default; `0` reverts to 300.
-- `repeat-time-ms` is the repeat window of `<Leader:r>` bindings (below),
-  500 ms by default; `0` turns repeating off.
+- `repeat-time-ms` is the repeat window of `r:<Leader>` bindings (below),
+  500 ms by default; `0` turns repeating off for them. It does not affect
+  direct chords marked `r:`.
 
 ## Chord syntax
 
@@ -46,27 +48,40 @@ duplicated modifier (`Cmd+Meta+S`), or more than one key (`Cmd+S+T`) — make
 orzma ignore the whole file and start with the defaults (see
 [Validation](configuration.md#validation)).
 
-## Repeatable bindings (`<Leader:r>`)
+## Repeatable bindings (`r:`)
 
-Binding an action with `<Leader:r>` instead of `<Leader>` makes it repeatable:
-after the binding fires, pressing any repeat-marked key
-again within `repeat-time-ms` (default 500) re-fires its action without
-re-pressing the leader, and each fire re-arms the window. Holding the key down
-keeps firing (OS key auto-repeat participates). Any other key — including keys
-bound with plain `<Leader>` — closes the window immediately and is handled
-normally (it is never swallowed). Pressing the leader inside the window starts
-a fresh leader sequence.
+Put `r:` in front of a binding to make it repeatable. It works on both kinds of
+binding:
 
-Caveat: with a letter key (say `<Leader:r>h`), typing that same letter into the
+- **A direct chord** such as `r:Alt+Shift+H` keeps firing while you hold it,
+  at your system's key repeat rate. A direct chord without `r:` fires once per
+  press, however long you hold it.
+- **A leader binding** such as `r:<Leader>Shift+H` re-fires without the leader:
+  after it fires, pressing any repeat-marked key again within `repeat-time-ms`
+  (default 500) runs its action again, and each fire re-arms the window.
+  Holding the key down keeps firing. Any other key — including keys bound with
+  plain `<Leader>` — closes the window immediately and is handled normally (it
+  is never swallowed). Pressing the leader inside the window starts a fresh
+  leader sequence.
+
+The stock resize bindings, `increase-font-size`, and `decrease-font-size` carry
+`r:`; no other stock binding does.
+
+Caveat: with a letter key (say `r:<Leader>h`), typing that same letter into the
 shell within the window re-fires the action instead of reaching the terminal.
-If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
-`:r` marker from that binding.
+If that bites, set `repeat-time-ms = 0` or drop the `r:` from that binding.
 
-In vi mode a repeatable binding fires only on the key pressed right after the
-leader: the window closes on the next key event, and holding the key does not
-keep firing. A second press or an auto-repeat is read as a `[vi-mode]` key
-instead — with the stock bindings, `Shift+H` and `Shift+L` jump to the top and
-bottom visible line, and `Shift+J` and `Shift+K` do nothing.
+In vi mode a repeatable leader binding fires only on the key pressed right
+after the leader: the window closes on the next key event, and holding the key
+does not keep firing. A second press or an auto-repeat is read as a `[vi-mode]`
+key instead — with the stock bindings, `Shift+H` and `Shift+L` jump to the top
+and bottom visible line, and `Shift+J` and `Shift+K` do nothing.
+
+Earlier releases wrote a repeatable leader binding as `<Leader:r>x`. That
+spelling is not accepted: a configuration that still uses it is ignored as a
+whole (see [Validation](configuration.md#validation)), so rewrite `<Leader:r>x`
+as `r:<Leader>x` when you upgrade. A direct chord you bound yourself also stops
+repeating while held until you add `r:` to it.
 
 ## Platform defaults
 
@@ -78,8 +93,8 @@ platforms do not. Every other action below is the same everywhere.
 | `leader` | `Cmd` (tap) | `Alt` (tap) |
 | `paste` | `Cmd+V` | `Ctrl+V` |
 | `copy` | `Cmd+C` | `Ctrl+C` |
-| `increase-font-size` | `Cmd+Plus` | `Ctrl+Plus` |
-| `decrease-font-size` | `Cmd+-` | `Ctrl+-` |
+| `increase-font-size` | `r:Cmd+Plus` | `r:Ctrl+Plus` |
+| `decrease-font-size` | `r:Cmd+-` | `r:Ctrl+-` |
 | `reset-font-size` | `Cmd+0` | `Ctrl+0` |
 | `quit` | `Cmd+Q` | unbound |
 
@@ -105,8 +120,8 @@ the seven that differ elsewhere.
 | --- | --- | --- |
 | `paste` | `Cmd+V` | Paste from the system clipboard. |
 | `copy` | `Cmd+C` | Copy the focused terminal's selection to the system clipboard, then dismiss the selection. |
-| `increase-font-size` | `Cmd+Plus` | Step the terminal font size up. |
-| `decrease-font-size` | `Cmd+-` | Step the terminal font size down. |
+| `increase-font-size` | `r:Cmd+Plus` | Step the terminal font size up. |
+| `decrease-font-size` | `r:Cmd+-` | Step the terminal font size down. |
 | `reset-font-size` | `Cmd+0` | Return the terminal font size to `[font] size`. |
 | `release-webview-focus` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
@@ -115,10 +130,10 @@ the seven that differ elsewhere.
 | `select-down-pane` | `<Leader>j` | Focus the pane below. |
 | `select-up-pane` | `<Leader>k` | Focus the pane above. |
 | `select-right-pane` | `<Leader>l` | Focus the pane to the right. |
-| `resize-left-pane` | `<Leader:r>Shift+H` | Move a divider of the active pane 5 cells left, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
-| `resize-down-pane` | `<Leader:r>Shift+J` | Move a divider of the active pane 5 cells down, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
-| `resize-up-pane` | `<Leader:r>Shift+K` | Move a divider of the active pane 5 cells up, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
-| `resize-right-pane` | `<Leader:r>Shift+L` | Move a divider of the active pane 5 cells right, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
+| `resize-left-pane` | `r:<Leader>Shift+H` | Move a divider of the active pane 5 cells left, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
+| `resize-down-pane` | `r:<Leader>Shift+J` | Move a divider of the active pane 5 cells down, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
+| `resize-up-pane` | `r:<Leader>Shift+K` | Move a divider of the active pane 5 cells up, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
+| `resize-right-pane` | `r:<Leader>Shift+L` | Move a divider of the active pane 5 cells right, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side by side (vertical divider); the new pane becomes active. |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (horizontal divider); the new pane becomes active. |
 | `kill-pane` | `<Leader>p` | Kill the active pane; its shell is terminated. |
@@ -206,7 +221,7 @@ leader = "Cmd"
 # Modifier-tap window (ms): a press+release within this time, with no intervening
 # key or mouse press, counts as a tap. Default 300; 0 reverts to 300.
 leader-tap-timeout-ms = 300
-# Repeat window (ms) for "<Leader:r>..." bindings: after such a binding fires,
+# Repeat window (ms) for "r:<Leader>..." bindings: after such a binding fires,
 # pressing a repeat-marked key again within this window re-fires the action
 # without the leader. Each fire re-arms the window. Default 500; 0 disables
 # repeat entirely.
@@ -218,11 +233,12 @@ repeat-time-ms = 500
 direct-chords-over-webview = true
 
 # Each action takes ONE value: a direct chord ("Cmd+V"), a leader-scoped
-# chord ("<Leader>s" = leader then s), a repeatable leader-scoped chord
-# ("<Leader:r>s" = same, but re-fires within repeat-time-ms), or "" to unbind.
-# Rebinding to a chord already used by another action is a startup validation
-# error. A direct chord and a "<Leader>"-prefixed chord with the same key
-# never collide.
+# chord ("<Leader>s" = leader then s), either one preceded by "r:" to make
+# it repeatable ("r:<Leader>s" re-fires within repeat-time-ms, "r:Cmd+Plus"
+# re-fires while held), or "" to unbind. A direct chord without "r:" fires
+# once per press. Rebinding to a chord already used by another action is a
+# startup validation error. A direct chord and a "<Leader>"-prefixed chord
+# with the same key never collide.
 
 # --- existing actions ---
 paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>v" for a leader binding.
@@ -239,10 +255,10 @@ select-right-pane     = "<Leader>l"    # select-pane -R
 split-vertical-pane   = "<Leader>i"    # split-window -h (side-by-side)
 split-horizontal-pane = "<Leader>o"    # split-window -v (stacked)
 kill-pane             = "<Leader>p"    # kill-pane
-resize-left-pane      = "<Leader:r>Shift+H"  # resize-pane -L 5 (repeatable)
-resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
-resize-up-pane        = "<Leader:r>Shift+K"  # resize-pane -U 5 (repeatable)
-resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
+resize-left-pane      = "r:<Leader>Shift+H"  # resize-pane -L 5 (repeatable)
+resize-down-pane      = "r:<Leader>Shift+J"  # resize-pane -D 5 (repeatable)
+resize-up-pane        = "r:<Leader>Shift+K"  # resize-pane -U 5 (repeatable)
+resize-right-pane     = "r:<Leader>Shift+L"  # resize-pane -R 5 (repeatable)
 
 # --- workspace actions ---
 new-workspace         = "<Leader>c"        # new-window
@@ -261,7 +277,7 @@ select-workspace-9    = "<Leader>9"
 rename-workspace      = "<Leader>r"        # rename-window
 
 # --- zoom actions ---
-increase-font-size    = "Cmd+Plus"   # Ctrl+Plus off macOS
-decrease-font-size    = "Cmd+-"      # Ctrl+- off macOS
+increase-font-size    = "r:Cmd+Plus"   # r:Ctrl+Plus off macOS
+decrease-font-size    = "r:Cmd+-"      # r:Ctrl+- off macOS
 reset-font-size       = "Cmd+0"      # Ctrl+0 off macOS
 ```
