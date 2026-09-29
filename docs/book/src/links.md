@@ -40,7 +40,7 @@ the modifier and point at it.
   table cell, means the URL is not linked at all. An address shortened with
   three ASCII dots (`...`) is the exception: the dots are trimmed like a
   sentence's final `.`, so the shortened address is linked as it stands.
-- A URL that runs past the top or bottom edge of the window is not linked
+- A URL that runs past the top or bottom edge of its pane is not linked
   until it is fully in view.
 - A URL that a program splits across rows with its own line breaks is not
   joined.
