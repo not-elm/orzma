@@ -4,7 +4,7 @@ import { orzma } from '@orzma/web';
 import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
-import { breadcrumb, type Chrome, type HeadingInfo, renderRail, renderToast } from './chrome';
+import { breadcrumb, type Chrome, type HeadingInfo, renderRail, ToastView } from './chrome';
 import { FindBox } from './find';
 import { HeadingTracker } from './headings';
 import { collectLocalImages } from './images';
@@ -51,7 +51,7 @@ const outlinePanel = new OutlinePanel(document.getElementById('outline') as HTML
 });
 
 const rail = document.getElementById('rail') as HTMLElement;
-const toast = document.getElementById('toast') as HTMLElement;
+const toastView = new ToastView(document.getElementById('toast') as HTMLElement);
 
 let chrome: Chrome | null = null;
 let currentHeading: number | null = null;
@@ -98,8 +98,7 @@ function renderChromeUi(): void {
   if (chrome === null) {
     return;
   }
-  renderRail(rail, chrome, breadcrumb(headings, currentHeading));
-  renderToast(toast, chrome.toast);
+  renderRail(rail, chrome, breadcrumb(headings, currentHeading), null);
 }
 
 interface ScrollAnchor {
@@ -322,6 +321,7 @@ orzma.on('scroll', (p: { action: string }) => {
 
 orzma.on('chrome', (c: Chrome) => {
   chrome = c;
+  toastView.show(c.toast);
   renderChromeUi();
 });
 
