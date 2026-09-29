@@ -2,7 +2,9 @@
 """Generate licenses/THIRD-PARTY-LICENSES.md aggregating all third-party licenses.
 
 Sections, in fixed order: Rust crates (cargo-about), npm packages
-(@quantco/pnpm-licenses, scoped to @orzma/orzmd-web prod deps), ported source (Vimium), bundled fonts, and CEF/Chromium. Output is deterministic so CI can detect drift.
+(@quantco/pnpm-licenses, scoped to @orzma/orzmd-web prod deps), ported source
+(Vimium), bundled fonts, and CEF/Chromium. Output is deterministic so CI can
+detect drift.
 """
 from __future__ import annotations
 
