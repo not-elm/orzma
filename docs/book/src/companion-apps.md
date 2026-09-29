@@ -77,12 +77,15 @@ copied otherwise; a copied image does not refresh until orzmd is restarted.
 | `/` | Start a search |
 | `n` / `N` | Next / previous match (after a search) |
 | `r` | Reload the file |
-| `q` / `Ctrl-c` | Quit |
+| `Backspace` / `Ctrl-o` | Go back to the previous document |
+| `q` | Quit |
 
-While the page has keyboard focus, `Ctrl-c` copies in the page instead of
-quitting; `q` still quits, because orzmd forwards it to the TUI even while
-the page is focused. The exception is typing a search query: then every key,
-`q` included, goes into the find box.
+The page handles every key and keeps keyboard focus while you read, so
+`Ctrl-c` no longer quits: on Windows and Linux it copies the page's selection,
+and on macOS you copy with `Cmd-c`. Quit with `q`. Holding a scroll key keeps
+the page scrolling smoothly until you release it, and each tap moves exactly
+one step. While a search query is being typed, every key, `q` included, goes
+into the find box.
 
 #### Outline sidebar
 
@@ -93,7 +96,8 @@ the page is focused. The exception is typing a search query: then every key,
 | `Enter` | Jump to the selected heading |
 | Click a heading | Jump to that heading |
 | `o` / `Tab` / `Esc` | Close the sidebar |
-| `q` | Quit |
+| `/` | Start a search, keeping the sidebar open |
+| `r` / `Backspace` / `Ctrl-o` / `q` | Reload / go back / quit, as in reading |
 
 The outline opens with the section you are reading selected.
 
@@ -108,6 +112,10 @@ The outline opens with the section you are reading selected.
 After `Enter`, use `n` / `N` in reading mode to move between matches, and
 `Esc` to clear the highlight. The search ignores case unless the query
 contains an uppercase letter.
+
+If the find box loses focus while you type — for example, you click another
+pane — orzmd keeps the matches when there are any and otherwise closes the find
+box; either way the page stays where it is.
 
 ## orzbrowser
 
@@ -249,7 +257,8 @@ orzbrowser's keyboard model and link-hint workflow are inspired by
 extension. The hint alphabet (`sadfjklewcmpgh`) is Vimium's default. Vimium is
 distributed under the
 [MIT License](https://github.com/philc/vimium/blob/master/MIT-LICENSE.txt);
-orzbrowser's scrolling is ported from Vimium's `content_scripts/scroller.js`
-(commit `e34b529328`), and its license notice is reproduced in
+the scrolling of orzbrowser and orzmd is ported from Vimium's
+`content_scripts/scroller.js` (commit `e34b529328`), and its license notice is
+reproduced in
 `THIRD-PARTY-LICENSES.md`; the rest of orzbrowser is an independent
 implementation.
