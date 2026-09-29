@@ -28,7 +28,7 @@ fn a_wrapped_url_resolves_through_the_retained_wraps() {
         ..TerminalCells::default()
     };
     let url = cells
-        .detected_url_at(1, 2)
+        .detected_url_at(ViewportCell { row: 1, col: 2 })
         .expect("the second row shows the URL's tail");
     assert_eq!(url.uri, "https://a.b/c");
 }
@@ -46,13 +46,15 @@ fn a_url_cut_by_the_top_of_the_viewport_does_not_resolve() {
         continues_from_above: true,
         ..TerminalCells::default()
     };
-    assert_eq!(cut.detected_url_at(0, 10), None);
+    assert_eq!(cut.detected_url_at(ViewportCell { row: 0, col: 10 }), None);
     let whole = TerminalCells {
         continues_from_above: false,
         ..cut
     };
     assert_eq!(
-        whole.detected_url_at(0, 10).map(|url| url.uri),
+        whole
+            .detected_url_at(ViewportCell { row: 0, col: 10 })
+            .map(|url| url.uri),
         Some("https://example.com/".to_string())
     );
 }

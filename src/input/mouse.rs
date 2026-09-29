@@ -17,6 +17,7 @@ use bevy::window::CursorMoved;
 use bevy_orzma_tty_renderer::prelude::{TerminalCellMetricsResource, TerminalCells, TerminalView};
 use bevy_orzmux::prelude::{CellSide, RequestTtyPointer};
 use orzma_tty::prelude::{CellCoord, PointerInput, ProtocolModifiers, TerminalModifiers};
+use orzma_vt::prelude::ViewportCell;
 
 mod button;
 mod gesture;
@@ -258,7 +259,11 @@ impl<'a> CellContext<'a> {
         self.cells
             .hyperlink_at(row, col)
             .map(|(_id, uri)| uri.as_str().to_string())
-            .or_else(|| self.cells.detected_url_at(row, col).map(|url| url.uri))
+            .or_else(|| {
+                self.cells
+                    .detected_url_at(ViewportCell { row, col })
+                    .map(|url| url.uri)
+            })
     }
 }
 

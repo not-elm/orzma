@@ -50,16 +50,10 @@ impl TerminalCells {
         Some((id, self.hyperlinks.get(&id)?))
     }
 
-    /// The URL shown in plain text at the visible cell (`row`, `col`);
-    /// `None` when the cell shows no URL or the URL may run past the
-    /// viewport.
-    pub fn detected_url_at(&self, row: u16, col: u16) -> Option<DetectedUrl> {
-        DetectedUrl::at(
-            &self.cells,
-            &self.wraps,
-            self.continues_from_above,
-            ViewportCell { row, col },
-        )
+    /// The URL shown in plain text at the visible cell `at`; `None` when
+    /// the cell shows no URL or the URL may run past the viewport.
+    pub fn detected_url_at(&self, at: ViewportCell) -> Option<DetectedUrl> {
+        DetectedUrl::at(&self.cells, &self.wraps, self.continues_from_above, at)
     }
 
     /// Whether applying `frame` would change these cells.

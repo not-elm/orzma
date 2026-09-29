@@ -23,6 +23,7 @@ use bevy_orzma_tty_renderer::prelude::{
 };
 use bevy_orzmux::prelude::{OrzmuxSeparator, PaneGeometry, SplitOrientation};
 use orzma_configs::shortcuts::Modifiers;
+use orzma_vt::prelude::ViewportCell;
 
 /// Adds hyperlink hover detection and cursor-icon control for every
 /// terminal surface.
@@ -297,7 +298,7 @@ impl HoverTargetParams<'_, '_> {
             .map(|(id, _uri)| id);
         let detected = cell
             .filter(|_| hover.modifier_held)
-            .and_then(|(row, col)| cells.detected_url_at(row, col));
+            .and_then(|(row, col)| cells.detected_url_at(ViewportCell { row, col }));
         let has_link = id.is_some() || detected.is_some();
         hover.entity = Some(entity);
         hover.hyperlink_id = id;
