@@ -27,8 +27,10 @@ for its features, the address bar, and keyboard shortcuts.
 ## Acknowledgements
 
 orzbrowser's keyboard model and link-hint workflow are inspired by
-[Vimium](https://github.com/philc/vimium). orzbrowser ships an independent
-implementation rather than Vimium source.
+[Vimium](https://github.com/philc/vimium). Its scrolling is ported from
+Vimium's `content_scripts/scroller.js` (MIT; see
+`licenses/THIRD-PARTY-LICENSES.md`); the rest is an independent
+implementation.
 
 ## License
 

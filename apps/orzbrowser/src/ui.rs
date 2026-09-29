@@ -41,7 +41,7 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
             ("i", "insert mode (type into the page)"),
             ("f", "follow a link (hints)"),
             ("?", "this help"),
-            ("q / Ctrl-c", "quit"),
+            ("q", "quit"),
         ],
     ),
     (

@@ -121,7 +121,7 @@ toolbar's address bar.
 
 - **Vim-style scrolling** — `j` / `k` move by line, `Ctrl-d` / `Ctrl-u` by half
   a page, `Ctrl-f` / `Ctrl-b` by a full page, and `gg` / `G` jump to the top /
-  bottom.
+  bottom. Holding a key keeps scrolling smoothly until you let go.
 - **Link hints** — press `f` to overlay labels on every link and form field,
   then type a label to follow it. Landing on a text field switches to Insert
   mode automatically.
@@ -130,8 +130,10 @@ toolbar's address bar.
   the address bar. Type an address to open it, or any other words to search
   for them. The caret moves with the arrow keys, and input methods work, so
   you can search in any language.
-- **Modal input** — Normal, Insert, Address, Hint, and Help modes. `i` hands
-  keyboard focus to the page so you can type into it; `Esc` returns to Normal.
+- **Modal input** — Normal, Insert, Address, Hint, and Help modes. In Normal
+  mode the page holds keyboard focus and the scroll keys scroll it; `i` enters
+  Insert mode, where every key but `Esc` types into the page, and `Esc` returns
+  to Normal.
 - **In-app help** — `?` shows the full shortcut list.
 
 ### Usage
@@ -194,14 +196,14 @@ query, or fragment; otherwise orzbrowser exits with an error.
 | `L` | History forward |
 | `o` / `:` | Open the address bar |
 | `r` | Reload the page |
-| `i` | Insert mode (focus the webview) |
+| `i` | Insert mode (type into the page) |
 | `f` | Follow a link (show hints) |
 | `?` | Show help |
-| `q` / `Ctrl-c` | Quit |
+| `q` | Quit |
 
-While the page or the toolbar has keyboard focus, `Ctrl-c` copies instead of
-quitting; `q` still quits, since Normal mode forwards it to orzbrowser even
-while either has focus.
+In Normal mode the page holds keyboard focus, so `Ctrl-c` copies the page's
+selection instead of quitting (on macOS, copy with `Cmd-c`); quit with `q`.
+`Ctrl-c` quits only while the pane is too short to show the page.
 
 #### Address bar
 
@@ -244,4 +246,7 @@ orzbrowser's keyboard model and link-hint workflow are inspired by
 extension. The hint alphabet (`sadfjklewcmpgh`) is Vimium's default. Vimium is
 distributed under the
 [MIT License](https://github.com/philc/vimium/blob/master/MIT-LICENSE.txt);
-orzbrowser ships an independent implementation rather than Vimium source.
+orzbrowser's scrolling is ported from Vimium's `content_scripts/scroller.js`
+(commit `e34b529328`), and its license notice is reproduced in
+`THIRD-PARTY-LICENSES.md`; the rest of orzbrowser is an independent
+implementation.
