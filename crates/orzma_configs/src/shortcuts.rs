@@ -593,32 +593,32 @@ impl Default for Shortcuts {
             reset_font_size: host.reset_font_size,
             release_webview_focus: Some(parse_default_binding("<Leader>u")),
             quit: host.quit,
-            enter_vi_mode: Some(parse_default_binding("<Leader>s")),
-            select_left_pane: Some(parse_default_binding("<Leader>h")),
-            select_down_pane: Some(parse_default_binding("<Leader>j")),
-            select_up_pane: Some(parse_default_binding("<Leader>k")),
-            select_right_pane: Some(parse_default_binding("<Leader>l")),
-            split_vertical_pane: Some(parse_default_binding("<Leader>i")),
-            split_horizontal_pane: Some(parse_default_binding("<Leader>o")),
-            kill_pane: Some(parse_default_binding("<Leader>p")),
-            resize_left_pane: Some(parse_default_binding("r:<Leader>Shift+H")),
-            resize_down_pane: Some(parse_default_binding("r:<Leader>Shift+J")),
-            resize_up_pane: Some(parse_default_binding("r:<Leader>Shift+K")),
-            resize_right_pane: Some(parse_default_binding("r:<Leader>Shift+L")),
-            new_workspace: Some(parse_default_binding("<Leader>c")),
-            close_workspace: Some(parse_default_binding("<Leader>Shift+X")),
-            next_workspace: Some(parse_default_binding("<Leader>]")),
-            previous_workspace: Some(parse_default_binding("<Leader>[")),
-            select_workspace_1: Some(parse_default_binding("<Leader>1")),
-            select_workspace_2: Some(parse_default_binding("<Leader>2")),
-            select_workspace_3: Some(parse_default_binding("<Leader>3")),
-            select_workspace_4: Some(parse_default_binding("<Leader>4")),
-            select_workspace_5: Some(parse_default_binding("<Leader>5")),
-            select_workspace_6: Some(parse_default_binding("<Leader>6")),
-            select_workspace_7: Some(parse_default_binding("<Leader>7")),
-            select_workspace_8: Some(parse_default_binding("<Leader>8")),
-            select_workspace_9: Some(parse_default_binding("<Leader>9")),
-            rename_workspace: Some(parse_default_binding("<Leader>r")),
+            enter_vi_mode: Some(parse_default_binding("Alt+s")),
+            select_left_pane: Some(parse_default_binding("Alt+h")),
+            select_down_pane: Some(parse_default_binding("Alt+j")),
+            select_up_pane: Some(parse_default_binding("Alt+k")),
+            select_right_pane: Some(parse_default_binding("Alt+l")),
+            split_vertical_pane: Some(parse_default_binding("Alt+i")),
+            split_horizontal_pane: Some(parse_default_binding("Alt+o")),
+            kill_pane: Some(parse_default_binding("Alt+p")),
+            resize_left_pane: Some(parse_default_binding("r:Alt+Shift+H")),
+            resize_down_pane: Some(parse_default_binding("r:Alt+Shift+J")),
+            resize_up_pane: Some(parse_default_binding("r:Alt+Shift+K")),
+            resize_right_pane: Some(parse_default_binding("r:Alt+Shift+L")),
+            new_workspace: Some(parse_default_binding("Alt+c")),
+            close_workspace: Some(parse_default_binding("Alt+Shift+X")),
+            next_workspace: Some(parse_default_binding("Alt+]")),
+            previous_workspace: Some(parse_default_binding("Alt+[")),
+            select_workspace_1: Some(parse_default_binding("Alt+1")),
+            select_workspace_2: Some(parse_default_binding("Alt+2")),
+            select_workspace_3: Some(parse_default_binding("Alt+3")),
+            select_workspace_4: Some(parse_default_binding("Alt+4")),
+            select_workspace_5: Some(parse_default_binding("Alt+5")),
+            select_workspace_6: Some(parse_default_binding("Alt+6")),
+            select_workspace_7: Some(parse_default_binding("Alt+7")),
+            select_workspace_8: Some(parse_default_binding("Alt+8")),
+            select_workspace_9: Some(parse_default_binding("Alt+9")),
+            rename_workspace: Some(parse_default_binding("Alt+r")),
             leader_tap_timeout_ms: 300,
             repeat_time_ms: 500,
             direct_chords_over_webview: true,
@@ -1406,8 +1406,7 @@ mod tests {
         );
     }
 
-    /// Asserts that the macOS default table binds the `Cmd` tap leader and
-    /// six direct `Cmd` chords, leaving the other 27 actions leader-scoped.
+    /// Asserts that the macOS default table binds the `Cmd` tap leader and 32 direct chords, leaving only `release-webview-focus` leader-scoped.
     ///
     /// Case: a user on macOS starts orzma with no config file at all.
     #[cfg(target_os = "macos")]
@@ -1437,14 +1436,11 @@ mod tests {
             })
         );
         assert_eq!(s.bindings_iter().count(), 33);
-        assert_eq!(s.direct_chords().count(), 6);
-        assert_eq!(s.leader_chords().count(), 27);
+        assert_eq!(s.direct_chords().count(), 32);
+        assert_eq!(s.leader_chords().count(), 1);
     }
 
-    /// Asserts that the non-macOS default table binds the `Alt` tap leader and
-    /// five direct `Ctrl` chords, leaves the other 27 actions leader-scoped,
-    /// and leaves `quit` unbound rather than binding a chord the window
-    /// manager already owns.
+    /// Asserts that the non-macOS default table binds the `Alt` tap leader and 31 direct chords, leaves only `release-webview-focus` leader-scoped, and leaves `quit` unbound rather than binding a chord the window manager already owns.
     ///
     /// Case: a user on Windows starts orzma with no config file at all, where
     /// no `Cmd` key exists to press.
@@ -1469,8 +1465,8 @@ mod tests {
         );
         assert_eq!(s.quit, None);
         assert_eq!(s.bindings_iter().count(), 33);
-        assert_eq!(s.direct_chords().count(), 5);
-        assert_eq!(s.leader_chords().count(), 27);
+        assert_eq!(s.direct_chords().count(), 31);
+        assert_eq!(s.leader_chords().count(), 1);
     }
 
     /// Asserts that every chord in the host default table is unique, so no
@@ -1510,70 +1506,65 @@ mod tests {
         assert_eq!(Shortcuts::default().bindings_iter().count(), 33);
     }
 
+    /// Asserts that the stock resize bindings are repeatable `Alt+Shift`
+    /// direct chords.
+    ///
+    /// Case: a user with no config file holds `Alt+Shift+H` to move a divider.
     #[test]
-    fn default_resize_bindings_are_repeatable_shift_leader() {
+    fn default_resize_bindings_are_repeatable_alt_chords() {
         let s = Shortcuts::default();
-        assert_eq!(
-            s.resize_left_pane,
-            Some(Binding::Leader {
-                chord: parse_key_chord("Shift+H").unwrap(),
-                repeat: true
-            })
-        );
-        assert_eq!(
-            s.resize_right_pane,
-            Some(Binding::Leader {
-                chord: parse_key_chord("Shift+L").unwrap(),
-                repeat: true
-            })
-        );
+        for (binding, chord) in [
+            (&s.resize_left_pane, "Alt+Shift+H"),
+            (&s.resize_down_pane, "Alt+Shift+J"),
+            (&s.resize_up_pane, "Alt+Shift+K"),
+            (&s.resize_right_pane, "Alt+Shift+L"),
+        ] {
+            assert_eq!(
+                *binding,
+                Some(Binding::Direct {
+                    chord: parse_key_chord(chord).unwrap(),
+                    repeat: true,
+                }),
+                "{chord}"
+            );
+        }
     }
 
-    /// Asserts that the stock pane actions sit on non-repeatable leader
+    /// Asserts that the stock pane actions are single-fire `Alt` direct
     /// chords.
     ///
-    /// Case: a user with no config file splits, selects, and kills panes
-    /// through the leader.
+    /// Case: a user with no config file splits, selects, and kills panes with
+    /// `Alt` chords.
     #[test]
-    fn default_multiplexer_actions_are_leader_bound() {
+    fn default_multiplexer_actions_are_alt_chords() {
         let s = Shortcuts::default();
-        assert_eq!(
-            s.select_left_pane,
-            Some(Binding::Leader {
-                chord: parse_key_chord("h").unwrap(),
-                repeat: false,
-            })
-        );
-        assert_eq!(
-            s.split_vertical_pane,
-            Some(Binding::Leader {
-                chord: parse_key_chord("i").unwrap(),
-                repeat: false,
-            })
-        );
-        assert_eq!(
-            s.kill_pane,
-            Some(Binding::Leader {
-                chord: parse_key_chord("p").unwrap(),
-                repeat: false,
-            })
-        );
-        assert_eq!(
-            s.split_horizontal_pane,
-            Some(Binding::Leader {
-                chord: parse_key_chord("o").unwrap(),
-                repeat: false,
-            })
-        );
+        for (binding, chord) in [
+            (&s.select_left_pane, "Alt+h"),
+            (&s.select_down_pane, "Alt+j"),
+            (&s.select_up_pane, "Alt+k"),
+            (&s.select_right_pane, "Alt+l"),
+            (&s.split_vertical_pane, "Alt+i"),
+            (&s.split_horizontal_pane, "Alt+o"),
+            (&s.kill_pane, "Alt+p"),
+            (&s.enter_vi_mode, "Alt+s"),
+        ] {
+            assert_eq!(
+                *binding,
+                Some(Binding::Direct {
+                    chord: parse_key_chord(chord).unwrap(),
+                    repeat: false,
+                }),
+                "{chord}"
+            );
+        }
     }
 
-    /// Asserts the stock workspace bindings: leader-scoped on every
-    /// platform.
+    /// Asserts the stock workspace bindings: `Alt` direct chords on every platform.
     ///
     /// Case: a new user opens a second workspace, cycles, jumps to the third
     /// tab, and renames it without editing the config.
     #[test]
-    fn workspace_bindings_default_to_leader_keys() {
+    fn workspace_bindings_default_to_alt_chords() {
         let s = Shortcuts::default();
         let binding_of = |shortcut| {
             s.bindings_iter()
@@ -1581,12 +1572,12 @@ mod tests {
                 .and_then(|(_, binding, _)| binding.clone())
         };
         for (shortcut, chord) in [
-            (Shortcut::NewWorkspace, "<Leader>c"),
-            (Shortcut::CloseWorkspace, "<Leader>Shift+X"),
-            (Shortcut::NextWorkspace, "<Leader>]"),
-            (Shortcut::PreviousWorkspace, "<Leader>["),
-            (Shortcut::SelectWorkspace(3), "<Leader>3"),
-            (Shortcut::RenameWorkspace, "<Leader>r"),
+            (Shortcut::NewWorkspace, "Alt+c"),
+            (Shortcut::CloseWorkspace, "Alt+Shift+X"),
+            (Shortcut::NextWorkspace, "Alt+]"),
+            (Shortcut::PreviousWorkspace, "Alt+["),
+            (Shortcut::SelectWorkspace(3), "Alt+3"),
+            (Shortcut::RenameWorkspace, "Alt+r"),
         ] {
             assert_eq!(
                 binding_of(shortcut),
@@ -1665,7 +1656,7 @@ kill-pane = "<Leader>d"
             })
         );
         assert_eq!(s.paste, Shortcuts::default().paste);
-        assert_eq!(s.leader_chords().count(), 27);
+        assert_eq!(s.leader_chords().count(), 3);
     }
 
     #[test]
@@ -1751,7 +1742,7 @@ kill-pane = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"r:Cmd+Plus","decrease-font-size":"r:Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"r:<Leader>Shift+H","resize-down-pane":"r:<Leader>Shift+J","resize-up-pane":"r:<Leader>Shift+K","resize-right-pane":"r:<Leader>Shift+L","new-workspace":"<Leader>C","close-workspace":"<Leader>Shift+X","next-workspace":"<Leader>]","previous-workspace":"<Leader>[","select-workspace-1":"<Leader>1","select-workspace-2":"<Leader>2","select-workspace-3":"<Leader>3","select-workspace-4":"<Leader>4","select-workspace-5":"<Leader>5","select-workspace-6":"<Leader>6","select-workspace-7":"<Leader>7","select-workspace-8":"<Leader>8","select-workspace-9":"<Leader>9","rename-workspace":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"r:Cmd+Plus","decrease-font-size":"r:Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"Alt+S","select-left-pane":"Alt+H","select-down-pane":"Alt+J","select-up-pane":"Alt+K","select-right-pane":"Alt+L","split-vertical-pane":"Alt+I","split-horizontal-pane":"Alt+O","kill-pane":"Alt+P","resize-left-pane":"r:Alt+Shift+H","resize-down-pane":"r:Alt+Shift+J","resize-up-pane":"r:Alt+Shift+K","resize-right-pane":"r:Alt+Shift+L","new-workspace":"Alt+C","close-workspace":"Alt+Shift+X","next-workspace":"Alt+]","previous-workspace":"Alt+[","select-workspace-1":"Alt+1","select-workspace-2":"Alt+2","select-workspace-3":"Alt+3","select-workspace-4":"Alt+4","select-workspace-5":"Alt+5","select-workspace-6":"Alt+6","select-workspace-7":"Alt+7","select-workspace-8":"Alt+8","select-workspace-9":"Alt+9","rename-workspace":"Alt+R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
         assert_eq!(json, expected);
     }
 
@@ -1764,7 +1755,7 @@ kill-pane = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"r:Ctrl+Plus","decrease-font-size":"r:Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","resize-left-pane":"r:<Leader>Shift+H","resize-down-pane":"r:<Leader>Shift+J","resize-up-pane":"r:<Leader>Shift+K","resize-right-pane":"r:<Leader>Shift+L","new-workspace":"<Leader>C","close-workspace":"<Leader>Shift+X","next-workspace":"<Leader>]","previous-workspace":"<Leader>[","select-workspace-1":"<Leader>1","select-workspace-2":"<Leader>2","select-workspace-3":"<Leader>3","select-workspace-4":"<Leader>4","select-workspace-5":"<Leader>5","select-workspace-6":"<Leader>6","select-workspace-7":"<Leader>7","select-workspace-8":"<Leader>8","select-workspace-9":"<Leader>9","rename-workspace":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
+        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"r:Ctrl+Plus","decrease-font-size":"r:Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"Alt+S","select-left-pane":"Alt+H","select-down-pane":"Alt+J","select-up-pane":"Alt+K","select-right-pane":"Alt+L","split-vertical-pane":"Alt+I","split-horizontal-pane":"Alt+O","kill-pane":"Alt+P","resize-left-pane":"r:Alt+Shift+H","resize-down-pane":"r:Alt+Shift+J","resize-up-pane":"r:Alt+Shift+K","resize-right-pane":"r:Alt+Shift+L","new-workspace":"Alt+C","close-workspace":"Alt+Shift+X","next-workspace":"Alt+]","previous-workspace":"Alt+[","select-workspace-1":"Alt+1","select-workspace-2":"Alt+2","select-workspace-3":"Alt+3","select-workspace-4":"Alt+4","select-workspace-5":"Alt+5","select-workspace-6":"Alt+6","select-workspace-7":"Alt+7","select-workspace-8":"Alt+8","select-workspace-9":"Alt+9","rename-workspace":"Alt+R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
         assert_eq!(json, expected);
     }
 
