@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HeldKeys, type Press } from './held';
 import { installKeys, type KeyHandler } from './keys';
-import type { Scroller } from './scroller';
+import type { ScrollAction, Scroller } from './scroller';
 
 type Call =
   | ['scrollBy', number | 'viewSize', number, Press | undefined]
@@ -20,31 +20,50 @@ afterEach(() => {
   }
 });
 
-function setup(options: { trusted?: boolean; enabled?: boolean } = {}) {
+function setup(
+  options: {
+    trusted?: boolean;
+    isTrusted?: (event: Event) => boolean;
+    enabled?: boolean;
+    scrolls?: boolean;
+  } = {},
+) {
   const calls: Call[] = [];
   const reports: (string | null)[] = [];
+  const handedOff: [ScrollAction, string][] = [];
+  const released: string[] = [];
+  const scrolls = options.scrolls !== false;
   const scroller: Scroller = {
     scrollBy: (amount, factor, press) => {
       calls.push(['scrollBy', amount, factor, press]);
+      return scrolls && !press?.repeat;
     },
     scrollTo: (position, press) => {
       calls.push(['scrollTo', position, press]);
+      return scrolls && !press?.repeat;
     },
     cancelAll: () => {
       calls.push(['cancelAll']);
     },
   };
-  const keys = installKeys(window, scroller, new HeldKeys(), {
+  const held = new HeldKeys();
+  const keys = installKeys(window, scroller, held, {
     reportPending: (key) => {
       reports.push(key);
     },
-    isTrusted: options.trusted === false ? undefined : () => true,
+    handOff: (action, code) => {
+      handedOff.push([action, code]);
+    },
+    release: (code) => {
+      released.push(code);
+    },
+    isTrusted: options.isTrusted ?? (options.trusted === false ? undefined : () => true),
   });
   if (options.enabled !== false) {
     keys.setEnabled(true);
   }
   handlers.push(keys);
-  return { keys, calls, reports };
+  return { keys, held, calls, reports, handedOff, released };
 }
 
 function send(
@@ -156,6 +175,18 @@ describe('installKeys', () => {
     const { calls } = setup({ trusted: false });
     expect(tap({ key: 'j', code: 'KeyJ' }).defaultPrevented).toBe(false);
     expect(scrolls(calls)).toEqual([]);
+  });
+
+  it('ignores a keyup a page script made while the key is held', () => {
+    const made = new WeakSet<Event>();
+    const { held } = setup({ isTrusted: (event) => !made.has(event) });
+    send('keydown', { key: 'j', code: 'KeyJ' });
+    const fake = new KeyboardEvent('keyup', { key: 'j', code: 'KeyJ', cancelable: true });
+    made.add(fake);
+    window.dispatchEvent(fake);
+    expect(fake.defaultPrevented).toBe(false);
+    expect(held.press('KeyJ', 0).repeat).toBe(true);
+    expect(send('keyup', { key: 'j', code: 'KeyJ' }).defaultPrevented).toBe(true);
   });
 
   it('hides a handled key from the page, down and up', () => {
@@ -281,6 +312,93 @@ describe('installKeys', () => {
     const input = focusedInput();
     keys.blurFocusedInput();
     expect(document.activeElement).not.toBe(input);
+  });
+
+  it('drops the pending g when the window loses focus', () => {
+    const { reports } = setup();
+    tap({ key: 'g', code: 'KeyG' });
+    window.dispatchEvent(new Event('blur'));
+    expect(reports).toEqual(['g', null]);
+  });
+
+  it('reports whether the keys are on', () => {
+    const { keys } = setup({ enabled: false });
+    expect(keys.enabled).toBe(false);
+    keys.setEnabled(true);
+    expect(keys.enabled).toBe(true);
+  });
+
+  it('hands a scroll it cannot make to the parent frame and reports when its key goes up', () => {
+    const { handedOff, released } = setup({ scrolls: false });
+    send('keydown', { key: 'j', code: 'KeyJ' });
+    send('keydown', { key: 'j', code: 'KeyJ' });
+    expect(handedOff).toEqual([['down', 'KeyJ']]);
+    expect(send('keyup', { key: 'j', code: 'KeyJ' }).defaultPrevented).toBe(true);
+    expect(released).toEqual(['KeyJ']);
+
+    tap({ key: 'g', code: 'KeyG' });
+    tap({ key: 'g', code: 'KeyG' });
+    expect(handedOff).toEqual([
+      ['down', 'KeyJ'],
+      ['top', 'KeyG'],
+    ]);
+    expect(released).toEqual(['KeyJ', 'KeyG']);
+  });
+
+  it('keeps a scroll it made to itself', () => {
+    const { handedOff, released } = setup();
+    tap({ key: 'j', code: 'KeyJ' });
+    expect(handedOff).toEqual([]);
+    expect(released).toEqual([]);
+  });
+
+  it('reports every handed-off key as up when the window loses focus', () => {
+    const { handedOff, released } = setup({ scrolls: false });
+    send('keydown', { key: 'j', code: 'KeyJ' });
+    send('keydown', { key: 'k', code: 'KeyK' });
+    window.dispatchEvent(new Event('blur'));
+    expect(handedOff).toEqual([
+      ['down', 'KeyJ'],
+      ['up', 'KeyK'],
+    ]);
+    expect(released).toEqual(['KeyJ', 'KeyK']);
+    send('keyup', { key: 'j', code: 'KeyJ' });
+    expect(released).toEqual(['KeyJ', 'KeyK']);
+  });
+
+  it('runs a scroll a child frame handed off, held until the child reports its key up', () => {
+    const { keys, held, calls } = setup();
+    keys.scrollFromChild('down', 'KeyJ', 1234);
+    expect(scrolls(calls)).toEqual([['scrollBy', 60, 1]]);
+    const press = calls[0][0] === 'scrollBy' ? calls[0][3] : undefined;
+    expect(press).toMatchObject({ code: 'KeyJ', timeStamp: 1234, repeat: false });
+    expect(press !== undefined && held.isHeld(press)).toBe(true);
+    keys.releaseFromChild('KeyJ');
+    expect(press !== undefined && held.isHeld(press)).toBe(false);
+  });
+
+  it("passes a child's scroll on up when it cannot make it either", () => {
+    const { keys, handedOff, released } = setup({ scrolls: false });
+    keys.scrollFromChild('pageDown', 'PageDown', 0);
+    expect(handedOff).toEqual([['pageDown', 'PageDown']]);
+    keys.releaseFromChild('PageDown');
+    expect(released).toEqual(['PageDown']);
+  });
+
+  it("ignores a child's scroll while the keys are off", () => {
+    const { keys, calls, handedOff } = setup({ enabled: false });
+    keys.scrollFromChild('down', 'KeyJ', 0);
+    expect(scrolls(calls)).toEqual([]);
+    expect(handedOff).toEqual([]);
+  });
+
+  it('forgets the handed-off keys when the keys turn off', () => {
+    const { keys, released } = setup({ scrolls: false });
+    send('keydown', { key: 'j', code: 'KeyJ' });
+    keys.setEnabled(false);
+    keys.setEnabled(true);
+    send('keyup', { key: 'j', code: 'KeyJ' });
+    expect(released).toEqual([]);
   });
 
   it('passes a keyup it never saw go down', () => {

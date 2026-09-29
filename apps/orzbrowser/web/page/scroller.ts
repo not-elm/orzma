@@ -18,33 +18,40 @@ export interface Clock {
   cancelFrame(handle: number): void;
 }
 
+const SCROLL_ACTIONS = [
+  'down',
+  'up',
+  'halfDown',
+  'halfUp',
+  'pageDown',
+  'pageUp',
+  'top',
+  'bottom',
+] as const;
+
 /** A scroll the TUI or a key asks for, named as on the wire. */
-export type ScrollAction =
-  | 'down'
-  | 'up'
-  | 'halfDown'
-  | 'halfUp'
-  | 'pageDown'
-  | 'pageUp'
-  | 'top'
-  | 'bottom';
+export type ScrollAction = (typeof SCROLL_ACTIONS)[number];
 
 /** Scrolls the page the way Vimium does. */
 export interface Scroller {
   /**
    * Scrolls by `amount × factor` pixels, where `'viewSize'` stands for the viewport height. The
-   * scroll keeps going while `press` is held; without `press` it is a single tap, and a repeat
-   * press starts nothing.
+   * scroll keeps going while `press` is held; without `press` it is a single tap. Returns whether
+   * it started a scroll: a repeat press starts nothing, and neither does a document with nothing
+   * that can scroll that way.
    */
-  scrollBy(amount: number | 'viewSize', factor: number, press?: Press): void;
-  /** Scrolls to the top or the bottom, continuing while `press` is held. */
-  scrollTo(position: 'top' | 'bottom', press?: Press): void;
+  scrollBy(amount: number | 'viewSize', factor: number, press?: Press): boolean;
+  /**
+   * Scrolls to the top or the bottom, continuing while `press` is held. Returns whether it started
+   * a scroll, as `scrollBy` does.
+   */
+  scrollTo(position: 'top' | 'bottom', press?: Press): boolean;
   /** Stops every running scroll at once. */
   cancelAll(): void;
 }
 
 /** The distance of a line scroll, in CSS pixels. */
-export const LINE = 60;
+const LINE = 60;
 
 const MIN_CALIBRATION = 0.5;
 const MAX_CALIBRATION = 1.6;
@@ -63,33 +70,33 @@ export function windowClock(win: Window): Clock {
   };
 }
 
-/** Runs the scroll `action` names; without `press` it is a single tap. */
-export function runScrollAction(scroller: Scroller, action: ScrollAction, press?: Press): void {
+/** Whether `value` names a scroll action. */
+export function isScrollAction(value: unknown): value is ScrollAction {
+  return SCROLL_ACTIONS.some((action) => action === value);
+}
+
+/**
+ * Runs the scroll `action` names; without `press` it is a single tap. Returns whether it started a
+ * scroll.
+ */
+export function runScrollAction(scroller: Scroller, action: ScrollAction, press?: Press): boolean {
   switch (action) {
     case 'down':
-      scroller.scrollBy(LINE, 1, press);
-      break;
+      return scroller.scrollBy(LINE, 1, press);
     case 'up':
-      scroller.scrollBy(LINE, -1, press);
-      break;
+      return scroller.scrollBy(LINE, -1, press);
     case 'halfDown':
-      scroller.scrollBy('viewSize', 0.5, press);
-      break;
+      return scroller.scrollBy('viewSize', 0.5, press);
     case 'halfUp':
-      scroller.scrollBy('viewSize', -0.5, press);
-      break;
+      return scroller.scrollBy('viewSize', -0.5, press);
     case 'pageDown':
-      scroller.scrollBy('viewSize', 1, press);
-      break;
+      return scroller.scrollBy('viewSize', 1, press);
     case 'pageUp':
-      scroller.scrollBy('viewSize', -1, press);
-      break;
+      return scroller.scrollBy('viewSize', -1, press);
     case 'top':
-      scroller.scrollTo('top', press);
-      break;
+      return scroller.scrollTo('top', press);
     case 'bottom':
-      scroller.scrollTo('bottom', press);
-      break;
+      return scroller.scrollTo('bottom', press);
   }
 }
 
@@ -157,17 +164,16 @@ export function installScroller(win: Window, clock: Clock, held: HeldKeys): Scro
       : null;
   }
 
-  function findScrollable(start: Element, direction: number): Element {
+  function findScrollable(start: Element, direction: number): Element | null {
     const top = scrollingElement();
-    let el = start;
-    while (el !== top && !(doesScroll(el, direction) && shouldScroll(el))) {
-      const parent = containing(el) ?? top;
-      if (parent === null) {
-        break;
+    let el: Element | null = start;
+    while (el !== null && el !== top) {
+      if (doesScroll(el, direction) && shouldScroll(el)) {
+        return el;
       }
-      el = parent;
+      el = containing(el) ?? top;
     }
-    return el;
+    return el !== null && doesScroll(el, direction) ? el : null;
   }
 
   function visibleArea(el: Element): number {
@@ -277,28 +283,30 @@ export function installScroller(win: Window, clock: Clock, held: HeldKeys): Scro
     animation.handle = clock.requestFrame(frame);
   }
 
+  function scrollableFor(direction: number, press: Press | undefined): Element | null {
+    if (press?.repeat) {
+      return null;
+    }
+    const start = target();
+    return start === null ? null : findScrollable(start, direction);
+  }
+
   return {
     scrollBy(amount, factor, press) {
-      if (press?.repeat) {
-        return;
+      const el = scrollableFor(factor, press);
+      if (el === null) {
+        return false;
       }
-      const start = target();
-      if (start === null) {
-        return;
-      }
-      const el = findScrollable(start, factor);
       animate(el, factor * dimension(el, amount), press);
+      return true;
     },
     scrollTo(position, press) {
-      if (press?.repeat) {
-        return;
+      const el = scrollableFor(position === 'top' ? -1 : 1, press);
+      if (el === null) {
+        return false;
       }
-      const start = target();
-      if (start === null) {
-        return;
-      }
-      const el = findScrollable(start, position === 'top' ? -1 : 1);
       animate(el, (position === 'top' ? 0 : el.scrollHeight) - el.scrollTop, press);
+      return true;
     },
     cancelAll() {
       for (const animation of running) {
@@ -308,6 +316,9 @@ export function installScroller(win: Window, clock: Clock, held: HeldKeys): Scro
     },
   };
 }
+
+/** Internals the tests reach. */
+export const __testables = { LINE };
 
 function isElement(target: EventTarget | undefined): target is Element {
   return target !== undefined && (target as Node).nodeType === ELEMENT_NODE;

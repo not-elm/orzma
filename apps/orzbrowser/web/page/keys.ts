@@ -1,25 +1,40 @@
-import type { HeldKeys } from './held';
+import type { HeldKeys, Press } from './held';
 import { runScrollAction, type ScrollAction, type Scroller } from './scroller';
 
-/** What the key handler tells the controller. */
-export interface KeyHost {
+/** What the key handler tells the controller and the parent frame. */
+interface KeyHost {
   /** Reports the first key of a pending chord, or `null` once it resolves. */
   reportPending(key: string | null): void;
+  /** Hands the parent frame a scroll this frame cannot make, held while the key `code` is down. */
+  handOff(action: ScrollAction, code: string): void;
+  /** Tells the parent frame that the key `code` of a handed-off scroll went up. */
+  release(code: string): void;
   /** Whether `event` came from the user; defaults to `event.isTrusted`. */
   isTrusted?(event: Event): boolean;
 }
 
 /** Controls the page's scroll keys. */
 export interface KeyHandler {
+  /** Whether the scroll keys are on. */
+  readonly enabled: boolean;
   /**
-   * Turns the scroll keys on or off. Off stops every scroll and drops a pending chord; on takes
-   * focus from a text field the page focused before the user acted, so the keys scroll.
+   * Turns the scroll keys on or off. Off stops every scroll, forgets the held and handed-off keys,
+   * and drops a pending chord; on takes focus from a text field the page focused before the user
+   * acted, so the keys scroll.
    */
   setEnabled(enabled: boolean): void;
-  /** Drops a pending chord and reports `null`. */
+  /** Drops a pending chord, reporting `null` when one was pending. */
   cancelChord(): void;
   /** Takes focus from a focused text field. */
   blurFocusedInput(): void;
+  /**
+   * Runs a scroll a child frame handed off, held until `releaseFromChild(code)`, and hands it on
+   * to the parent frame when this frame cannot make it either. Ignored while the keys are off.
+   * `timeStamp` is on this frame's `performance.now()` timebase.
+   */
+  scrollFromChild(action: ScrollAction, code: string, timeStamp: number): void;
+  /** Records that the key `code` of a scroll a child frame handed off went up. */
+  releaseFromChild(code: string): void;
 }
 
 const TEXTLESS_INPUT_TYPES = new Set([
@@ -39,7 +54,7 @@ const TEXTLESS_INPUT_TYPES = new Set([
  * Installs the scroll keys on `win` with capture-phase listeners, which run before the page's
  * own, so a handled key never reaches the page. The keys start off. Until the user presses a key
  * or the mouse on the page, a text field the page focuses on its own loses focus again while the
- * keys are on.
+ * keys are on. A scroll this frame cannot make goes to the parent frame through `host`.
  */
 export function installKeys(
   win: Window,
@@ -49,7 +64,7 @@ export function installKeys(
 ): KeyHandler {
   const doc = win.document;
   const trusted = host.isTrusted ?? ((event: Event) => event.isTrusted);
-  const consumed = new Set<string>();
+  const handedOff = new Set<string>();
   let enabled = false;
   let pending = false;
   let userActed = false;
@@ -59,6 +74,20 @@ export function installKeys(
       pending = false;
       host.reportPending(null);
     }
+  };
+
+  const scroll = (action: ScrollAction, press: Press): void => {
+    if (!runScrollAction(scroller, action, press) && !press.repeat) {
+      handedOff.add(press.code);
+      host.handOff(action, press.code);
+    }
+  };
+
+  const release = (code: string): boolean => {
+    if (handedOff.delete(code)) {
+      host.release(code);
+    }
+    return held.release(code);
   };
 
   const blurFocusedInput = (): void => {
@@ -109,14 +138,13 @@ export function installKeys(
       }
       const press = held.press(event.code, event.timeStamp);
       consume(event);
-      consumed.add(event.code);
       if (action === 'g') {
         if (press.repeat) {
           return;
         }
         if (pending) {
           dropChord();
-          runScrollAction(scroller, 'top', press);
+          scroll('top', press);
           return;
         }
         pending = true;
@@ -124,7 +152,7 @@ export function installKeys(
         return;
       }
       dropChord();
-      runScrollAction(scroller, action, press);
+      scroll(action, press);
     },
     true,
   );
@@ -132,8 +160,10 @@ export function installKeys(
   win.addEventListener(
     'keyup',
     (event) => {
-      held.release(event.code);
-      if (consumed.delete(event.code)) {
+      if (!trusted(event)) {
+        return;
+      }
+      if (release(event.code)) {
         consume(event);
       }
     },
@@ -141,11 +171,17 @@ export function installKeys(
   );
 
   win.addEventListener('blur', () => {
+    for (const code of handedOff) {
+      release(code);
+    }
     held.clear();
-    consumed.clear();
+    dropChord();
   });
 
   return {
+    get enabled() {
+      return enabled;
+    },
     setEnabled(next) {
       if (next === enabled) {
         return;
@@ -159,14 +195,17 @@ export function installKeys(
       }
       scroller.cancelAll();
       held.clear();
-      consumed.clear();
+      handedOff.clear();
       dropChord();
     },
-    cancelChord() {
-      pending = false;
-      host.reportPending(null);
-    },
+    cancelChord: dropChord,
     blurFocusedInput,
+    scrollFromChild(action, code, timeStamp) {
+      if (enabled) {
+        scroll(action, held.press(code, timeStamp));
+      }
+    },
+    releaseFromChild: release,
   };
 }
 

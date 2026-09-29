@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HeldKeys } from './held';
-import { type Clock, installScroller, LINE, runScrollAction } from './scroller';
+import { __testables, type Clock, installScroller, runScrollAction } from './scroller';
+
+const { LINE } = __testables;
 
 interface Frames {
   clock: Clock;
@@ -300,10 +302,33 @@ describe('installScroller', () => {
   it('does nothing on a document with nothing to scroll', () => {
     const { f, scroller } = setup(null);
     document.body.remove();
-    expect(() => {
-      runScrollAction(scroller, 'down');
-      runScrollAction(scroller, 'top');
-    }).not.toThrow();
+    expect(runScrollAction(scroller, 'down')).toBe(false);
+    expect(runScrollAction(scroller, 'top')).toBe(false);
+    expect(f.scheduled()).toBe(0);
+  });
+
+  it('reports that it started a scroll, but not for a repeat press', () => {
+    const { f, held, scroller } = setup(scrollable());
+    expect(runScrollAction(scroller, 'down')).toBe(true);
+    expect(scroller.scrollBy(LINE, 1, held.press('KeyJ', f.clock.now()))).toBe(true);
+    expect(scroller.scrollBy(LINE, 1, held.press('KeyJ', f.clock.now()))).toBe(false);
+    expect(runScrollAction(scroller, 'bottom')).toBe(true);
+  });
+
+  it('starts nothing and reports it at the edge it would scroll past', () => {
+    const { f, page, scroller } = setup(scrollable());
+    expect(runScrollAction(scroller, 'up')).toBe(false);
+    expect(runScrollAction(scroller, 'top')).toBe(false);
+    page.scrollTop = 10_000 - 600;
+    expect(runScrollAction(scroller, 'down')).toBe(false);
+    expect(runScrollAction(scroller, 'bottom')).toBe(false);
+    expect(f.scheduled()).toBe(0);
+  });
+
+  it('reports that it cannot scroll a document whose content fits', () => {
+    const { f, scroller } = setup(scrollable(600, 600));
+    expect(runScrollAction(scroller, 'down')).toBe(false);
+    expect(runScrollAction(scroller, 'halfUp')).toBe(false);
     expect(f.scheduled()).toBe(0);
   });
 });

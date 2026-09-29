@@ -121,7 +121,10 @@ toolbar's address bar.
 
 - **Vim-style scrolling** — `j` / `k` move by line, `Ctrl-d` / `Ctrl-u` by half
   a page, `Ctrl-f` / `Ctrl-b` by a full page, and `gg` / `G` jump to the top /
-  bottom. Holding a key keeps scrolling smoothly until you let go.
+  bottom. Holding a key keeps scrolling smoothly until you let go. When a frame
+  embedded in the page (a code demo, a video player) has keyboard focus, the
+  keys scroll that frame, and scroll the page around it once the frame can
+  scroll no further that way.
 - **Link hints** — press `f` to overlay labels on every link and form field,
   then type a label to follow it. Landing on a text field switches to Insert
   mode automatically.

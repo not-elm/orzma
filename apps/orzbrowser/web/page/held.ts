@@ -31,9 +31,9 @@ export class HeldKeys {
     return { code, id: fresh, timeStamp, repeat: false };
   }
 
-  /** Records a keyup of `code`. */
-  release(code: string): void {
-    this.held.delete(code);
+  /** Records a keyup of `code` and returns whether the key was held. */
+  release(code: string): boolean {
+    return this.held.delete(code);
   }
 
   /** Forgets every held key. */
