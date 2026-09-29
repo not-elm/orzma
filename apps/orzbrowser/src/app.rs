@@ -81,7 +81,7 @@ pub(crate) struct App {
     chrome_ready: bool,
     page_keys: KeySet,
     chrome_keys: KeySet,
-    page_scroll_keys: bool,
+    page_scroll_keys_sent: bool,
 }
 
 impl App {
@@ -101,7 +101,7 @@ impl App {
             chrome_ready: false,
             page_keys: KeySet::PageNormal,
             chrome_keys: KeySet::Normal,
-            page_scroll_keys: true,
+            page_scroll_keys_sent: true,
         }
     }
 
@@ -114,7 +114,7 @@ impl App {
             address_epoch: 1,
             awaiting: Some(Target::Chrome),
             chrome_keys: KeySet::Empty,
-            page_scroll_keys: false,
+            page_scroll_keys_sent: false,
             ..Self::new(url)
         }
     }
@@ -132,11 +132,8 @@ impl App {
     /// The first key of a pending two-key chord: the TUI's, else the page's
     /// in Normal mode.
     pub fn pending_key(&self) -> Option<char> {
-        self.pending_prefix.or_else(|| {
-            (self.mode == Mode::Normal)
-                .then_some(self.page_pending)
-                .flatten()
-        })
+        self.pending_prefix
+            .or(self.page_pending.filter(|_| self.mode == Mode::Normal))
     }
 
     /// The text the address input starts with when the address bar opens.
@@ -167,22 +164,12 @@ impl App {
         self.page_placed = placed;
     }
 
-    /// Whether the page's preload should handle the scroll keys: in Normal
-    /// mode while the pane holds the keyboard.
-    pub fn page_scroll_keys(&self) -> bool {
-        self.mode == Mode::Normal && self.pane_focused
-    }
-
     /// Records whether orzbrowser's pane holds the keyboard. In Normal mode a
     /// gain gives the page keyboard focus; while the pane lacks the keyboard,
     /// the page is never asked for focus.
     pub fn on_pane_focus(&mut self, focused: bool) -> Vec<Cmd> {
         self.pane_focused = focused;
-        let cmds = if focused {
-            self.claim_page_focus()
-        } else {
-            vec![]
-        };
+        let cmds = self.claim_page_focus();
         self.with_key_sets(cmds)
     }
 
@@ -195,6 +182,121 @@ impl App {
             cmds.insert(0, Cmd::CancelChord);
         }
         self.with_key_sets(cmds)
+    }
+
+    // TODO: a text field that takes focus in Normal mode (a click, Tab, or a
+    // page shortcut such as `/`) keeps the page's Normal forward keys, so
+    // typing `q`, `r`, `o`, `i`, `f`, `H`, or `L` into it runs the command
+    // instead of typing. Entering Insert automatically needs the page's
+    // preload to report that an editable element took focus.
+    /// Applies the focus changes both webviews reported in one loop pass.
+    ///
+    /// While a focus request of this app is unanswered, no mode is cancelled.
+    /// Otherwise a chrome that lost focus closes the address bar, a page that
+    /// lost focus leaves Insert mode and its text field, and a gain on either
+    /// webview cancels Hint and Help. In Normal mode a chrome that gained
+    /// focus hands it to the page, even while a request is unanswered. A page
+    /// that gained focus drops the TUI's pending chord.
+    pub fn on_focus_drain(&mut self, drain: FocusDrain) -> Vec<Cmd> {
+        if drain.is_empty() {
+            return vec![];
+        }
+        self.holder = drain.holder_after(self.holder);
+        if drain.page.last == Some(true) {
+            self.pending_prefix = None;
+        }
+        if self
+            .awaiting
+            .is_some_and(|target| drain.of(target).saw_true)
+        {
+            self.awaiting = None;
+        }
+        let mut cmds = if self.awaiting.is_some() {
+            vec![]
+        } else {
+            self.cancel_modes_after(&drain)
+        };
+        if self.holder == Some(Target::Chrome) {
+            cmds.extend(self.claim_page_focus());
+        }
+        self.with_key_sets(cmds)
+    }
+
+    /// Applies the address the chrome page submitted.
+    ///
+    /// An address to open or search navigates the page, or reloads it when it
+    /// is the current URL; an empty one only closes the address bar. Ignored
+    /// outside the address bar.
+    pub fn on_address_target(&mut self, target: AddressTarget) -> Vec<Cmd> {
+        if self.mode != Mode::Address {
+            return vec![];
+        }
+        let navigate = match target {
+            AddressTarget::Open(url) | AddressTarget::Search(url) => Some(if url == self.url {
+                Cmd::Reload
+            } else {
+                Cmd::Navigate(url)
+            }),
+            AddressTarget::Empty => None,
+            AddressTarget::Invalid(_) => return vec![],
+        };
+        let cmds = self.return_to_normal(navigate);
+        self.with_key_sets(cmds)
+    }
+
+    /// Applies a report from the chrome page: the first ready lets an open
+    /// address bar take keyboard focus, Esc closes the address bar, and a
+    /// click on the omnibox in Normal mode opens it.
+    pub fn on_chrome_event(&mut self, event: ChromeEvent) -> Vec<Cmd> {
+        let cmds = match event {
+            ChromeEvent::Ready => self.chrome_ready(),
+            ChromeEvent::Cancel if self.mode == Mode::Address => self.return_to_normal(None),
+            ChromeEvent::OpenAddress if self.mode == Mode::Normal => self.open_address(),
+            ChromeEvent::Cancel | ChromeEvent::OpenAddress => vec![],
+        };
+        self.with_key_sets(cmds)
+    }
+
+    /// Applies a report from the page's preload. A ready means a fresh page
+    /// whose scroll keys start off: they are told again, the page's pending
+    /// chord is dropped, and the page is focused in Normal mode. A pending
+    /// report records the chord key the toolbar shows.
+    pub fn on_page_event(&mut self, event: PageEvent) -> Vec<Cmd> {
+        let cmds = match event {
+            PageEvent::Ready => {
+                self.page_scroll_keys_sent = false;
+                self.page_pending = None;
+                self.claim_page_focus()
+            }
+            PageEvent::Pending { key } => {
+                self.page_pending = key;
+                vec![]
+            }
+        };
+        self.with_key_sets(cmds)
+    }
+
+    /// Applies a `hintResult` reported by the page: a hint that focused a
+    /// form field switches to Insert mode with the page focused; any other
+    /// result returns to Normal with the page focused. A no-op outside Hint
+    /// mode.
+    pub fn on_hint_result(&mut self, kind: &str) -> Vec<Cmd> {
+        if self.mode != Mode::Hint {
+            return vec![];
+        }
+        let cmds = if kind == "focusedInput" {
+            self.mode = Mode::Insert;
+            vec![self.request_focus(Target::Page)]
+        } else {
+            self.mode = Mode::Normal;
+            vec![self.normal_focus()]
+        };
+        self.with_key_sets(cmds)
+    }
+
+    /// Records a page-driven URL change reported via `urlChanged`.
+    pub fn on_page_url_changed(&mut self, url: String) {
+        self.url = url;
     }
 
     fn action_cmds(&mut self, action: Action) -> Vec<Cmd> {
@@ -232,132 +334,17 @@ impl App {
         }
     }
 
-    // TODO: a click that focuses a text input on the page leaves the app in
-    // Normal mode, so the forwarded Normal keys (`j`, `k`, …) scroll instead
-    // of typing. Entering Insert automatically needs the page to report,
-    // via a preload script, that an editable element took focus.
-    /// Applies the focus changes both webviews reported in one loop pass.
-    ///
-    /// While a focus request of this app is unanswered, no mode is cancelled.
-    /// Otherwise a chrome that lost focus closes the address bar, a page that
-    /// lost focus leaves Insert mode, and a gain on either webview cancels
-    /// Hint and Help. In Normal mode a chrome that gained focus hands it to
-    /// the page, even while a request is unanswered.
-    pub fn on_focus_drain(&mut self, drain: FocusDrain) -> Vec<Cmd> {
-        if drain.is_empty() {
-            return vec![];
-        }
-        self.holder = drain.holder_after(self.holder);
-        if self
-            .awaiting
-            .is_some_and(|target| drain.of(target).saw_true)
-        {
-            self.awaiting = None;
-        }
-        let mut cmds = if self.awaiting.is_some() {
-            vec![]
-        } else {
-            self.cancel_modes_after(&drain)
-        };
-        if self.mode == Mode::Normal && self.holder == Some(Target::Chrome) {
-            cmds.extend(self.claim_page_focus());
-        }
-        self.with_key_sets(cmds)
-    }
-
-    /// Applies the address the chrome page submitted.
-    ///
-    /// An address to open or search navigates the page, or reloads it when it
-    /// is the current URL; an empty one only closes the address bar. Ignored
-    /// outside the address bar.
-    pub fn on_address_target(&mut self, target: AddressTarget) -> Vec<Cmd> {
-        if self.mode != Mode::Address {
-            return vec![];
-        }
-        let navigate = match target {
-            AddressTarget::Open(url) | AddressTarget::Search(url) => Some(if url == self.url {
-                Cmd::Reload
-            } else {
-                Cmd::Navigate(url)
-            }),
-            AddressTarget::Empty => None,
-            AddressTarget::Invalid(_) => return vec![],
-        };
-        let cmds = self.leave_address(navigate);
-        self.with_key_sets(cmds)
-    }
-
-    /// Applies a report from the chrome page: the first ready lets an open
-    /// address bar take keyboard focus, Esc closes the address bar, and a
-    /// click on the omnibox in Normal mode opens it.
-    pub fn on_chrome_event(&mut self, event: ChromeEvent) -> Vec<Cmd> {
-        let cmds = match event {
-            ChromeEvent::Ready => self.chrome_ready(),
-            ChromeEvent::Cancel if self.mode == Mode::Address => self.leave_address(None),
-            ChromeEvent::OpenAddress if self.mode == Mode::Normal => self.open_address(),
-            ChromeEvent::Cancel | ChromeEvent::OpenAddress => vec![],
-        };
-        self.with_key_sets(cmds)
-    }
-
-    /// Applies a report from the page's preload. A ready means a fresh page
-    /// whose scroll keys start off: they are told again, the page's pending
-    /// chord is dropped, and the page is focused in Normal mode. A pending
-    /// report records the chord key the toolbar shows.
-    pub fn on_page_event(&mut self, event: PageEvent) -> Vec<Cmd> {
-        let cmds = match event {
-            PageEvent::Ready => {
-                self.page_scroll_keys = false;
-                self.page_pending = None;
-                self.claim_page_focus()
-            }
-            PageEvent::Pending { key } => {
-                self.page_pending = key;
-                vec![]
-            }
-        };
-        self.with_key_sets(cmds)
-    }
-
-    /// Applies a `hintResult` reported by the page: a hint that focused a form field switches to Insert mode with the page focused; any other result returns to Normal with the page focused. A no-op outside Hint mode.
-    pub fn on_hint_result(&mut self, kind: &str) -> Vec<Cmd> {
-        if self.mode != Mode::Hint {
-            return vec![];
-        }
-        let cmds = if kind == "focusedInput" {
-            self.mode = Mode::Insert;
-            vec![self.request_focus(Target::Page)]
-        } else {
-            self.mode = Mode::Normal;
-            vec![self.normal_focus()]
-        };
-        self.with_key_sets(cmds)
-    }
-
-    /// Records a page-driven URL change reported via `urlChanged`.
-    pub fn on_page_url_changed(&mut self, url: String) {
-        self.url = url;
-    }
-
     fn cancel_modes_after(&mut self, drain: &FocusDrain) -> Vec<Cmd> {
-        match self.mode {
-            Mode::Address if self.holder != Some(Target::Chrome) => {
-                self.mode = Mode::Normal;
-                vec![]
-            }
-            Mode::Insert if self.holder != Some(Target::Page) => {
-                self.mode = Mode::Normal;
-                vec![]
-            }
-            Mode::Hint if drain.saw_any_true() => {
-                self.mode = Mode::Normal;
-                vec![Cmd::HintHide]
-            }
-            Mode::Help if drain.saw_any_true() => {
-                self.mode = Mode::Normal;
-                vec![]
-            }
-            _ => vec![],
+        let cancel = match self.mode {
+            Mode::Address => self.holder != Some(Target::Chrome),
+            Mode::Insert => self.holder != Some(Target::Page),
+            Mode::Hint | Mode::Help => drain.saw_any_true(),
+            Mode::Normal => false,
+        };
+        if cancel {
+            self.exit_to_normal().into_iter().collect()
+        } else {
+            vec![]
         }
     }
 
@@ -389,10 +376,25 @@ impl App {
         }
     }
 
-    fn leave_address(&mut self, navigate: Option<Cmd>) -> Vec<Cmd> {
-        self.mode = Mode::Normal;
+    /// Returns to Normal mode: `lead`, then the cleanup of the mode being
+    /// left, then the focus for Normal mode.
+    fn return_to_normal(&mut self, lead: Option<Cmd>) -> Vec<Cmd> {
+        let cleanup = self.exit_to_normal();
         let focus = self.normal_focus();
-        navigate.into_iter().chain([focus]).collect()
+        lead.into_iter().chain(cleanup).chain([focus]).collect()
+    }
+
+    /// Switches to Normal mode and returns the cleanup the mode being left
+    /// needs: Insert takes focus from the page's text field, and Hint tears
+    /// down its overlay.
+    fn exit_to_normal(&mut self) -> Option<Cmd> {
+        let cleanup = match self.mode {
+            Mode::Insert => Some(Cmd::BlurPageInput),
+            Mode::Hint => Some(Cmd::HintHide),
+            Mode::Normal | Mode::Address | Mode::Help => None,
+        };
+        self.mode = Mode::Normal;
+        cleanup
     }
 
     fn refocus_chrome(&mut self) -> Vec<Cmd> {
@@ -403,22 +405,10 @@ impl App {
     }
 
     fn escape(&mut self) -> Vec<Cmd> {
-        match self.mode {
-            Mode::Address => self.leave_address(None),
-            Mode::Insert => {
-                self.mode = Mode::Normal;
-                vec![Cmd::BlurPageInput, self.normal_focus()]
-            }
-            Mode::Hint => {
-                self.mode = Mode::Normal;
-                vec![Cmd::HintHide, self.normal_focus()]
-            }
-            Mode::Help => {
-                self.mode = Mode::Normal;
-                vec![self.normal_focus()]
-            }
-            Mode::Normal => vec![],
+        if self.mode == Mode::Normal {
+            return vec![];
         }
+        self.return_to_normal(None)
     }
 
     fn enter_insert(&mut self) -> Vec<Cmd> {
@@ -433,20 +423,16 @@ impl App {
         if !self.page_placed {
             return vec![];
         }
-        vec![Cmd::HintShow, self.enter_text_mode(Mode::Hint)]
+        self.mode = Mode::Hint;
+        vec![Cmd::HintShow, self.blur()]
     }
 
     fn open_help(&mut self) -> Vec<Cmd> {
         if !self.page_placed {
             return vec![];
         }
-        vec![self.enter_text_mode(Mode::Help)]
-    }
-
-    /// Enters Hint or Help and returns the `Blur` that takes the keyboard from the webviews.
-    fn enter_text_mode(&mut self, mode: Mode) -> Cmd {
-        self.mode = mode;
-        self.blur()
+        self.mode = Mode::Help;
+        vec![self.blur()]
     }
 
     /// The focus for entering Normal mode: the page when it has rows and the
@@ -489,6 +475,12 @@ impl App {
         Cmd::Blur
     }
 
+    /// Whether the page's preload should handle the scroll keys: in Normal
+    /// mode while the pane holds the keyboard.
+    fn page_scroll_keys(&self) -> bool {
+        self.mode == Mode::Normal && self.pane_focused
+    }
+
     /// Puts the commands that sync the webviews with the current mode first
     /// in `cmds`: whether the page's preload handles the scroll keys, then a
     /// `SetForwardKeys` for each webview whose key set the mode changes.
@@ -504,8 +496,8 @@ impl App {
             cmds.insert(0, Cmd::SetForwardKeys(Target::Page, page));
         }
         let scroll_keys = self.page_scroll_keys();
-        if scroll_keys != self.page_scroll_keys {
-            self.page_scroll_keys = scroll_keys;
+        if scroll_keys != self.page_scroll_keys_sent {
+            self.page_scroll_keys_sent = scroll_keys;
             cmds.insert(0, Cmd::SetPageScrollKeys(scroll_keys));
         }
         cmds
@@ -969,8 +961,8 @@ mod tests {
     }
 
     /// Asserts that Insert mode waits for the page's gain, then returns to
-    /// Normal when the chrome takes focus and hands the keyboard back to the
-    /// page.
+    /// Normal when the chrome takes focus, takes focus from the page's text
+    /// field, and hands the keyboard back to the page.
     ///
     /// Case: the user presses `i`, then clicks the chrome.
     #[test]
@@ -984,6 +976,7 @@ mod tests {
             vec![
                 Cmd::SetPageScrollKeys(true),
                 page_keys(KeySet::PageNormal),
+                Cmd::BlurPageInput,
                 Cmd::Focus(Target::Page)
             ]
         );
@@ -1123,6 +1116,7 @@ mod tests {
             vec![Cmd::SetPageScrollKeys(true), Cmd::Focus(Target::Page)]
         );
     }
+
     /// Asserts that a click on the toolbar outside the omnibox hands the
     /// keyboard back to the page.
     ///
@@ -1180,7 +1174,8 @@ mod tests {
     }
 
     /// Asserts that Insert mode left because the page lost focus to something
-    /// other than the chrome does not ask for page focus.
+    /// other than the chrome takes focus from the page's text field without
+    /// asking for page focus.
     ///
     /// Case: the user types into the page in Insert mode and clicks another
     /// pane.
@@ -1191,7 +1186,11 @@ mod tests {
         a.on_focus_drain(drain(&[true], &[]));
         assert_eq!(
             a.on_focus_drain(drain(&[false], &[])),
-            vec![Cmd::SetPageScrollKeys(true), page_keys(KeySet::PageNormal)]
+            vec![
+                Cmd::SetPageScrollKeys(true),
+                page_keys(KeySet::PageNormal),
+                Cmd::BlurPageInput
+            ]
         );
         assert_eq!(a.mode(), Mode::Normal);
     }
@@ -1308,5 +1307,18 @@ mod tests {
         a.on_action(Action::Prefix('g'));
         a.on_page_event(PageEvent::Pending { key: None });
         assert_eq!(a.pending_key(), Some('g'));
+    }
+
+    /// Asserts that the page gaining focus drops the TUI's pending chord.
+    ///
+    /// Case: the user presses `g` while the page is still loading, and the
+    /// page then reports ready and takes the keyboard.
+    #[test]
+    fn a_page_focus_gain_drops_the_tui_chord() {
+        let mut a = app();
+        a.on_action(Action::Prefix('g'));
+        a.on_page_event(PageEvent::Ready);
+        a.on_focus_drain(drain(&[true], &[]));
+        assert_eq!(a.pending_key(), None);
     }
 }
