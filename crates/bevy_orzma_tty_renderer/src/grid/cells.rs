@@ -4,7 +4,7 @@
 use crate::error::RendererResult;
 use bevy::prelude::Component;
 use orzma_vt::prelude::{
-    Cell, CellWidth, DetectedUrl, Frame, HyperlinkId, HyperlinkUri, Palette, Run,
+    Cell, CellWidth, DetectedUrl, Frame, HyperlinkId, HyperlinkUri, Palette, Run, ViewportCell,
 };
 use std::collections::HashMap;
 
@@ -58,8 +58,7 @@ impl TerminalCells {
             &self.cells,
             &self.wraps,
             self.continues_from_above,
-            row,
-            col,
+            ViewportCell { row, col },
         )
     }
 

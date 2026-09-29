@@ -28,7 +28,7 @@ pub struct DetectedUrl {
 }
 
 impl DetectedUrl {
-    /// The URL shown at the viewport cell (`row`, `col`) of `rows`, if any.
+    /// The URL shown at the viewport cell `at` of `rows`, if any.
     ///
     /// `rows` holds the viewport's cells row by row. `wraps[r]` is how many
     /// leading cells of row `r` continue on row `r + 1`, and a missing
@@ -48,15 +48,13 @@ impl DetectedUrl {
         rows: &[Vec<Cell>],
         wraps: &[Option<u16>],
         continues_from_above: bool,
-        row: u16,
-        col: u16,
+        at: ViewportCell,
     ) -> Option<Self> {
-        let cell = rows.get(usize::from(row))?.get(usize::from(col))?;
+        let cell = rows.get(usize::from(at.row))?.get(usize::from(at.col))?;
         if cell.hyperlink_id.is_some() || !cell.chars().next().is_some_and(is_url_body) {
             return None;
         }
-        LogicalLine::around(rows, wraps, continues_from_above, row)?
-            .url_at(ViewportCell { row, col })
+        LogicalLine::around(rows, wraps, continues_from_above, at.row)?.url_at(at)
     }
 }
 

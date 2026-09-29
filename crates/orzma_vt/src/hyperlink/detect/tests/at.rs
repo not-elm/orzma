@@ -40,7 +40,7 @@ fn uri_at(
     above: bool,
     at: ViewportCell,
 ) -> Option<String> {
-    DetectedUrl::at(rows, wraps, above, at.row, at.col).map(|url| url.uri)
+    DetectedUrl::at(rows, wraps, above, at).map(|url| url.uri)
 }
 
 /// Asserts that a URL wrapped over two rows is found whole from a cell on
@@ -58,10 +58,13 @@ fn a_url_wrapped_over_rows_is_found_from_any_of_its_cells() {
         last: cell(1, 4),
     };
     assert_eq!(
-        DetectedUrl::at(&rows, &wraps, false, 1, 2),
+        DetectedUrl::at(&rows, &wraps, false, cell(1, 2)),
         Some(expected.clone())
     );
-    assert_eq!(DetectedUrl::at(&rows, &wraps, false, 0, 3), Some(expected));
+    assert_eq!(
+        DetectedUrl::at(&rows, &wraps, false, cell(0, 3)),
+        Some(expected)
+    );
 }
 
 /// Asserts that the cells past a row's wrap are left out of the line.
@@ -71,8 +74,8 @@ fn a_url_wrapped_over_rows_is_found_from_any_of_its_cells() {
 #[test]
 fn cells_past_a_rows_wrap_are_skipped() {
     let rows = [row("go:http", 8), row("s://a.b", 8)];
-    let found =
-        DetectedUrl::at(&rows, &[Some(7), None], false, 1, 2).expect("the URL spans both rows");
+    let found = DetectedUrl::at(&rows, &[Some(7), None], false, cell(1, 2))
+        .expect("the URL spans both rows");
     assert_eq!(found.uri, "https://a.b");
     assert_eq!((found.first, found.last), (cell(0, 3), cell(1, 6)));
 }
@@ -85,7 +88,8 @@ fn cells_past_a_rows_wrap_are_skipped() {
 #[test]
 fn wide_characters_keep_cells_aligned_and_end_a_url() {
     let rows = [row("字 https://a.b字", 16)];
-    let found = DetectedUrl::at(&rows, &[None], false, 0, 5).expect("the URL after the prefix");
+    let found =
+        DetectedUrl::at(&rows, &[None], false, cell(0, 5)).expect("the URL after the prefix");
     assert_eq!(found.uri, "https://a.b");
     assert_eq!((found.first, found.last), (cell(0, 3), cell(0, 13)));
 }
@@ -100,10 +104,10 @@ fn an_osc8_cell_splits_the_text() {
     for linked in &mut rows[0][12..14] {
         linked.hyperlink_id = HyperlinkId::new(3);
     }
-    let found = DetectedUrl::at(&rows, &[None], false, 0, 0).expect("the plain part");
+    let found = DetectedUrl::at(&rows, &[None], false, cell(0, 0)).expect("the plain part");
     assert_eq!(found.uri, "https://a.b/");
     assert_eq!(found.last, cell(0, 11));
-    assert_eq!(DetectedUrl::at(&rows, &[None], false, 0, 12), None);
+    assert_eq!(DetectedUrl::at(&rows, &[None], false, cell(0, 12)), None);
 }
 
 /// Asserts that cells that show no character of their own find nothing
@@ -215,8 +219,8 @@ fn a_viewport_long_logical_line_resolves_urls_across_rows() {
         uri_at(&rows, &wraps, false, cell(30, 100)),
         Some("https://example.com/path".to_string())
     );
-    let crossing =
-        DetectedUrl::at(&rows, &wraps, false, 0, 199).expect("a URL starts in the last column");
+    let crossing = DetectedUrl::at(&rows, &wraps, false, cell(0, 199))
+        .expect("a URL starts in the last column");
     assert_eq!(crossing.uri, "https://example.com/path");
     assert_eq!((crossing.first, crossing.last), (cell(0, 199), cell(1, 22)));
 }
