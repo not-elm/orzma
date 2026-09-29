@@ -1,5 +1,6 @@
 //! The chrome state the controller pushes to the chrome page.
 
+use crate::app::App;
 use crate::keymap::Mode;
 use serde::Serialize;
 
@@ -41,6 +42,19 @@ pub(crate) struct ChromeSync {
     last: Option<Chrome>,
 }
 
+impl Chrome {
+    /// The chrome `app` shows.
+    pub fn build(app: &App) -> Self {
+        Self {
+            mode: app.mode().into(),
+            url: app.url().to_owned(),
+            pending_key: app.pending_key(),
+            seed: app.seed().to_owned(),
+            address_epoch: app.address_epoch(),
+        }
+    }
+}
+
 impl From<Mode> for ChromeMode {
     fn from(mode: Mode) -> Self {
         match mode {
@@ -73,6 +87,8 @@ impl ChromeSync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::App;
+    use crate::keymap::Action;
     use serde_json::json;
 
     fn chrome(epoch: u32) -> Chrome {
@@ -133,5 +149,22 @@ mod tests {
         assert!(sync.is_stale(&chrome(2)));
         sync.forget();
         assert!(sync.is_stale(&chrome(1)));
+    }
+
+    /// Asserts that the chrome reflects the app's mode, URL, pending key, seed,
+    /// and epoch.
+    ///
+    /// Case: the user presses `g`, then `o` to open the address bar.
+    #[test]
+    fn the_chrome_reflects_the_app() {
+        let mut app = App::new("https://example.com/".to_owned());
+        app.on_action(Action::Prefix('g'));
+        assert_eq!(Chrome::build(&app).pending_key, Some('g'));
+        app.on_action(Action::OpenAddress);
+        let expected = Chrome {
+            pending_key: None,
+            ..chrome(1)
+        };
+        assert_eq!(Chrome::build(&app), expected);
     }
 }

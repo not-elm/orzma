@@ -20,6 +20,7 @@ anyhow = { workspace = true }
 crossbeam-channel = "0.5"
 url = "2"
 percent-encoding = "2"
+rust-embed = { version = "8", features = ["deterministic-timestamps"] }
 
 [lints]
 workspace = true

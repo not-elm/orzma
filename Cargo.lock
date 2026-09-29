@@ -4546,6 +4546,7 @@ dependencies = [
  "percent-encoding",
  "ratatui",
  "ratatui_orzma",
+ "rust-embed",
  "serde",
  "serde_json",
  "url",

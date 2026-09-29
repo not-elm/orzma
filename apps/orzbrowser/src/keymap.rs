@@ -32,9 +32,6 @@ pub(crate) enum Action {
     EnterInsert,
     EnterHint,
     OpenHelp,
-    AddressChar(char),
-    AddressBackspace,
-    AddressConfirm,
     HintKey(char),
     HintBackspace,
     Escape,
@@ -121,11 +118,6 @@ pub(crate) enum KeySet {
 }
 
 impl KeySet {
-    /// The forward-key set the page carries while the app is in `mode`.
-    pub(crate) fn of(mode: Mode) -> Self {
-        Self::for_page(mode)
-    }
-
     /// The forward-key set the page carries while the app is in `mode`.
     pub fn for_page(mode: Mode) -> Self {
         if mode == Mode::Insert {

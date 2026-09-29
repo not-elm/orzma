@@ -142,9 +142,13 @@ mod tests {
     /// Case: the user presses Esc in the address bar, then clicks the omnibox.
     #[test]
     fn page_events_parse_by_kind() {
-        let parse = |value| serde_json::from_value::<PageEvent>(value).expect("a page event parses");
+        let parse =
+            |value| serde_json::from_value::<PageEvent>(value).expect("a page event parses");
         assert_eq!(parse(json!({ "kind": "cancel" })), PageEvent::Cancel);
-        assert_eq!(parse(json!({ "kind": "openAddress" })), PageEvent::OpenAddress);
+        assert_eq!(
+            parse(json!({ "kind": "openAddress" })),
+            PageEvent::OpenAddress
+        );
     }
 
     /// Asserts that a `preview` or `submit` call's params parse.

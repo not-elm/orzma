@@ -141,7 +141,10 @@ mod tests {
             drain(&[false], &[true]).holder_after(Some(Target::Page)),
             Some(Target::Chrome)
         );
-        assert_eq!(drain(&[], &[false]).holder_after(Some(Target::Chrome)), None);
+        assert_eq!(
+            drain(&[], &[false]).holder_after(Some(Target::Chrome)),
+            None
+        );
         assert_eq!(
             drain(&[], &[false]).holder_after(Some(Target::Page)),
             Some(Target::Page)

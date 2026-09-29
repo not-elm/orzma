@@ -168,7 +168,9 @@ impl AddressTarget {
             return Self::Invalid(InvalidAddress::UnsupportedScheme(scheme.to_owned()));
         }
         match Url::parse(input) {
-            Ok(url) if url.host_str().is_some_and(|host| !host.is_empty()) => Self::Open(url.into()),
+            Ok(url) if url.host_str().is_some_and(|host| !host.is_empty()) => {
+                Self::Open(url.into())
+            }
             _ if input.contains(char::is_whitespace) => Self::Search(engine.url_for(input)),
             _ => Self::Invalid(InvalidAddress::Malformed),
         }
@@ -496,7 +498,10 @@ mod tests {
             .expect("a Google template is valid");
         assert_eq!(google.label(), "google.com");
         assert_eq!(google.home(), "https://www.google.com/");
-        assert_eq!(google.url_for("rust"), "https://www.google.com/search?q=rust");
+        assert_eq!(
+            google.url_for("rust"),
+            "https://www.google.com/search?q=rust"
+        );
 
         let local = SearchEngine::from_template(Some("http://localhost:8888/search?q={}"))
             .expect("a local template is valid");
