@@ -90,6 +90,9 @@ importers:
 
   apps/orzmd:
     dependencies:
+      '@orzma/scroller':
+        specifier: workspace:*
+        version: link:../../sdk/orzma-scroller
       '@orzma/web':
         specifier: workspace:*
         version: link:../../sdk/orzma-web
