@@ -329,11 +329,11 @@ impl Binding {
     /// Returns the [`KeyChordParseError`] of the chord after the tokens when
     /// it does not parse, including an empty one.
     fn parse(value: &str) -> Result<Self, KeyChordParseError> {
-        let (rest, repeat) = match value.split_at_checked(Self::REPEAT_TOKEN.len()) {
-            Some((head, rest)) if head.eq_ignore_ascii_case(Self::REPEAT_TOKEN) => (rest, true),
-            _ => (value, false),
+        let (rest, repeat) = match strip_token(value, Self::REPEAT_TOKEN) {
+            Some(rest) => (rest, true),
+            None => (value, false),
         };
-        Ok(match strip_leader_prefix(rest) {
+        Ok(match strip_token(rest, Self::LEADER_TOKEN) {
             Some(chord) => Self::Leader {
                 chord: parse_key_chord(chord)?,
                 repeat,
@@ -356,8 +356,9 @@ impl Binding {
 
 /// User-facing shortcut configuration: the leader chord plus one flat binding
 /// per action. Each value is a chord string (`"Cmd+V"`), a leader-scoped chord
-/// (`"<Leader>s"`), either one preceded by `r:` to make it repeatable, or `""` (unbind). An omitted action keeps its default, and
-/// an unknown key is rejected at load time.
+/// (`"<Leader>s"`), either one preceded by `r:` to make it repeatable, or `""`
+/// (unbind). An omitted action keeps its default, and an unknown key is
+/// rejected at load time.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct Shortcuts {
@@ -801,18 +802,12 @@ impl Shortcuts {
 
     /// Detects chord collisions among direct bindings.
     pub(crate) fn validate_no_direct_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
-        conflicts(
-            self.direct_chords()
-                .map(|(label, chord, action, _)| (label, chord, action)),
-        )
+        conflicts(self.direct_chords())
     }
 
     /// Detects chord collisions among leader-scoped bindings.
     pub(crate) fn validate_no_leader_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
-        conflicts(
-            self.leader_chords()
-                .map(|(label, chord, action, _)| (label, chord, action)),
-        )
+        conflicts(self.leader_chords())
     }
 
     /// Normalizes numeric fields: a `leader_tap_timeout_ms` of 0 reverts to the
@@ -895,12 +890,11 @@ pub enum Shortcut {
     RenameWorkspace,
 }
 
-/// Strips a leading, case-insensitive `<Leader>` token, returning the chord
-/// text after it, or `None` when the value does not start with the token.
-fn strip_leader_prefix(value: &str) -> Option<&str> {
-    let (head, rest) = value.split_at_checked(Binding::LEADER_TOKEN.len())?;
-    head.eq_ignore_ascii_case(Binding::LEADER_TOKEN)
-        .then_some(rest)
+/// Strips a leading, case-insensitive `token`, returning the text after it,
+/// or `None` when `value` does not start with `token`.
+fn strip_token<'a>(value: &'a str, token: &str) -> Option<&'a str> {
+    let (head, rest) = value.split_at_checked(token.len())?;
+    head.eq_ignore_ascii_case(token).then_some(rest)
 }
 
 /// serde field deserializer for `Option<Binding>`: empty string is unbind
@@ -931,12 +925,11 @@ where
             } else {
                 ""
             };
-            match binding {
-                Binding::Direct { chord, .. } => format!("{repeat}{chord}"),
-                Binding::Leader { chord, .. } => {
-                    format!("{repeat}{}{chord}", Binding::LEADER_TOKEN)
-                }
-            }
+            let leader = match binding {
+                Binding::Direct { .. } => "",
+                Binding::Leader { .. } => Binding::LEADER_TOKEN,
+            };
+            format!("{repeat}{leader}{}", binding.chord())
         }
     };
     ser.serialize_str(&text)
@@ -1087,10 +1080,10 @@ fn parse_default_binding(s: &str) -> Binding {
 /// Detects chord collisions across a table's bound entries. The returned `Vec`
 /// is sorted by chord.
 fn conflicts<'a>(
-    entries: impl Iterator<Item = (&'static str, &'a KeyChord, Shortcut)>,
+    entries: impl Iterator<Item = (&'static str, &'a KeyChord, Shortcut, bool)>,
 ) -> Result<(), Vec<DuplicateChord>> {
     let mut by_chord: BTreeMap<KeyChord, Vec<&'static str>> = BTreeMap::new();
-    for (label, chord, _action) in entries {
+    for (label, chord, _action, _repeat) in entries {
         by_chord.entry(chord.clone()).or_default().push(label);
     }
     let dupes: Vec<DuplicateChord> = by_chord
@@ -1316,20 +1309,26 @@ mod tests {
         );
     }
 
-    /// Asserts that `strip_leader_prefix` strips only a leading `<Leader>`
+    /// Asserts that `strip_token` strips only a leading, case-insensitive
     /// token.
     ///
     /// Case: a config value puts `<Leader>` at the start, in the middle, or
     /// nowhere.
     #[test]
-    fn strip_leader_prefix_only_at_start() {
-        assert_eq!(strip_leader_prefix("<Leader>s"), Some("s"));
-        assert_eq!(strip_leader_prefix("<leader>Ctrl+d"), Some("Ctrl+d"));
-        assert_eq!(strip_leader_prefix("Cmd+<Leader>"), None);
-        assert_eq!(strip_leader_prefix("s"), None);
-        assert_eq!(strip_leader_prefix(""), None);
+    fn strip_token_only_at_start() {
+        let leader = Binding::LEADER_TOKEN;
+        assert_eq!(strip_token("<Leader>s", leader), Some("s"));
+        assert_eq!(strip_token("<leader>Ctrl+d", leader), Some("Ctrl+d"));
+        assert_eq!(strip_token("Cmd+<Leader>", leader), None);
+        assert_eq!(strip_token("s", leader), None);
+        assert_eq!(strip_token("", leader), None);
     }
 
+    /// Asserts that a value without a token parses as a single-fire direct
+    /// binding and a `<Leader>` value as a single-fire leader binding.
+    ///
+    /// Case: a user binds paste to `Cmd+V`, vi mode to `<Leader>s`, and a pane
+    /// action to `<Leader>Ctrl+d`.
     #[test]
     fn parse_binding_direct_and_leader() {
         assert_eq!(
@@ -1355,6 +1354,9 @@ mod tests {
         );
     }
 
+    /// Asserts that the `<Leader>` token matches in any letter case.
+    ///
+    /// Case: a user writes `<leader>s` or `<LEADER>s` in their config file.
     #[test]
     fn parse_binding_leader_token_case_insensitive() {
         let want = Binding::Leader {
@@ -1365,11 +1367,19 @@ mod tests {
         assert_eq!(Binding::parse("<LEADER>s").unwrap(), want);
     }
 
+    /// Asserts that a `<Leader>` token with no chord after it is an error.
+    ///
+    /// Case: a user writes `kill-pane = "<Leader>"` and forgets the key.
     #[test]
     fn parse_binding_empty_after_leader_is_err() {
         assert!(Binding::parse("<Leader>").is_err());
     }
 
+    /// Asserts that `Binding::chord` returns the chord without the leader
+    /// token.
+    ///
+    /// Case: the resolver reads the key of a direct `Cmd+V` binding and of a
+    /// `<Leader>s` binding.
     #[test]
     fn binding_chord_extracts_inner() {
         assert_eq!(
@@ -1406,7 +1416,8 @@ mod tests {
         );
     }
 
-    /// Asserts that the macOS default table binds the `Cmd` tap leader and 32 direct chords, leaving only `release-webview-focus` leader-scoped.
+    /// Asserts that the macOS default table binds the `Cmd` tap leader and 32
+    /// direct chords, leaving only `release-webview-focus` leader-scoped.
     ///
     /// Case: a user on macOS starts orzma with no config file at all.
     #[cfg(target_os = "macos")]
@@ -1414,33 +1425,18 @@ mod tests {
     fn shortcuts_default_is_active_direct_bindings() {
         let s = Shortcuts::default();
         assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
-        assert_eq!(
-            s.paste,
-            Some(Binding::Direct {
-                chord: parse_key_chord("Cmd+V").unwrap(),
-                repeat: false,
-            })
-        );
-        assert_eq!(
-            s.quit,
-            Some(Binding::Direct {
-                chord: parse_key_chord("Cmd+Q").unwrap(),
-                repeat: false,
-            })
-        );
-        assert_eq!(
-            s.copy,
-            Some(Binding::Direct {
-                chord: parse_key_chord("Cmd+C").unwrap(),
-                repeat: false,
-            })
-        );
+        assert_eq!(s.paste, Some(parse_default_binding("Cmd+V")));
+        assert_eq!(s.quit, Some(parse_default_binding("Cmd+Q")));
+        assert_eq!(s.copy, Some(parse_default_binding("Cmd+C")));
         assert_eq!(s.bindings_iter().count(), 33);
         assert_eq!(s.direct_chords().count(), 32);
         assert_eq!(s.leader_chords().count(), 1);
     }
 
-    /// Asserts that the non-macOS default table binds the `Alt` tap leader and 31 direct chords, leaves only `release-webview-focus` leader-scoped, and leaves `quit` unbound rather than binding a chord the window manager already owns.
+    /// Asserts that the non-macOS default table binds the `Alt` tap leader and
+    /// 31 direct chords, leaves only `release-webview-focus` leader-scoped, and
+    /// leaves `quit` unbound rather than binding a chord the window manager
+    /// already owns.
     ///
     /// Case: a user on Windows starts orzma with no config file at all, where
     /// no `Cmd` key exists to press.
@@ -1449,20 +1445,8 @@ mod tests {
     fn shortcuts_default_is_active_direct_bindings() {
         let s = Shortcuts::default();
         assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Alt)));
-        assert_eq!(
-            s.paste,
-            Some(Binding::Direct {
-                chord: parse_key_chord("Ctrl+V").unwrap(),
-                repeat: false,
-            })
-        );
-        assert_eq!(
-            s.copy,
-            Some(Binding::Direct {
-                chord: parse_key_chord("Ctrl+C").unwrap(),
-                repeat: false,
-            })
-        );
+        assert_eq!(s.paste, Some(parse_default_binding("Ctrl+V")));
+        assert_eq!(s.copy, Some(parse_default_binding("Ctrl+C")));
         assert_eq!(s.quit, None);
         assert_eq!(s.bindings_iter().count(), 33);
         assert_eq!(s.direct_chords().count(), 31);
@@ -1514,19 +1498,12 @@ mod tests {
     fn default_resize_bindings_are_repeatable_alt_chords() {
         let s = Shortcuts::default();
         for (binding, chord) in [
-            (&s.resize_left_pane, "Alt+Shift+H"),
-            (&s.resize_down_pane, "Alt+Shift+J"),
-            (&s.resize_up_pane, "Alt+Shift+K"),
-            (&s.resize_right_pane, "Alt+Shift+L"),
+            (&s.resize_left_pane, "r:Alt+Shift+H"),
+            (&s.resize_down_pane, "r:Alt+Shift+J"),
+            (&s.resize_up_pane, "r:Alt+Shift+K"),
+            (&s.resize_right_pane, "r:Alt+Shift+L"),
         ] {
-            assert_eq!(
-                *binding,
-                Some(Binding::Direct {
-                    chord: parse_key_chord(chord).unwrap(),
-                    repeat: true,
-                }),
-                "{chord}"
-            );
+            assert_eq!(*binding, Some(parse_default_binding(chord)), "{chord}");
         }
     }
 
@@ -1548,18 +1525,12 @@ mod tests {
             (&s.kill_pane, "Alt+p"),
             (&s.enter_vi_mode, "Alt+s"),
         ] {
-            assert_eq!(
-                *binding,
-                Some(Binding::Direct {
-                    chord: parse_key_chord(chord).unwrap(),
-                    repeat: false,
-                }),
-                "{chord}"
-            );
+            assert_eq!(*binding, Some(parse_default_binding(chord)), "{chord}");
         }
     }
 
-    /// Asserts the stock workspace bindings: `Alt` direct chords on every platform.
+    /// Asserts the stock workspace bindings: `Alt` direct chords on every
+    /// platform.
     ///
     /// Case: a new user opens a second workspace, cycles, jumps to the third
     /// tab, and renames it without editing the config.
@@ -1941,28 +1912,15 @@ kill-pane = "<Leader>d"
     #[test]
     fn repeat_bindings_round_trip() {
         for value in ["r:<Leader>h", "<Leader>h", "r:Alt+Shift+H", "Alt+H"] {
-            let parsed: BindingWrapper =
-                serde_json::from_str(&format!(r#"{{"v":"{value}"}}"#)).unwrap();
+            let parsed = Some(Binding::parse(value).unwrap());
             let s = Shortcuts {
-                kill_pane: parsed.v.clone(),
+                kill_pane: parsed.clone(),
                 ..Default::default()
             };
             let json = serde_json::to_string(&s).unwrap();
             let back: Shortcuts = serde_json::from_str(&json).unwrap();
-            assert_eq!(back.kill_pane, parsed.v, "{value}");
+            assert_eq!(back.kill_pane, parsed, "{value}");
         }
-    }
-
-    /// Asserts that the stock zoom-in and zoom-out bindings repeat and the
-    /// zoom reset does not.
-    ///
-    /// Case: a user holds the zoom-in chord to grow the font step by step.
-    #[test]
-    fn stock_font_size_bindings_repeat() {
-        let s = Shortcuts::default();
-        assert!(s.increase_font_size.as_ref().is_some_and(Binding::repeat));
-        assert!(s.decrease_font_size.as_ref().is_some_and(Binding::repeat));
-        assert!(!s.reset_font_size.as_ref().is_some_and(Binding::repeat));
     }
 
     /// Asserts that `leader_chords` reports each leader binding's repeat

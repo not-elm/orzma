@@ -339,11 +339,12 @@ impl DirectMatch {
 pub(crate) enum LeaderStep {
     /// A leader-scoped binding matched; run this action.
     RunAction(Shortcut),
-    /// Consume the key with no effect: the leader itself.
+    /// Consume the key with no effect: the leader itself, or an OS key repeat
+    /// while the leader is pending.
     Swallow,
     /// The leader was pending and the key matched no leader-scoped binding.
-    /// The caller dispatches the key when its own table binds it, and
-    /// swallows it otherwise.
+    /// The caller dispatches the key as a `Passthrough` when its own table
+    /// binds it, and swallows it otherwise.
     Abandoned,
     /// Not leader-related; fall through to the caller's normal dispatch.
     Passthrough,
@@ -351,7 +352,10 @@ pub(crate) enum LeaderStep {
 
 /// Advances the orzma leader state machine for one pressed key, threading
 /// `phase` across frames. `now` is the caller's `Time<Real>::elapsed()`.
-/// Swallows the leader itself and returns `Abandoned` for a second key no leader binding uses; drives the `r:<Leader>` repeat window (fire-and-extend inside the window, close and re-evaluate on any other key); returns `Passthrough` for unrelated keys.
+/// Swallows the leader itself and returns `Abandoned` for a second key no
+/// leader binding uses; drives the `r:<Leader>` repeat window (fire-and-extend
+/// inside the window, close and re-evaluate on any other key); returns
+/// `Passthrough` for unrelated keys.
 pub(crate) fn step_leader(
     phase: &mut LeaderPhase,
     shortcuts: &Shortcuts,
@@ -471,18 +475,14 @@ pub(crate) fn test_shortcuts_with_direct_chord(
     action: Shortcut,
 ) -> Shortcuts {
     Shortcuts {
-        direct: vec![OrzmaShortcut {
-            keycode,
-            modifiers,
-            action,
-            repeat: false,
-        }],
+        direct: Vec::new(),
         prefix: Vec::new(),
         leader: None,
         tap_timeout: Duration::from_millis(300),
         repeat_time: Duration::from_millis(500),
         direct_chords_over_webview: true,
     }
+    .with_direct_chord(keycode, modifiers, action, false)
 }
 
 #[cfg(test)]
@@ -1416,32 +1416,37 @@ mod tests {
         }
     }
 
+    /// Asserts that a direct chord does not fire when an extra modifier is
+    /// held with it.
+    ///
+    /// Case: a user presses `Cmd+Shift+V` or `Cmd+Shift+Q` with the stock
+    /// `Cmd+V` and `Cmd+Q` bindings.
     #[test]
     fn match_gui_action_requires_exact_modifiers() {
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyV, mods(false, true, false, true))
-                .map(|hit| hit.action),
+            r.match_gui_action(KeyCode::KeyV, mods(false, true, false, true)),
             None
         );
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyQ, mods(false, true, false, true))
-                .map(|hit| hit.action),
+            r.match_gui_action(KeyCode::KeyQ, mods(false, true, false, true)),
             None
         );
     }
 
+    /// Asserts that a chord no direct binding uses matches nothing.
+    ///
+    /// Case: a user with the stock bindings presses `Cmd+H` or types a plain
+    /// `a`.
     #[test]
     fn unmatched_chord_is_none() {
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyH, mods(false, false, false, true))
-                .map(|hit| hit.action),
+            r.match_gui_action(KeyCode::KeyH, mods(false, false, false, true)),
             None
         );
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyA, mods(false, false, false, false))
-                .map(|hit| hit.action),
+            r.match_gui_action(KeyCode::KeyA, mods(false, false, false, false)),
             None
         );
     }

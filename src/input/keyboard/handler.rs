@@ -172,14 +172,12 @@ fn clear_cef_filter(cef_filter: &mut CefKeyboardFilter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::keyboard::held_modifiers::AltPolicy;
     use crate::input::shortcuts::{
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
-    use bevy::input::keyboard::Key;
     use bevy_orzma_webview::{ChordKey, NormalizedChord};
     use bevy_orzmux::prelude::WorkspaceId;
     use orzma_configs::keyboard::OptionAsAlt;
@@ -207,16 +205,9 @@ mod tests {
                 .count()
         }
 
-        fn last_typed(&self) -> Option<Key> {
+        fn last_typed(&self) -> Option<(Key, Modifiers)> {
             self.effects.iter().rev().find_map(|effect| match effect {
-                KeyEffect::Type { logical, .. } => Some(logical.clone()),
-                _ => None,
-            })
-        }
-
-        fn last_typed_mods(&self) -> Option<Modifiers> {
-            self.effects.iter().rev().find_map(|effect| match effect {
-                KeyEffect::Type { mods, .. } => Some(*mods),
+                KeyEffect::Type { logical, mods, .. } => Some((logical.clone(), *mods)),
                 _ => None,
             })
         }
@@ -300,6 +291,10 @@ mod tests {
         });
     }
 
+    /// Asserts that a plain key resolves to one message that types it into
+    /// the focused terminal with no modifiers.
+    ///
+    /// Case: a user types `a` into the focused pane.
     #[test]
     fn normal_key_resolves_to_one_type_message() {
         let mut app = resolve_app(Shortcuts::default());
@@ -314,15 +309,10 @@ mod tests {
         );
         assert_eq!(
             cap.last_typed(),
-            Some(Key::Character("a".into())),
-            "a plain key resolves to one KeyEffectMessage carrying a Type effect"
+            Some((Key::Character("a".into()), Modifiers::default())),
+            "a plain key with no modifier held resolves to one Type effect with the default modifiers"
         );
         assert_eq!(cap.focused, Some(term));
-        assert_eq!(
-            cap.last_typed_mods(),
-            Some(Modifiers::default()),
-            "no modifier keys are held, so the typed key carries the default modifiers"
-        );
     }
 
     #[test]
@@ -814,7 +804,9 @@ mod tests {
         press_key(&mut app, KeyCode::KeyH, Key::Character("˙".into()));
         app.update();
         let cap = app.world().resource::<Captured>();
-        assert_eq!(cap.last_typed(), Some(Key::Character("˙".into())));
-        assert_eq!(cap.last_typed_mods(), Some(Modifiers::default()));
+        assert_eq!(
+            cap.last_typed(),
+            Some((Key::Character("˙".into()), Modifiers::default()))
+        );
     }
 }

@@ -297,20 +297,9 @@ mod tests {
         dispatch(
             &mut app,
             vec![
-                KeyEffect::Type {
-                    logical: Key::Character("x".into()),
-                    key_code: KeyCode::KeyX,
-                    mods: Modifiers::default(),
-                },
-                KeyEffect::Shortcut {
-                    action: Shortcut::SelectPane(PaneDirection::Right),
-                    via_leader: true,
-                },
-                KeyEffect::Type {
-                    logical: Key::Character("y".into()),
-                    key_code: KeyCode::KeyY,
-                    mods: Modifiers::default(),
-                },
+                type_effect(Key::Character("x".into()), KeyCode::KeyX),
+                action_effect(Shortcut::SelectPane(PaneDirection::Right), true),
+                type_effect(Key::Character("y".into()), KeyCode::KeyY),
             ],
             Some(term),
             false,
@@ -424,6 +413,9 @@ mod tests {
         );
     }
 
+    /// Asserts that a direct paste chord pastes outside vi mode.
+    ///
+    /// Case: a user presses the stock paste chord in the shell.
     #[test]
     fn direct_paste_outside_vi_mode_pastes() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -441,6 +433,11 @@ mod tests {
         );
     }
 
+    /// Asserts that a direct copy chord copies the focused terminal's
+    /// selection outside vi mode.
+    ///
+    /// Case: a user selects text with the mouse and presses the stock copy
+    /// chord.
     #[test]
     fn direct_copy_outside_vi_mode_fires_selection_copy() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -458,6 +455,10 @@ mod tests {
         );
     }
 
+    /// Asserts that a direct copy chord copies in vi mode too, unlike a direct
+    /// paste.
+    ///
+    /// Case: a user selects text in vi mode and presses the stock copy chord.
     #[test]
     fn direct_copy_in_vi_mode_also_fires_selection_copy() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -475,6 +476,10 @@ mod tests {
         );
     }
 
+    /// Asserts that a direct paste chord does nothing in vi mode.
+    ///
+    /// Case: a user presses the stock paste chord while reading scrollback in
+    /// vi mode.
     #[test]
     fn direct_paste_in_vi_mode_suppressed() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -492,6 +497,9 @@ mod tests {
         );
     }
 
+    /// Asserts that a leader-scoped paste pastes even in vi mode.
+    ///
+    /// Case: a user who bound paste to `<Leader>v` pastes while in vi mode.
     #[test]
     fn leader_paste_in_vi_mode_pastes() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -509,6 +517,9 @@ mod tests {
         );
     }
 
+    /// Asserts that `EnterViMode` fires even when vi mode is already active.
+    ///
+    /// Case: a user in vi mode presses the enter-vi-mode chord again.
     #[test]
     fn enter_vi_mode_fires_even_when_already_in_vi_mode() {
         let (mut app, term) = dispatch_app(Shortcuts::default());

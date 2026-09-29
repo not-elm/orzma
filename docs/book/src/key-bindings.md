@@ -15,10 +15,10 @@ the modifier with no other key or mouse button in between, then press the
 action's key.
 
 After a tap, the next keystroke runs a `<Leader>` action when one matches.
-Otherwise it runs the key's direct chord, if it has one, and is swallowed if it
-has none. The leader does not time out while it waits, even if you switch to
-another window and back. Switching windows before you release the modifier
-cancels the tap.
+Otherwise it is handled as if no leader had been tapped when it has a direct
+chord, and is swallowed when it has none. The leader does not time out while
+it waits, even if you switch to another window and back. Switching windows
+before you release the modifier cancels the tap.
 
 - `leader` sets the leader: a modifier to tap (`"Cmd"`, `"Ctrl"`, or
   `"Alt"`; `"Shift"` is not allowed), a chord such as `"Ctrl+A"` (press the
@@ -126,8 +126,11 @@ its key back to the shell. `Alt` chords that orzma does not bind, such as
   [Configuration](configuration.md#keyboard)). The other Option key types
   special characters, so left `Option+i` starts an accent instead of splitting
   the pane; it still counts as `Alt` with an arrow or another key that types
-  no character, and together with `Ctrl` or `Cmd`. A MacBook with a Japanese (JIS) keyboard has no right Option key;
-  set `option_as_alt = "left"` or `"both"` there.
+  no character, and together with `Ctrl` or `Cmd`. A MacBook with a Japanese
+  (JIS) keyboard has no right Option key; set `option_as_alt = "left"` or
+  `"both"` there. Under `option_as_alt = "none"`, the default of earlier
+  releases, neither Option key runs the stock `Alt` chords, so remove that line
+  from a configuration that still sets it.
 - **Windows and Linux:** on a keyboard layout with AltGr, such as German, the
   right Alt key is AltGr and types characters; use the left Alt key for the
   shortcuts.
