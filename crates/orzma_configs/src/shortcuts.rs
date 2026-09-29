@@ -1,5 +1,6 @@
 //! The `[shortcuts]` section: the chord grammar and the actions it binds.
 
+use crate::error::{KeyChordParseError, OrzmaConfigsError, OrzmaConfigsResult};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -173,42 +174,24 @@ impl fmt::Display for KeyChord {
     }
 }
 
-/// Reason a `parse_key_chord` call failed.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum KeyChordParseError {
-    /// Consecutive `+` or trailing `+` produced an empty token between separators.
-    #[error("empty token in chord string (consecutive '+' or trailing '+')")]
-    EmptyToken,
-    /// A token that is neither a known modifier nor a known named key.
-    #[error("unknown named key: {0:?}")]
-    UnknownNamedKey(String),
-    /// The same modifier bit was set twice. Catches both literal duplicates
-    /// (`"Cmd+Cmd+S"`) and alias collisions (`"Cmd+Meta+S"`, both set `meta`).
-    #[error("duplicate modifier {token:?} (normalized to {normalized_bit})")]
-    DuplicateModifier {
-        /// The offending token as it appeared in the input.
-        token: String,
-        /// Which `Modifiers` bit was already set.
-        normalized_bit: &'static str,
-    },
-    /// More than one non-modifier token appeared in the chord.
-    #[error("multiple key tokens in chord string")]
-    MultipleKeyTokens,
-}
-
 /// Parses `"Cmd+Shift+S"`-shape strings into a `KeyChord`.
 ///
 /// Modifier names are case-insensitive. Aliases: `Cmd` / `Command` / `Meta` /
 /// `Super` all set `meta`; `Alt` / `Opt` / `Option` all set `alt`. ASCII letter
 /// keys are normalized to lowercase (Shift is held in `Modifiers`, never in
 /// key case). An empty string is not accepted.
-pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
+///
+/// # Errors
+///
+/// Returns [`OrzmaConfigsError::KeyChord`] when a token is empty or names no
+/// known modifier or key, a modifier repeats, or more than one key appears.
+pub fn parse_key_chord(s: &str) -> OrzmaConfigsResult<KeyChord> {
     if s.is_empty() {
-        return Err(KeyChordParseError::EmptyToken);
+        return Err(KeyChordParseError::EmptyToken.into());
     }
     let tokens: Vec<&str> = s.split('+').collect();
     if tokens.iter().any(|t| t.is_empty()) {
-        return Err(KeyChordParseError::EmptyToken);
+        return Err(KeyChordParseError::EmptyToken.into());
     }
     let mut mods = Modifiers::default();
     let mut key: Option<Key> = None;
@@ -222,7 +205,8 @@ pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
                 return Err(KeyChordParseError::DuplicateModifier {
                     token: token.to_string(),
                     normalized_bit: name,
-                });
+                }
+                .into());
             }
             mods.meta = mods.meta || bit.meta;
             mods.ctrl = mods.ctrl || bit.ctrl;
@@ -230,11 +214,11 @@ pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
             mods.shift = mods.shift || bit.shift;
         } else {
             if key.is_some() {
-                return Err(KeyChordParseError::MultipleKeyTokens);
+                return Err(KeyChordParseError::MultipleKeyTokens.into());
             }
             let k = Key::from_token(token);
             if let Key::Other(name) = &k {
-                return Err(KeyChordParseError::UnknownNamedKey(name.clone()));
+                return Err(KeyChordParseError::UnknownNamedKey(name.clone()).into());
             }
             let k = if let Key::Char(c) = k {
                 Key::Char(c.to_ascii_lowercase())
@@ -326,9 +310,9 @@ impl Binding {
     ///
     /// # Errors
     ///
-    /// Returns the [`KeyChordParseError`] of the chord after the tokens when
-    /// it does not parse, including an empty one.
-    fn parse(value: &str) -> Result<Self, KeyChordParseError> {
+    /// Returns [`OrzmaConfigsError::KeyChord`] when the chord after the
+    /// tokens does not parse, including an empty one.
+    fn parse(value: &str) -> OrzmaConfigsResult<Self> {
         let (rest, repeat) = match strip_token(value, Self::REPEAT_TOKEN) {
             Some(rest) => (rest, true),
             None => (value, false),
@@ -800,14 +784,16 @@ impl Shortcuts {
             })
     }
 
-    /// Detects chord collisions among direct bindings.
-    pub(crate) fn validate_no_direct_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
-        conflicts(self.direct_chords())
+    /// Detects chord collisions among direct bindings, reporting every one as
+    /// [`OrzmaConfigsError::DuplicateChords`].
+    pub(crate) fn validate_no_direct_conflicts(&self) -> OrzmaConfigsResult {
+        conflicts(self.direct_chords()).map_err(OrzmaConfigsError::DuplicateChords)
     }
 
-    /// Detects chord collisions among leader-scoped bindings.
-    pub(crate) fn validate_no_leader_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
-        conflicts(self.leader_chords())
+    /// Detects chord collisions among leader-scoped bindings, reporting every
+    /// one as [`OrzmaConfigsError::DuplicatePrefixChords`].
+    pub(crate) fn validate_no_leader_conflicts(&self) -> OrzmaConfigsResult {
+        conflicts(self.leader_chords()).map_err(OrzmaConfigsError::DuplicatePrefixChords)
     }
 
     /// Normalizes numeric fields: a `leader_tap_timeout_ms` of 0 reverts to the
@@ -963,7 +949,7 @@ fn tap_modifier_token(m: TapModifier) -> &'static str {
 /// Parses a non-empty `leader` value: a single allowed tap-modifier token →
 /// `ModifierTap`; anything else → `parse_key_chord` → `Chord`. A bare `Shift`
 /// (and any other bare modifier) errors via `parse_key_chord` (no key).
-fn parse_leader(value: &str) -> Result<Leader, KeyChordParseError> {
+fn parse_leader(value: &str) -> OrzmaConfigsResult<Leader> {
     if let Some(m) = single_tap_modifier(value) {
         return Ok(Leader::ModifierTap(m));
     }
@@ -1461,8 +1447,8 @@ mod tests {
     #[test]
     fn host_default_table_has_no_duplicate_chords() {
         let s = Shortcuts::default();
-        assert_eq!(s.validate_no_direct_conflicts(), Ok(()));
-        assert_eq!(s.validate_no_leader_conflicts(), Ok(()));
+        assert!(s.validate_no_direct_conflicts().is_ok());
+        assert!(s.validate_no_leader_conflicts().is_ok());
     }
 
     /// Asserts that every direct chord in the host default table resolves to a
@@ -1652,7 +1638,9 @@ kill-pane = "<Leader>d"
             }),
             ..Default::default()
         };
-        let err = s.validate_no_direct_conflicts().unwrap_err();
+        let Err(OrzmaConfigsError::DuplicateChords(err)) = s.validate_no_direct_conflicts() else {
+            panic!("expected DuplicateChords");
+        };
         assert_eq!(err.len(), 1);
         assert!(err[0].actions.contains(&"paste"));
         assert!(err[0].actions.contains(&"quit"));
@@ -1675,7 +1663,10 @@ kill-pane = "<Leader>d"
             }),
             ..Default::default()
         };
-        let err = s.validate_no_leader_conflicts().unwrap_err();
+        let Err(OrzmaConfigsError::DuplicatePrefixChords(err)) = s.validate_no_leader_conflicts()
+        else {
+            panic!("expected DuplicatePrefixChords");
+        };
         assert_eq!(err.len(), 1);
         assert!(err[0].actions.contains(&"enter-vi-mode"));
         assert!(err[0].actions.contains(&"kill-pane"));
@@ -1699,7 +1690,10 @@ kill-pane = "<Leader>d"
             }),
             ..Default::default()
         };
-        let err = s.validate_no_leader_conflicts().unwrap_err();
+        let Err(OrzmaConfigsError::DuplicatePrefixChords(err)) = s.validate_no_leader_conflicts()
+        else {
+            panic!("expected DuplicatePrefixChords");
+        };
         assert_eq!(err.len(), 1);
         assert!(err[0].actions.contains(&"enter-vi-mode"));
         assert!(err[0].actions.contains(&"kill-pane"));

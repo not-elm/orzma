@@ -117,15 +117,9 @@ impl OrzmaConfigs {
 
     fn validate(&self) -> OrzmaConfigsResult<()> {
         let sc = &self.shortcuts;
-        if let Err(dupes) = sc.validate_no_direct_conflicts() {
-            return Err(OrzmaConfigsError::DuplicateChords(dupes));
-        }
-        if let Err(dupes) = sc.validate_no_leader_conflicts() {
-            return Err(OrzmaConfigsError::DuplicatePrefixChords(dupes));
-        }
-        if let Err(dupes) = self.vi_mode.validate_no_duplicate_keys() {
-            return Err(OrzmaConfigsError::DuplicateViModeKeys(dupes));
-        }
+        sc.validate_no_direct_conflicts()?;
+        sc.validate_no_leader_conflicts()?;
+        self.vi_mode.validate_no_duplicate_keys()?;
         if let Some(shortcuts::Leader::Chord(leader)) = sc.leader.as_ref() {
             if let Some((action, _, _, _)) =
                 sc.direct_chords().find(|(_, chord, _, _)| *chord == leader)

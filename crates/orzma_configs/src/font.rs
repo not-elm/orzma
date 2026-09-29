@@ -3,7 +3,7 @@
 mod style;
 
 use serde::Deserialize;
-pub use style::{FontSlant, FontStyleSpec, InvalidFontStyleToken};
+pub use style::{FontSlant, FontStyleSpec};
 
 const DEFAULT_SIZE: f32 = 11.25;
 
