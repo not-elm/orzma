@@ -50,8 +50,8 @@ struct WheelTarget {
 
 /// Hands this frame's wheel steps to the terminal under the cursor as
 /// one `RequestTtyWheel`, after normalizing the gesture: sub-notch
-/// accumulation, the dominant-axis lock, the macOS Shift fold, the fine
-/// modifier, and the cell under the cursor.
+/// and per-cell report accumulation, the dominant-axis lock, the macOS
+/// Shift fold, the fine modifier, and the cell under the cursor.
 fn dispatch_mouse_wheel(
     mut commands: Commands,
     mut gesture_acc: ResMut<WheelAccumulator>,

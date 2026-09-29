@@ -24,7 +24,7 @@ pub(crate) enum FineModifier {
 /// host overrides it from `orzma_configs`.
 #[derive(Resource)]
 pub(crate) struct OrzmaMouseConfig {
-    /// Cells of wheel travel per emitted notch (smooth-scroll accumulation).
+    /// Cells of vertical wheel travel per emitted notch (smooth-scroll accumulation).
     /// Mouse reports ignore it and count whole cells.
     pub cells_per_notch: f32,
     /// Dominant-axis lock strength: horizontal scroll survives only when
