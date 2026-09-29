@@ -88,6 +88,14 @@ fix-lint:
 orzmd-web:
     pnpm --filter '@orzma/orzmd-web...' build
 
+# build the orzbrowser chrome page (esbuild)
+orzbrowser-web:
+    pnpm --filter '@orzma/orzbrowser-web...' build
+
+# build the chrome page then the orzbrowser binary
+orzbrowser: orzbrowser-web
+    cargo build -p orzbrowser
+
 # build the web bundle then the orzmd binary
 orzmd: orzmd-web
     cargo build -p orzmd
@@ -181,7 +189,7 @@ bundle version="":
 
 # setup-cef-release then bundle with notarization
 [macos]
-release *args: setup-cef-release orzmd-web
+release *args: setup-cef-release orzmd-web orzbrowser-web
     python3 scripts/bundle_macos.py --notarize {{ args }}
 
 # refresh the vendored Chromium credits from the provisioned CEF dir (run on cef_version bump)

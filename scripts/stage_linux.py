@@ -20,6 +20,7 @@ from stage_windows import (
     locked_version,
     missing_cef_locales,
     sha256_file,
+    verify_orzbrowser_web_assets,
     verify_orzmd_web_assets,
 )
 
@@ -335,6 +336,7 @@ def main(argv: list[str] | None = None) -> None:
             "CEF_PATH is not set; run through `just stage`, which points it at ~/.cache/orzma/cef"
         )
     verify_orzmd_web_assets()
+    verify_orzbrowser_web_assets()
     tree = stage_root / dist_name(version)
     if tree.exists():
         shutil.rmtree(tree)

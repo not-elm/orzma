@@ -44,10 +44,13 @@ class RenderFonts(unittest.TestCase):
             (d / "beta" / "OFL.txt").write_text("BETA OFL", encoding="utf-8")
             (d / "chromium").mkdir()
             (d / "chromium" / "LICENSE.txt").write_text("CEF SHOULD NOT APPEAR", encoding="utf-8")
+            (d / "vimium").mkdir()
+            (d / "vimium" / "MIT-LICENSE.txt").write_text("VIMIUM SHOULD NOT APPEAR", encoding="utf-8")
             out = gl.render_fonts_section(d)
             self.assertIn("ALPHA LIC", out)
             self.assertIn("BETA OFL", out)
             self.assertNotIn("CEF SHOULD NOT APPEAR", out)
+            self.assertNotIn("VIMIUM SHOULD NOT APPEAR", out)
             self.assertLess(out.index("alpha"), out.index("beta"))
 
 
@@ -62,12 +65,26 @@ class RenderChromium(unittest.TestCase):
             self.assertIn("CREDITS.html", out)
 
 
+class RenderPorted(unittest.TestCase):
+    def test_includes_vimium_text_and_the_ported_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "vimium").mkdir()
+            (d / "vimium" / "MIT-LICENSE.txt").write_text("VIMIUM MIT", encoding="utf-8")
+            out = gl.render_ported_section(d)
+            self.assertTrue(out.startswith("## Ported source"))
+            self.assertIn("VIMIUM MIT", out)
+            self.assertIn("scroller.ts", out)
+
+
 class Assemble(unittest.TestCase):
     def _fixture_dir(self, d: Path) -> None:
         (d / "font1").mkdir()
         (d / "font1" / "OFL.txt").write_text("FONT1 TEXT", encoding="utf-8")
         (d / "chromium").mkdir()
         (d / "chromium" / "LICENSE.txt").write_text("CEF BSD", encoding="utf-8")
+        (d / "vimium").mkdir()
+        (d / "vimium" / "MIT-LICENSE.txt").write_text("VIMIUM MIT", encoding="utf-8")
 
     def test_deterministic_and_ordered(self):
         with tempfile.TemporaryDirectory() as d:
@@ -81,7 +98,8 @@ class Assemble(unittest.TestCase):
             self.assertTrue(a.startswith("# Third-Party Licenses"))
             self.assertTrue(a.endswith("\n"))
             self.assertLess(a.index("Rust crates"), a.index("npm packages"))
-            self.assertLess(a.index("npm packages"), a.index("FONT1 TEXT"))
+            self.assertLess(a.index("npm packages"), a.index("VIMIUM MIT"))
+            self.assertLess(a.index("VIMIUM MIT"), a.index("FONT1 TEXT"))
             self.assertLess(a.index("FONT1 TEXT"), a.index("CEF BSD"))
 
 

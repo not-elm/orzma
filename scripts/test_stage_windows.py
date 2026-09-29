@@ -448,5 +448,31 @@ class OrzmdAssets(unittest.TestCase):
             self.assertIsNone(sw.verify_orzmd_web_assets(assets))
 
 
+class OrzbrowserAssets(unittest.TestCase):
+    def test_missing_chrome_page_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            assets = Path(tmp) / "assets"
+            assets.mkdir()
+            (assets / "page.js").write_text("void 0")
+            with self.assertRaises(SystemExit):
+                sw.verify_orzbrowser_web_assets(assets)
+
+    def test_missing_page_script_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            assets = Path(tmp) / "assets"
+            assets.mkdir()
+            (assets / "chrome.html").write_text("<html></html>")
+            with self.assertRaises(SystemExit):
+                sw.verify_orzbrowser_web_assets(assets)
+
+    def test_present_web_assets_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            assets = Path(tmp) / "assets"
+            assets.mkdir()
+            (assets / "chrome.html").write_text("<html></html>")
+            (assets / "page.js").write_text("void 0")
+            self.assertIsNone(sw.verify_orzbrowser_web_assets(assets))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -557,9 +557,25 @@ def verify_orzmd_web_assets(assets_dir: Path | None = None) -> None:
         )
 
 
+ORZBROWSER_WEB_ASSETS = ("chrome.html", "page.js")
+
+
+def verify_orzbrowser_web_assets(assets_dir: Path | None = None) -> None:
+    assets = assets_dir if assets_dir is not None else REPO_ROOT / "apps" / "orzbrowser" / "assets"
+    missing = [name for name in ORZBROWSER_WEB_ASSETS if not (assets / name).is_file()]
+    if missing:
+        listed = ", ".join(f"apps/orzbrowser/assets/{name}" for name in missing)
+        raise SystemExit(
+            f"orzbrowser web assets missing: {listed} not built. "
+            "Run `pnpm build` (or `just orzbrowser-web`) before bundling, "
+            "or orzbrowser will fail to start."
+        )
+
+
 def cargo_build(cfg: BundleConfig) -> None:
     run(cargo_build_argv(cfg.target_triple, CARGO_PROFILE))
     verify_orzmd_web_assets()
+    verify_orzbrowser_web_assets()
     run(companion_cargo_build_argv(cfg.target_triple, CARGO_PROFILE, COMPANION_BINS))
 
 
