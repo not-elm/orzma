@@ -63,15 +63,33 @@ impl HeldModifiers {
     /// always Alt, or when the key composes no character: `logical` is not a
     /// [`Key::Character`], or Ctrl or Cmd is held with it.
     pub fn for_key(&self, logical: &Key, policy: AltPolicy) -> Modifiers {
-        let composes = matches!(logical, Key::Character(_)) && !self.ctrl && !self.meta;
-        let left = self.alt_left && (policy.left_always_alt || !composes);
-        let right = self.alt_right && !self.alt_graph && (policy.right_always_alt || !composes);
+        let composes = self.composes_character(logical);
         Modifiers {
             ctrl: self.ctrl,
             shift: self.shift,
-            alt: left || right,
+            alt: self.left_counts_as_alt(policy, composes)
+                || self.right_counts_as_alt(policy, composes),
             meta: self.meta,
         }
+    }
+
+    /// Whether a held Option key composes `logical` into a character:
+    /// `logical` is a [`Key::Character`] and neither Ctrl nor Cmd is held.
+    fn composes_character(&self, logical: &Key) -> bool {
+        matches!(logical, Key::Character(_)) && !self.ctrl && !self.meta
+    }
+
+    /// Whether the left Alt / Option key is held and counts as Alt: `policy`
+    /// makes the left side always Alt, or the key composes no character.
+    fn left_counts_as_alt(&self, policy: AltPolicy, composes: bool) -> bool {
+        self.alt_left && (policy.left_always_alt || !composes)
+    }
+
+    /// Whether the right Alt / Option key is held and counts as Alt: it is not
+    /// AltGr, and `policy` makes the right side always Alt or the key composes
+    /// no character.
+    fn right_counts_as_alt(&self, policy: AltPolicy, composes: bool) -> bool {
+        self.alt_right && !self.alt_graph && (policy.right_always_alt || !composes)
     }
 }
 
