@@ -4,7 +4,7 @@ use super::*;
 use crate::error::OrzmaTtyError;
 use crate::input::{
     CellCoord, PointerButton, PointerInput, PointerKind, ProtocolModifiers, WheelConfig,
-    WheelInput, WheelModifiers,
+    WheelInput, WheelModifiers, WheelSteps,
 };
 use crate::test_support::{CaptureSink, FailingMaster, FailingSink, FakeVt};
 use crossbeam_channel::{Sender, unbounded};
@@ -88,6 +88,21 @@ fn motion(col: u32, row: u32) -> PointerInput {
 
 fn release(button: PointerButton, col: u32, row: u32) -> PointerInput {
     event(PointerKind::Release, Some(button), col, row)
+}
+
+/// A wheel frame of `up` vertical notches, as many vertical reports, and
+/// `right` horizontal reports over cell (6, 4), with no modifiers held.
+fn wheel(up: i32, right: i32) -> WheelInput {
+    WheelInput {
+        steps: WheelSteps {
+            up,
+            report_up: up,
+            report_right: right,
+        },
+        mods: WheelModifiers::default(),
+        cell: Some(CellCoord { col: 6, row: 4 }),
+        report_mods: ProtocolModifiers::default(),
+    }
 }
 
 /// Collects the signals out of a pumped output, in order.

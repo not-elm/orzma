@@ -1,4 +1,4 @@
-//! Wheel routing: decides whether wheel notches become mouse reports,
+//! Wheel routing: decides whether wheel travel becomes mouse reports,
 //! cursor keys, or a viewport scroll, from the modes the application set.
 
 use crate::input::keyboard::TerminalKey;
@@ -13,8 +13,8 @@ pub struct WheelConfig {
     pub lines_per_notch: u32,
     /// Lines one notch moves while the fine-scroll modifier is held.
     pub fine_lines: u32,
-    /// The most notches one routing call turns into mouse reports or
-    /// cursor keys; the notches past it are dropped. Cursor keys
+    /// The most reports, and the most notches turned into cursor keys, one
+    /// routing call sends per axis; the excess is dropped. Cursor keys
     /// additionally stop at [`MAX_CURSOR_KEYS`] per call, whatever the
     /// lines per notch.
     pub max_protocol_events_per_frame: u32,
@@ -23,9 +23,9 @@ pub struct WheelConfig {
 impl Default for WheelConfig {
     fn default() -> Self {
         Self {
-            lines_per_notch: 3,
+            lines_per_notch: 1,
             fine_lines: 1,
-            max_protocol_events_per_frame: 8,
+            max_protocol_events_per_frame: 24,
         }
     }
 }
@@ -37,21 +37,34 @@ pub const MAX_CURSOR_KEYS: u32 = 240;
 /// The held modifiers wheel routing reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct WheelModifiers {
-    /// Shift is held, so the notches skip mouse reporting and take the
-    /// route below it.
+    /// Shift is held, so the frame skips mouse reporting and its notches
+    /// take the route below it.
     pub shift: bool,
     /// The fine-scroll modifier is held, so a notch moves `fine_lines`
     /// rather than `lines_per_notch`.
     pub fine: bool,
 }
 
-/// One frame's wheel notches over a terminal, with what routing them needs.
+/// One frame's wheel travel in whole steps: notches on the vertical axis,
+/// and wheel reports on both axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WheelSteps {
+    /// Vertical notches; positive is wheel-up. Cursor keys and viewport
+    /// scrolls move by these.
+    pub up: i32,
+    /// Vertical wheel reports, one per whole cell of travel; positive is
+    /// wheel-up.
+    pub report_up: i32,
+    /// Horizontal wheel reports, one per whole cell of travel; positive is
+    /// rightward.
+    pub report_right: i32,
+}
+
+/// One frame's wheel travel over a terminal, with what routing it needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WheelInput {
-    /// Vertical notches; positive is wheel-up.
-    pub up: i32,
-    /// Horizontal notches; positive is rightward.
-    pub right: i32,
+    /// The notches and reports the frame completed.
+    pub steps: WheelSteps,
     /// The held modifiers routing reads.
     pub mods: WheelModifiers,
     /// The cell under the cursor, or `None` when no cell was resolved for
@@ -86,90 +99,106 @@ pub(crate) enum WheelDecision {
 }
 
 impl WheelDecision {
-    /// Routes vertical notches, where positive means wheel up.
+    /// Routes one frame's vertical travel, where positive means wheel up.
     ///
     /// While a mouse tracking level is in force and Shift is not held,
-    /// every notch becomes one report, whatever the lines per notch.
-    /// Otherwise, while alternate scroll is in effect, the notches' lines
-    /// become cursor keys, and anything else scrolls the viewport. Reports
-    /// and cursor keys cover at most `max_protocol_events_per_frame`
-    /// notches, cursor keys number at most [`MAX_CURSOR_KEYS`] whatever
-    /// the lines per notch, and a viewport scroll saturates rather than
-    /// overflowing.
-    /// Zero notches, or a count that comes out zero, route to
-    /// [`Self::Noop`].
-    pub(crate) fn route(
+    /// each of `reports` becomes one report and `notches` is ignored.
+    /// Otherwise `reports` is ignored: while alternate scroll is in effect,
+    /// the notches' lines become cursor keys, and anything else scrolls the
+    /// viewport. At most `max_protocol_events_per_frame` reports are sent,
+    /// cursor keys cover at most that many notches and number at most
+    /// [`MAX_CURSOR_KEYS`] whatever the lines per notch, and a viewport
+    /// scroll saturates rather than overflowing. A route whose count is
+    /// zero, or comes out zero, is [`Self::Noop`].
+    pub fn route(
         modes: VtModes,
         notches: i32,
+        reports: i32,
         mods: WheelModifiers,
         cfg: &WheelConfig,
     ) -> Self {
-        if notches == 0 {
-            return Self::Noop;
+        if app_receives_reports(modes, mods) {
+            return Self::vertical_reports(reports, cfg);
         }
-        let up = notches > 0;
-        if modes.mouse_reporting_active() && !mods.shift {
-            let button = if up {
-                MouseButton::WheelUp
-            } else {
-                MouseButton::WheelDown
-            };
-            return Self::report(button, notches, cfg);
-        }
-        let lines_per = lines_per_notch(mods, cfg);
         if modes.alternate_scroll_active() {
-            let key = if up {
-                TerminalKey::ArrowUp
-            } else {
-                TerminalKey::ArrowDown
-            };
-            let count = capped_notches(notches, cfg)
-                .saturating_mul(lines_per)
-                .min(MAX_CURSOR_KEYS);
-            return Self::cursor_keys(key, count);
+            return Self::cursor_keys(notches, mods, cfg);
         }
-        match notches.saturating_mul(i32::try_from(lines_per).unwrap_or(i32::MAX)) {
-            0 => Self::Noop,
-            lines => Self::ScrollViewport(lines),
+        Self::scroll_viewport(notches, mods, cfg)
+    }
+
+    /// Routes one frame's horizontal reports, where positive means
+    /// rightward.
+    ///
+    /// Only a mouse tracking level in force without Shift held has a
+    /// route: each report is sent, up to `max_protocol_events_per_frame`.
+    /// Zero reports, a count that comes out zero, and everything else
+    /// route to [`Self::Noop`].
+    pub fn route_horizontal(
+        modes: VtModes,
+        reports: i32,
+        mods: WheelModifiers,
+        cfg: &WheelConfig,
+    ) -> Self {
+        if app_receives_reports(modes, mods) {
+            Self::horizontal_reports(reports, cfg)
+        } else {
+            Self::Noop
         }
     }
 
-    /// Routes horizontal notches, where positive means rightward.
-    ///
-    /// Only a mouse tracking level in force without Shift held has a
-    /// route: every notch becomes one report, and the reports cover at
-    /// most `max_protocol_events_per_frame` notches. Zero notches, a count
-    /// that comes out zero, and everything else route to [`Self::Noop`].
-    pub(crate) fn route_horizontal(
-        modes: VtModes,
-        notches: i32,
-        mods: WheelModifiers,
-        cfg: &WheelConfig,
-    ) -> Self {
-        if notches == 0 || !modes.mouse_reporting_active() || mods.shift {
-            return Self::Noop;
-        }
-        let button = if notches > 0 {
+    fn vertical_reports(reports: i32, cfg: &WheelConfig) -> Self {
+        let button = if reports > 0 {
+            MouseButton::WheelUp
+        } else {
+            MouseButton::WheelDown
+        };
+        Self::capped_reports(button, reports, cfg)
+    }
+
+    fn horizontal_reports(reports: i32, cfg: &WheelConfig) -> Self {
+        let button = if reports > 0 {
             MouseButton::WheelRight
         } else {
             MouseButton::WheelLeft
         };
-        Self::report(button, notches, cfg)
+        Self::capped_reports(button, reports, cfg)
     }
 
-    fn report(button: MouseButton, notches: i32, cfg: &WheelConfig) -> Self {
-        match capped_notches(notches, cfg) {
+    fn capped_reports(button: MouseButton, reports: i32, cfg: &WheelConfig) -> Self {
+        match capped(reports, cfg) {
             0 => Self::Noop,
             count => Self::Report { button, count },
         }
     }
 
-    fn cursor_keys(key: TerminalKey, count: u32) -> Self {
+    fn cursor_keys(notches: i32, mods: WheelModifiers, cfg: &WheelConfig) -> Self {
+        let key = if notches > 0 {
+            TerminalKey::ArrowUp
+        } else {
+            TerminalKey::ArrowDown
+        };
+        let count = capped(notches, cfg)
+            .saturating_mul(lines_per_notch(mods, cfg))
+            .min(MAX_CURSOR_KEYS);
         match count {
             0 => Self::Noop,
             count => Self::CursorKeys { key, count },
         }
     }
+
+    fn scroll_viewport(notches: i32, mods: WheelModifiers, cfg: &WheelConfig) -> Self {
+        let lines_per = i32::try_from(lines_per_notch(mods, cfg)).unwrap_or(i32::MAX);
+        match notches.saturating_mul(lines_per) {
+            0 => Self::Noop,
+            lines => Self::ScrollViewport(lines),
+        }
+    }
+}
+
+/// Whether the wheel goes to the application as reports: a mouse
+/// tracking level is in force and Shift is not held.
+fn app_receives_reports(modes: VtModes, mods: WheelModifiers) -> bool {
+    modes.mouse_reporting_active() && !mods.shift
 }
 
 fn lines_per_notch(mods: WheelModifiers, cfg: &WheelConfig) -> u32 {
@@ -180,10 +209,8 @@ fn lines_per_notch(mods: WheelModifiers, cfg: &WheelConfig) -> u32 {
     }
 }
 
-fn capped_notches(notches: i32, cfg: &WheelConfig) -> u32 {
-    notches
-        .unsigned_abs()
-        .min(cfg.max_protocol_events_per_frame)
+fn capped(count: i32, cfg: &WheelConfig) -> u32 {
+    count.unsigned_abs().min(cfg.max_protocol_events_per_frame)
 }
 
 #[cfg(test)]
@@ -203,6 +230,16 @@ mod tests {
         shift: false,
         fine: true,
     };
+
+    /// The routing policy these tests pin: three lines per notch, one
+    /// fine line, and at most eight reports or notches per call.
+    fn policy() -> WheelConfig {
+        WheelConfig {
+            lines_per_notch: 3,
+            fine_lines: 1,
+            max_protocol_events_per_frame: 8,
+        }
+    }
 
     fn tracking() -> VtModes {
         VtModes {
@@ -226,23 +263,23 @@ mod tests {
         }
     }
 
-    /// Asserts that a mouse-tracking terminal gets one wheel report per
-    /// notch, carrying the wheel's direction.
+    /// Asserts that a mouse-tracking terminal gets the frame's reports,
+    /// each carrying the wheel's direction.
     ///
     /// Case: nvim runs with `mouse=nvi`, so button-event tracking is on,
-    /// and the user spins the wheel up two notches and then down three.
+    /// and the user swipes up two cells and then down three.
     #[test]
-    fn a_tracking_terminal_gets_one_report_per_notch_in_the_wheel_direction() {
-        let cfg = WheelConfig::default();
+    fn a_tracking_terminal_gets_its_reports_in_the_wheel_direction() {
+        let cfg = policy();
         assert_eq!(
-            WheelDecision::route(tracking(), 2, PLAIN, &cfg),
+            WheelDecision::route(tracking(), 0, 2, PLAIN, &cfg),
             WheelDecision::Report {
                 button: MouseButton::WheelUp,
                 count: 2
             }
         );
         assert_eq!(
-            WheelDecision::route(tracking(), -3, PLAIN, &cfg),
+            WheelDecision::route(tracking(), 0, -3, PLAIN, &cfg),
             WheelDecision::Report {
                 button: MouseButton::WheelDown,
                 count: 3
@@ -250,19 +287,20 @@ mod tests {
         );
     }
 
-    /// Asserts that reports count notches, not lines, whatever the lines
-    /// per notch and the fine modifier say.
+    /// Asserts that the report count follows the frame's reports, not
+    /// lines, whatever the lines per notch and the fine modifier say.
     ///
     /// Case: a user who set `lines_per_notch = 5` holds the fine modifier
-    /// while spinning the wheel one notch over nvim.
+    /// while spinning the wheel one click, three notches and one report,
+    /// over nvim.
     #[test]
     fn reports_ignore_the_lines_per_notch_and_the_fine_modifier() {
         let cfg = WheelConfig {
             lines_per_notch: 5,
-            ..WheelConfig::default()
+            ..policy()
         };
         assert_eq!(
-            WheelDecision::route(tracking(), 1, FINE, &cfg),
+            WheelDecision::route(tracking(), 3, 1, FINE, &cfg),
             WheelDecision::Report {
                 button: MouseButton::WheelUp,
                 count: 1
@@ -271,15 +309,15 @@ mod tests {
     }
 
     /// Asserts that reports stop at the burst limit, dropping the excess
-    /// notches, and that a zero limit sends nothing.
+    /// reports, and that a zero limit sends nothing.
     ///
-    /// Case: a trackpad flick produces twenty notches in one frame over a
+    /// Case: a trackpad flick covers twenty cells in one frame over a
     /// tracking application, and a user who set the burst limit to zero
-    /// produces the same flick.
+    /// makes the same flick.
     #[test]
     fn reports_are_capped_at_the_burst_limit_and_the_excess_is_dropped() {
         assert_eq!(
-            WheelDecision::route(tracking(), 20, PLAIN, &WheelConfig::default()),
+            WheelDecision::route(tracking(), 0, 20, PLAIN, &policy()),
             WheelDecision::Report {
                 button: MouseButton::WheelUp,
                 count: 8
@@ -287,11 +325,45 @@ mod tests {
         );
         let silent = WheelConfig {
             max_protocol_events_per_frame: 0,
-            ..WheelConfig::default()
+            ..policy()
         };
         assert_eq!(
-            WheelDecision::route(tracking(), 20, PLAIN, &silent),
+            WheelDecision::route(tracking(), 0, 20, PLAIN, &silent),
             WheelDecision::Noop
+        );
+    }
+
+    /// Asserts that a tracking terminal gets nothing for notches that come
+    /// without a report.
+    ///
+    /// Case: nvim tracks the mouse, and the user nudges the trackpad a
+    /// third of a cell, which completes a notch but no report.
+    #[test]
+    fn notches_without_a_report_route_nothing_while_tracking() {
+        assert_eq!(
+            WheelDecision::route(tracking(), 1, 0, PLAIN, &policy()),
+            WheelDecision::Noop
+        );
+    }
+
+    /// Asserts that the cursor-key and viewport routes move by the frame's
+    /// notches and ignore its report count.
+    ///
+    /// Case: the user swipes the trackpad one notch over `less`, then at a
+    /// shell prompt, in frames that also completed several reports.
+    #[test]
+    fn the_line_routes_count_notches_not_reports() {
+        let cfg = policy();
+        assert_eq!(
+            WheelDecision::route(alternate_screen(), 1, 5, PLAIN, &cfg),
+            WheelDecision::CursorKeys {
+                key: TerminalKey::ArrowUp,
+                count: 3
+            }
+        );
+        assert_eq!(
+            WheelDecision::route(VtModes::default(), 1, 5, PLAIN, &cfg),
+            WheelDecision::ScrollViewport(3)
         );
     }
 
@@ -303,16 +375,16 @@ mod tests {
     /// then down one.
     #[test]
     fn alternate_scroll_sends_the_notches_lines_as_cursor_keys() {
-        let cfg = WheelConfig::default();
+        let cfg = policy();
         assert_eq!(
-            WheelDecision::route(alternate_screen(), 2, PLAIN, &cfg),
+            WheelDecision::route(alternate_screen(), 2, 0, PLAIN, &cfg),
             WheelDecision::CursorKeys {
                 key: TerminalKey::ArrowUp,
                 count: 6
             }
         );
         assert_eq!(
-            WheelDecision::route(alternate_screen(), -1, PLAIN, &cfg),
+            WheelDecision::route(alternate_screen(), -1, 0, PLAIN, &cfg),
             WheelDecision::CursorKeys {
                 key: TerminalKey::ArrowDown,
                 count: 3
@@ -328,7 +400,7 @@ mod tests {
     #[test]
     fn cursor_keys_cap_the_notches_before_multiplying_by_the_lines() {
         assert_eq!(
-            WheelDecision::route(alternate_screen(), 20, PLAIN, &WheelConfig::default()),
+            WheelDecision::route(alternate_screen(), 20, 0, PLAIN, &policy()),
             WheelDecision::CursorKeys {
                 key: TerminalKey::ArrowUp,
                 count: 24
@@ -345,10 +417,10 @@ mod tests {
     fn cursor_keys_stop_at_the_key_limit() {
         let cfg = WheelConfig {
             lines_per_notch: 100_000,
-            ..WheelConfig::default()
+            ..policy()
         };
         assert_eq!(
-            WheelDecision::route(alternate_screen(), 1, PLAIN, &cfg),
+            WheelDecision::route(alternate_screen(), 1, 0, PLAIN, &cfg),
             WheelDecision::CursorKeys {
                 key: TerminalKey::ArrowUp,
                 count: MAX_CURSOR_KEYS
@@ -363,16 +435,16 @@ mod tests {
     /// `less` and then at a shell prompt.
     #[test]
     fn the_fine_modifier_moves_fine_lines_on_both_line_routes() {
-        let cfg = WheelConfig::default();
+        let cfg = policy();
         assert_eq!(
-            WheelDecision::route(alternate_screen(), 2, FINE, &cfg),
+            WheelDecision::route(alternate_screen(), 2, 0, FINE, &cfg),
             WheelDecision::CursorKeys {
                 key: TerminalKey::ArrowUp,
                 count: 2
             }
         );
         assert_eq!(
-            WheelDecision::route(VtModes::default(), -2, FINE, &cfg),
+            WheelDecision::route(VtModes::default(), -2, 0, FINE, &cfg),
             WheelDecision::ScrollViewport(-2)
         );
     }
@@ -383,13 +455,13 @@ mod tests {
     /// Case: the user spins the wheel up and then down at a shell prompt.
     #[test]
     fn without_tracking_or_alternate_scroll_the_viewport_scrolls_by_the_notches_lines() {
-        let cfg = WheelConfig::default();
+        let cfg = policy();
         assert_eq!(
-            WheelDecision::route(VtModes::default(), 1, PLAIN, &cfg),
+            WheelDecision::route(VtModes::default(), 1, 0, PLAIN, &cfg),
             WheelDecision::ScrollViewport(3)
         );
         assert_eq!(
-            WheelDecision::route(VtModes::default(), -2, PLAIN, &cfg),
+            WheelDecision::route(VtModes::default(), -2, 0, PLAIN, &cfg),
             WheelDecision::ScrollViewport(-6)
         );
     }
@@ -403,16 +475,16 @@ mod tests {
     /// screen.
     #[test]
     fn shift_over_a_tracking_terminal_falls_through_to_the_route_below() {
-        let cfg = WheelConfig::default();
+        let cfg = policy();
         assert_eq!(
-            WheelDecision::route(tracking_on_the_alternate_screen(), 1, SHIFT, &cfg),
+            WheelDecision::route(tracking_on_the_alternate_screen(), 1, 5, SHIFT, &cfg),
             WheelDecision::CursorKeys {
                 key: TerminalKey::ArrowUp,
                 count: 3
             }
         );
         assert_eq!(
-            WheelDecision::route(tracking(), 1, SHIFT, &cfg),
+            WheelDecision::route(tracking(), 1, 5, SHIFT, &cfg),
             WheelDecision::ScrollViewport(3)
         );
     }
@@ -429,21 +501,21 @@ mod tests {
             ..alternate_screen()
         };
         assert_eq!(
-            WheelDecision::route(modes, 1, PLAIN, &WheelConfig::default()),
+            WheelDecision::route(modes, 1, 0, PLAIN, &policy()),
             WheelDecision::ScrollViewport(3)
         );
     }
 
-    /// Asserts that zero notches route nowhere on either axis, whatever
-    /// the modes.
+    /// Asserts that a frame with no notches and no reports routes nowhere
+    /// on either axis, whatever the modes.
     ///
     /// Case: a slow trackpad frame moves less than one notch.
     #[test]
-    fn zero_notches_route_nowhere() {
-        let cfg = WheelConfig::default();
+    fn zero_travel_routes_nowhere() {
+        let cfg = policy();
         for modes in [tracking(), alternate_screen(), VtModes::default()] {
             assert_eq!(
-                WheelDecision::route(modes, 0, PLAIN, &cfg),
+                WheelDecision::route(modes, 0, 0, PLAIN, &cfg),
                 WheelDecision::Noop
             );
             assert_eq!(
@@ -460,20 +532,20 @@ mod tests {
     #[test]
     fn a_viewport_scroll_saturates_rather_than_overflowing() {
         assert_eq!(
-            WheelDecision::route(VtModes::default(), i32::MAX, PLAIN, &WheelConfig::default()),
+            WheelDecision::route(VtModes::default(), i32::MAX, 0, PLAIN, &policy()),
             WheelDecision::ScrollViewport(i32::MAX)
         );
     }
 
-    /// Asserts that horizontal notches become left or right wheel reports
+    /// Asserts that horizontal reports become left or right wheel reports
     /// only while the terminal tracks the mouse and Shift is not held.
     ///
     /// Case: the user swipes sideways over a tracking application, over
     /// `less`, over a shell prompt, and over the tracking application again
     /// while holding Shift.
     #[test]
-    fn a_horizontal_notch_reports_left_or_right_only_while_tracking_without_shift() {
-        let cfg = WheelConfig::default();
+    fn a_horizontal_report_goes_left_or_right_only_while_tracking_without_shift() {
+        let cfg = policy();
         assert_eq!(
             WheelDecision::route_horizontal(tracking(), 1, PLAIN, &cfg),
             WheelDecision::Report {
@@ -504,12 +576,12 @@ mod tests {
 
     /// Asserts that horizontal reports share the vertical burst limit.
     ///
-    /// Case: a fast sideways trackpad flick produces twenty notches in one
-    /// frame over a tracking application.
+    /// Case: a fast sideways trackpad flick covers twenty cells in one frame
+    /// over a tracking application.
     #[test]
     fn horizontal_reports_share_the_burst_limit() {
         assert_eq!(
-            WheelDecision::route_horizontal(tracking(), 20, PLAIN, &WheelConfig::default()),
+            WheelDecision::route_horizontal(tracking(), 20, PLAIN, &policy()),
             WheelDecision::Report {
                 button: MouseButton::WheelRight,
                 count: 8

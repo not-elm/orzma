@@ -24,7 +24,8 @@ pub(crate) enum FineModifier {
 /// host overrides it from `orzma_configs`.
 #[derive(Resource)]
 pub(crate) struct OrzmaMouseConfig {
-    /// Cells of wheel travel per emitted notch (smooth-scroll accumulation).
+    /// Cells of vertical wheel travel per emitted notch (smooth-scroll accumulation).
+    /// Mouse reports ignore it and count whole cells.
     pub cells_per_notch: f32,
     /// Dominant-axis lock strength: horizontal scroll survives only when
     /// `|x| / hypot(x, y) >= axis_lock_ratio`, else it is dropped. Range
@@ -77,7 +78,7 @@ mod tests {
     #[test]
     fn default_config_sets_every_field() {
         let cfg = OrzmaMouseConfig::default();
-        assert_eq!(cfg.cells_per_notch, 0.5);
+        assert_eq!(cfg.cells_per_notch, 0.3333);
         assert_eq!(cfg.axis_lock_ratio, 0.9);
         assert_eq!(cfg.double_click_timeout, Duration::from_millis(400));
         assert_eq!(cfg.click_drift_px, 8.0);

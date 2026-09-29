@@ -24,19 +24,21 @@ pub enum FineModifier {
 #[serde(default)]
 pub struct MouseConfig {
     /// Lines scrolled per notch in the scrollback / alt-screen paths.
+    /// Mouse reports ignore it.
     pub lines_per_notch: u32,
     /// Which modifier key activates fine scrolling.
     pub fine_modifier: FineModifier,
     /// Lines scrolled per notch when the fine modifier is held.
     pub fine_lines: u32,
-    /// The most wheel notches one routing call turns into mouse reports
-    /// or alternate-scroll cursor keys, per axis. The excess notches are
+    /// Per axis and frame, the most mouse reports sent and the most wheel
+    /// notches turned into alternate-scroll cursor keys. The excess is
     /// dropped, and cursor keys additionally stop at a fixed per-call
     /// ceiling whatever `lines_per_notch` says.
     pub max_protocol_events_per_frame: u32,
     /// Wheel-input accumulation threshold expressed in cells of input
     /// per emitted "notch". A lower value is more responsive, firing a
-    /// notch after a smaller wheel movement. The default is `0.5`.
+    /// notch after a smaller wheel movement. Mouse reports ignore it: one
+    /// is sent per whole cell of travel. The default is `0.3333`.
     pub cells_per_notch: f32,
     /// Dominant-axis lock strength for trackpad scrolling. The horizontal
     /// component of a swipe is emitted only when it dominates the gesture
@@ -77,11 +79,11 @@ impl MouseConfig {
 impl Default for MouseConfig {
     fn default() -> Self {
         Self {
-            lines_per_notch: 3,
+            lines_per_notch: 1,
             fine_modifier: FineModifier::Alt,
             fine_lines: 1,
-            max_protocol_events_per_frame: 8,
-            cells_per_notch: 0.5,
+            max_protocol_events_per_frame: 24,
+            cells_per_notch: 0.3333,
             axis_lock_ratio: 0.9,
             double_click_timeout_ms: 400,
             click_drift_px: 8.0,
@@ -100,11 +102,11 @@ mod tests {
     #[test]
     fn defaults_match_expected_values() {
         let cfg = MouseConfig::default();
-        assert_eq!(cfg.lines_per_notch, 3);
+        assert_eq!(cfg.lines_per_notch, 1);
         assert_eq!(cfg.fine_modifier, FineModifier::Alt);
         assert_eq!(cfg.fine_lines, 1);
-        assert_eq!(cfg.max_protocol_events_per_frame, 8);
-        assert_eq!(cfg.cells_per_notch, 0.5);
+        assert_eq!(cfg.max_protocol_events_per_frame, 24);
+        assert_eq!(cfg.cells_per_notch, 0.3333);
         assert_eq!(cfg.axis_lock_ratio, 0.9);
         assert_eq!(cfg.double_click_timeout_ms, 400);
         assert_eq!(cfg.click_drift_px, 8.0);

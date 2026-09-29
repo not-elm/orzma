@@ -1,5 +1,5 @@
-//! One frame's wheel notches the host UI asks a terminal entity to
-//! route, sent as `OrzmuxCommand::Wheel`.
+//! One frame's wheel travel the host UI asks a terminal entity to route,
+//! sent as `OrzmuxCommand::Wheel`.
 
 use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
@@ -7,13 +7,14 @@ use bevy::prelude::*;
 use orzma_tty::prelude::WheelInput;
 use orzmux::prelude::OrzmuxCommand;
 
-/// Hands one frame's wheel notches to a specific terminal entity, which
-/// routes them by its own modes.
+/// Hands one frame's wheel travel to a specific terminal entity, which
+/// routes it by its own modes.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyWheel {
     #[event_target]
     pub terminal: Entity,
-    /// The notches and the modifiers and cell they were gathered with.
+    /// The notches and reports, and the modifiers and cell they were
+    /// gathered with.
     pub input: WheelInput,
 }
 
@@ -37,13 +38,16 @@ fn apply_wheel(e: On<RequestTtyWheel>, panes: PaneSender) {
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_tty::prelude::{CellCoord, ProtocolModifiers, WheelModifiers};
+    use orzma_tty::prelude::{CellCoord, ProtocolModifiers, WheelModifiers, WheelSteps};
     use orzmux::prelude::PaneId;
 
     fn input() -> WheelInput {
         WheelInput {
-            up: 2,
-            right: 0,
+            steps: WheelSteps {
+                up: 2,
+                report_up: 1,
+                report_right: 0,
+            },
             mods: WheelModifiers::default(),
             cell: Some(CellCoord { col: 1, row: 1 }),
             report_mods: ProtocolModifiers::default(),
