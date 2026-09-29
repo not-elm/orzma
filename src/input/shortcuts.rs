@@ -98,7 +98,7 @@ pub(crate) enum LeaderPhase {
     Idle,
     /// A leader fired; the next key resolves against the prefix table.
     Pending,
-    /// A `<Leader:r>` binding fired; repeat-marked keys re-fire until the
+    /// A `r:<Leader>` binding fired; repeat-marked keys re-fire until the
     /// deadline (extended on each fire) or a non-matching key closes it.
     Repeat {
         /// Absolute `Time<Real>::elapsed()` instant the window closes at.
@@ -106,7 +106,7 @@ pub(crate) enum LeaderPhase {
     },
 }
 
-/// The physical key currently held that fired a repeat-marked `<Leader:r>`
+/// The physical key currently held that fired a repeat-marked `r:<Leader>`
 /// binding. OS auto-repeats of this key re-fire the binding regardless of
 /// the `LeaderPhase::Repeat` time window: that window (`repeat_time_ms`)
 /// only bridges discrete re-presses and is far shorter than the OS
@@ -281,7 +281,7 @@ impl Shortcuts {
     }
 
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
-    /// binding is repeat-marked (`<Leader:r>`).
+    /// binding is repeat-marked (`r:<Leader>`).
     fn match_repeat_prefix(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
         self.match_prefix_entry(keycode, mods)
             .filter(|s| s.repeat)
@@ -332,7 +332,7 @@ pub(crate) enum LeaderStep {
 /// Advances the orzma leader state machine for one pressed key, threading
 /// `phase` across frames. `now` is the caller's `Time<Real>::elapsed()`.
 /// Swallows the leader itself and any unmatched second key; drives the
-/// `<Leader:r>` repeat window (fire-and-extend inside the window, close and
+/// `r:<Leader>` repeat window (fire-and-extend inside the window, close and
 /// re-evaluate on any other key); returns `Passthrough` for unrelated keys.
 pub(crate) fn step_leader(
     phase: &mut LeaderPhase,
@@ -345,7 +345,7 @@ pub(crate) fn step_leader(
     // modifier (e.g. Ctrl) emits its own `Pressed` event ahead of the main key;
     // stepping on it would consume the pending leader by parity and abort the
     // sequence. Closing the repeat window on it would likewise break
-    // modifier-carrying repeat chords (`<Leader:r>Ctrl+H`).
+    // modifier-carrying repeat chords (`r:<Leader>Ctrl+H`).
     if is_modifier_key(keycode) {
         return LeaderStep::Passthrough;
     }
@@ -389,7 +389,7 @@ pub(crate) fn step_leader(
 /// resolves to a repeat-marked binding, so a physically-held key keeps firing
 /// past the `repeat_time` window (which is too short to bridge the OS
 /// initial-repeat delay); returns `None` without touching `phase` so the caller
-/// falls back to its normal `<Leader:r>`/typing handling.
+/// falls back to its normal `r:<Leader>`/typing handling.
 pub(crate) fn refire_held_repeat(
     phase: &mut LeaderPhase,
     shortcuts: &Shortcuts,
@@ -574,10 +574,7 @@ fn detect_modifier_tap(
 /// observe the empty default.
 fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OrzmaConfigsResource>) {
     let sc = &configs.shortcuts;
-    resolved.direct = OrzmaShortcut::from_chords(
-        sc.direct_chords()
-            .map(|(label, chord, action)| (label, chord, action, false)),
-    );
+    resolved.direct = OrzmaShortcut::from_chords(sc.direct_chords());
     resolved.prefix = OrzmaShortcut::from_chords(sc.leader_chords());
     duplicate_physical_chords(&resolved.direct);
     duplicate_physical_chords(&resolved.prefix);
@@ -1113,9 +1110,7 @@ mod tests {
 
     fn direct_only(config: &ConfigShortcuts) -> Shortcuts {
         Shortcuts {
-            direct: OrzmaShortcut::from_chords(
-                config.direct_chords().map(|(l, c, a)| (l, c, a, false)),
-            ),
+            direct: OrzmaShortcut::from_chords(config.direct_chords()),
             prefix: Vec::new(),
             leader: None,
             tap_timeout: Duration::from_millis(300),
@@ -1285,9 +1280,9 @@ mod tests {
     }
 
     /// Asserts that a leader-scoped binding resolves to its physical key and
-    /// carries its `<Leader:r>` repeat flag into the prefix table.
+    /// carries its `r:<Leader>` repeat flag into the prefix table.
     ///
-    /// Case: a user binds `kill-pane = "<Leader:r>d"` and holds the key to
+    /// Case: a user binds `kill-pane = "r:<Leader>d"` and holds the key to
     /// close several panes in a row.
     #[test]
     fn from_chords_accepts_leader_chords() {
@@ -1306,7 +1301,7 @@ mod tests {
         assert_eq!(kill_pane.keycode, KeyCode::KeyD);
         assert!(
             kill_pane.repeat,
-            "the <Leader:r> flag must reach the resolved table"
+            "the r:<Leader> flag must reach the resolved table"
         );
     }
 
@@ -1374,7 +1369,7 @@ mod tests {
     fn match_gui_action_resolves_defaults() {
         let config = ConfigShortcuts::default();
         let r = direct_only(&config);
-        for (label, chord, action) in config.direct_chords() {
+        for (label, chord, action, _) in config.direct_chords() {
             let keycode =
                 key_to_keycode(&chord.key).expect("a default chord maps to a physical key");
             assert_eq!(
@@ -1788,6 +1783,30 @@ mod tests {
             LeaderStep::Passthrough
         ));
         assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    /// Asserts that the direct table carries each direct binding's `r:` flag.
+    ///
+    /// Case: a user holds the stock zoom-in chord, which repeats, next to the
+    /// zoom reset, which does not.
+    #[test]
+    fn build_shortcuts_carries_the_direct_repeat_flag() {
+        let resolved = resolved_shortcuts(OrzmaConfigs::default());
+        let repeat_of = |action| {
+            resolved
+                .direct
+                .iter()
+                .find(|entry| entry.action == action)
+                .map(|entry| entry.repeat)
+        };
+        assert_eq!(
+            repeat_of(Shortcut::FontSize(FontSizeStep::Increase)),
+            Some(true)
+        );
+        assert_eq!(
+            repeat_of(Shortcut::FontSize(FontSizeStep::Reset)),
+            Some(false)
+        );
     }
 
     /// Asserts that the `Plus` token resolves to the unshifted `=` key, so a
