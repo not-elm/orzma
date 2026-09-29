@@ -466,7 +466,8 @@ rejects at once with a `TypeError`.
 The bridge subscribes one handler of its own: a program `emit` named `scroll`
 with the payload `{"action":"<action>"}`, where `<action>` is `down`, `up`,
 `halfDown`, `halfUp`, `pageDown`, `pageUp`, `top`, or `bottom`, scrolls the
-page. It does nothing when the page has registered its own `scroll` handler.
+page at once, even when the page's CSS sets `scroll-behavior: smooth`. It does
+nothing when the page has registered its own `scroll` handler.
 
 ### Binary round-trip
 
