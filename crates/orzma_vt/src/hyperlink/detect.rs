@@ -203,12 +203,18 @@ impl LogicalLine {
 
 /// Whether `c` may appear in a URL body.
 fn is_url_body(c: char) -> bool {
+    /// The printable ASCII characters a URL body never holds.
+    const EXCLUDED_ASCII: [char; 9] = ['<', '>', '"', '`', '{', '}', '|', '\\', '^'];
+
     c.is_ascii_graphic() && !EXCLUDED_ASCII.contains(&c)
 }
 
 /// The byte offset where the next scheme at or after `from` starts, and
 /// the offset where its body starts.
 fn next_scheme(bytes: &[u8], from: usize) -> Option<(usize, usize)> {
+    /// The scheme prefixes a URL may start with.
+    const SCHEMES: [&[u8]; 4] = [b"http://", b"https://", b"ftp://", b"mailto:"];
+
     (from..bytes.len()).find_map(|start| {
         let bounded = start
             .checked_sub(1)
@@ -251,6 +257,12 @@ fn body_end(text: &str, body: usize) -> (usize, bool) {
 /// Whether `c`, right after a URL body, voids the URL rather than
 /// ending it there.
 fn voids_url(c: char) -> bool {
+    /// The non-ASCII characters besides whitespace and width-2 characters
+    /// that end a URL instead of voiding it.
+    const CLOSING_PUNCTUATION: [char; 6] = [
+        '\u{2019}', '\u{201D}', '\u{00BB}', '\u{203A}', '\u{2013}', '\u{2014}',
+    ];
+
     !c.is_ascii()
         && !c.is_whitespace()
         && !c.is_control()
@@ -260,6 +272,9 @@ fn voids_url(c: char) -> bool {
 
 /// `end` moved back over trailing punctuation, never before `body`.
 fn trimmed_end(bytes: &[u8], body: usize, end: usize) -> usize {
+    /// The characters trimmed from the end of a URL.
+    const TRAILING_TRIM: [u8; 9] = [b'.', b',', b':', b';', b'!', b'?', b'\'', b'(', b'['];
+
     let mut end = end;
     while end > body
         && bytes
@@ -270,21 +285,6 @@ fn trimmed_end(bytes: &[u8], body: usize, end: usize) -> usize {
     }
     end
 }
-
-/// The scheme prefixes a URL may start with.
-const SCHEMES: [&[u8]; 4] = [b"http://", b"https://", b"ftp://", b"mailto:"];
-
-/// The printable ASCII characters a URL body never holds.
-const EXCLUDED_ASCII: [char; 9] = ['<', '>', '"', '`', '{', '}', '|', '\\', '^'];
-
-/// The non-ASCII characters besides whitespace and width-2 characters
-/// that end a URL instead of voiding it.
-const CLOSING_PUNCTUATION: [char; 6] = [
-    '\u{2019}', '\u{201D}', '\u{00BB}', '\u{203A}', '\u{2013}', '\u{2014}',
-];
-
-/// The characters trimmed from the end of a URL.
-const TRAILING_TRIM: [u8; 9] = [b'.', b',', b':', b';', b'!', b'?', b'\'', b'(', b'['];
 
 #[cfg(test)]
 mod tests;
