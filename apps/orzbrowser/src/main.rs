@@ -2,6 +2,8 @@
 
 mod address;
 mod app;
+mod chrome;
+mod focus;
 mod keymap;
 mod protocol;
 mod ui;
