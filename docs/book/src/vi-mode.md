@@ -1,7 +1,7 @@
 # Vi Mode
 
 Vi mode moves a cursor over the pane's screen and scrollback with vi keys, so
-you can select and copy text without the mouse. Press `<Leader>s` to enter it.
+you can select and copy text without the mouse. Press `Alt+s` to enter it.
 Press `y` or `Enter` to copy the selection and leave, or `q` or `Escape` to
 leave without copying.
 
