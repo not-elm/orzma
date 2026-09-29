@@ -9853,8 +9853,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ~~~
 ## Ported source
 
-orzbrowser's page scroller (`apps/orzbrowser/web/page/scroller.ts`) is ported
-from Vimium's `content_scripts/scroller.js` (https://github.com/philc/vimium).
+The page scroller that orzbrowser and orzmd share
+(`sdk/orzma-scroller/src/scroller.ts`) is ported from Vimium's
+`content_scripts/scroller.js` (https://github.com/philc/vimium).
 Its license follows.
 
 ~~~text

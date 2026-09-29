@@ -1,8 +1,13 @@
+import {
+  HeldKeys,
+  installScroller,
+  runScrollAction,
+  type ScrollAction,
+  windowClock,
+} from '@orzma/scroller';
 import { orzma } from '@orzma/web';
 import { installFrames, parentHandOff } from './frames';
-import { HeldKeys } from './held';
 import { installKeys } from './keys';
-import { installScroller, runScrollAction, type ScrollAction, windowClock } from './scroller';
 
 /** A report to the controller (`page` event), tagged by `kind`. */
 type PageEvent = { kind: 'ready' } | { kind: 'pending'; key: string | null };

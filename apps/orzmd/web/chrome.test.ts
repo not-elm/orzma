@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { breadcrumb, type Chrome, headingLabel, renderRail, renderToast } from './chrome';
+import { breadcrumb, type Chrome, headingLabel, renderRail, ToastView } from './chrome';
 
 const heads = [
   { level: 1, text: 'Configuration' },
@@ -13,12 +13,15 @@ function chrome(overrides: Partial<Chrome> = {}): Chrome {
   return {
     fileName: 'configuration.md',
     missing: false,
-    pendingKey: null,
     toast: null,
-    outline: { open: false, selected: 0 },
-    search: 'closed',
     ...overrides,
   };
+}
+
+function toastElement(): HTMLElement {
+  const el = document.createElement('div');
+  el.innerHTML = '<span class="toast-icon"></span><span class="toast-text"></span>';
+  return el;
 }
 
 function railElement(): HTMLElement {
@@ -56,40 +59,69 @@ describe('breadcrumb', () => {
 describe('renderRail', () => {
   it('shows the file name and the crumbs behind separators', () => {
     const rail = railElement();
-    renderRail(rail, chrome(), ['Settings', '[inactive_pane]']);
+    renderRail(rail, chrome(), ['Settings', '[inactive_pane]'], null);
     expect(rail.querySelector('.rail-file')?.textContent).toBe('configuration.md');
     expect(rail.querySelector('.rail-crumbs')?.textContent).toBe('›Settings›[inactive_pane]');
   });
 
   it('shows the pending key and the deleted badge only when set', () => {
     const rail = railElement();
-    renderRail(rail, chrome(), []);
+    renderRail(rail, chrome(), [], null);
     expect((rail.querySelector('.rail-key') as HTMLElement).hidden).toBe(true);
     expect((rail.querySelector('.rail-missing') as HTMLElement).hidden).toBe(true);
-    renderRail(rail, chrome({ pendingKey: 'g', missing: true }), []);
+    renderRail(rail, chrome({ missing: true }), [], 'g');
     expect(rail.querySelector('.rail-key')?.textContent).toBe('g');
     expect((rail.querySelector('.rail-key') as HTMLElement).hidden).toBe(false);
     expect((rail.querySelector('.rail-missing') as HTMLElement).hidden).toBe(false);
   });
 });
 
-describe('renderToast', () => {
+describe('ToastView', () => {
+  const broken = { id: 1, kind: 'error' as const, text: 'cannot open b.md' };
+
   it('shows an error toast and hides it again', () => {
-    const el = document.createElement('div');
-    el.innerHTML = '<span class="toast-icon"></span><span class="toast-text"></span>';
-    renderToast(el, { kind: 'error', text: 'cannot open b.md' });
+    const el = toastElement();
+    const view = new ToastView(el);
+    view.show(broken);
     expect(el.hidden).toBe(false);
     expect(el.classList.contains('toast-error')).toBe(true);
     expect(el.querySelector('.toast-text')?.textContent).toBe('cannot open b.md');
-    renderToast(el, null);
+    view.show(null);
     expect(el.hidden).toBe(true);
   });
 
   it('marks an info toast as info', () => {
-    const el = document.createElement('div');
-    el.innerHTML = '<span class="toast-icon"></span><span class="toast-text"></span>';
-    renderToast(el, { kind: 'info', text: 'no previous page' });
+    const el = toastElement();
+    new ToastView(el).show({ id: 1, kind: 'info', text: 'no previous page' });
     expect(el.classList.contains('toast-info')).toBe(true);
     expect(el.classList.contains('toast-error')).toBe(false);
+  });
+
+  it('keeps a dismissed toast hidden when the same toast is sent again', () => {
+    const el = toastElement();
+    const view = new ToastView(el);
+    view.show(broken);
+    view.dismiss();
+    expect(el.hidden).toBe(true);
+    view.show(broken);
+    expect(el.hidden).toBe(true);
+  });
+
+  it('shows the next toast after one was dismissed', () => {
+    const el = toastElement();
+    const view = new ToastView(el);
+    view.show(broken);
+    view.dismiss();
+    view.show({ id: 2, kind: 'error', text: 'cannot open c.md' });
+    expect(el.hidden).toBe(false);
+    expect(el.querySelector('.toast-text')?.textContent).toBe('cannot open c.md');
+  });
+
+  it('does nothing when dismissed with no toast on screen', () => {
+    const el = toastElement();
+    const view = new ToastView(el);
+    view.dismiss();
+    view.show(broken);
+    expect(el.hidden).toBe(false);
   });
 });

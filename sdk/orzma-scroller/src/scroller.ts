@@ -8,6 +8,8 @@
 
 import type { HeldKeys, Press } from './held';
 
+export { HeldKeys, type Press } from './held';
+
 /** The time source and frame scheduler a scroller runs on. */
 export interface Clock {
   /** The current time, on the timebase of `KeyboardEvent.timeStamp`. */
@@ -100,12 +102,28 @@ export function runScrollAction(scroller: Scroller, action: ScrollAction, press?
   }
 }
 
+/** Options of a scroller. */
+export interface ScrollerOptions {
+  /**
+   * The height, in CSS pixels, of the fixed chrome at the top of the viewport. A page or half-page
+   * scroll of the document moves by the viewport height minus this. Defaults to 0.
+   */
+  topInset?: number;
+}
+
 /**
  * Installs a scroller on `win`. It scrolls the element the user last clicked, or its nearest
- * scrollable ancestor, and otherwise the document or its largest visible scrollable element.
+ * scrollable ancestor, and otherwise the document or its largest visible scrollable element. A
+ * page scroll of the document leaves out the `topInset` of `options`.
  */
-export function installScroller(win: Window, clock: Clock, held: HeldKeys): Scroller {
+export function installScroller(
+  win: Window,
+  clock: Clock,
+  held: HeldKeys,
+  options: ScrollerOptions = {},
+): Scroller {
   const doc = win.document;
+  const topInset = options.topInset ?? 0;
   const running = new Set<{ handle: number }>();
   let activated: Element | null = null;
 
@@ -132,7 +150,7 @@ export function installScroller(win: Window, clock: Clock, held: HeldKeys): Scro
     if (amount !== 'viewSize') {
       return amount;
     }
-    return el === scrollingElement() ? win.innerHeight : el.clientHeight;
+    return el === scrollingElement() ? win.innerHeight - topInset : el.clientHeight;
   }
 
   function shouldScroll(el: Element): boolean {

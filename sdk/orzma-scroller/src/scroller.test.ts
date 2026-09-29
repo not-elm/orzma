@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { HeldKeys } from './held';
-import { __testables, type Clock, installScroller, runScrollAction } from './scroller';
+import {
+  __testables,
+  type Clock,
+  installScroller,
+  runScrollAction,
+  type ScrollerOptions,
+} from './scroller';
 
 const { LINE } = __testables;
 
@@ -84,11 +90,11 @@ function scrollable(height = 10_000, view = 600, box = rect(800, view)): HTMLEle
   return el;
 }
 
-function setup<T extends Element | null>(page: T) {
+function setup<T extends Element | null>(page: T, options?: ScrollerOptions) {
   const f = frames();
   const held = new HeldKeys();
   Object.defineProperty(document, 'scrollingElement', { configurable: true, get: () => page });
-  const scroller = installScroller(window, f.clock, held);
+  const scroller = installScroller(window, f.clock, held, options);
   return { f, held, page, scroller };
 }
 
@@ -330,5 +336,24 @@ describe('installScroller', () => {
     expect(runScrollAction(scroller, 'down')).toBe(false);
     expect(runScrollAction(scroller, 'halfUp')).toBe(false);
     expect(f.scheduled()).toBe(0);
+  });
+
+  it('leaves the top inset out of a page scroll of the document', () => {
+    const { f, page, scroller } = setup(scrollable(), { topInset: 30 });
+    runScrollAction(scroller, 'pageDown');
+    f.runFor(1000);
+    expect(page.scrollTop).toBe(window.innerHeight - 30);
+    runScrollAction(scroller, 'halfUp');
+    f.runFor(1000);
+    expect(page.scrollTop).toBe((window.innerHeight - 30) / 2);
+  });
+
+  it('pages an element by its own height even with a top inset', () => {
+    const { f, scroller } = setup(scrollable(), { topInset: 30 });
+    const inner = scrollable(5000, 300, rect(400, 300));
+    inner.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+    runScrollAction(scroller, 'pageDown');
+    f.runFor(1000);
+    expect(inner.scrollTop).toBe(300);
   });
 });

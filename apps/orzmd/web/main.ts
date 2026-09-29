@@ -1,13 +1,15 @@
 import 'katex/dist/katex.min.css';
 import 'highlight.js/styles/github-dark.css';
+import { HeldKeys, installScroller, windowClock } from '@orzma/scroller';
 import { orzma } from '@orzma/web';
 import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
-import { breadcrumb, type Chrome, type HeadingInfo, renderRail, renderToast } from './chrome';
-import { FindBox, type SearchCause } from './find';
+import { breadcrumb, type Chrome, type HeadingInfo, renderRail, ToastView } from './chrome';
+import { FindBox } from './find';
 import { HeadingTracker } from './headings';
 import { collectLocalImages } from './images';
+import { installKeys, type RelayedKey } from './keys';
 import { applyLayoutVars, FIND_CLEARANCE, RAIL_HEIGHT, reachedTop } from './layout';
 import { classifyLink } from './links';
 import { OutlinePanel } from './outline';
@@ -16,59 +18,50 @@ import { CssHighlightPainter, measureTop, revealRange, Search } from './search';
 
 mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
 
-/** A report to the controller (`page` event), tagged by `kind`. */
-type PageEvent =
-  | { kind: 'scrollState'; ratio: number; currentHeadingIndex: number | null; headingCount: number }
-  | { kind: 'searchSubmit' | 'searchEscape'; cause: SearchCause }
-  | { kind: 'searchClose' }
-  | { kind: 'outlineJump'; index: number };
-
-function emitPage(event: PageEvent): void {
-  orzma.emit('page', event);
-}
+const held = new HeldKeys();
+const scroller = installScroller(window, windowClock(window), held, { topInset: RAIL_HEIGHT });
 
 const content = document.getElementById('content') as HTMLElement;
 const search = new Search(new CssHighlightPainter(), measureTop);
 
-const findBox = new FindBox(
-  document.getElementById('find') as HTMLElement,
-  search,
-  {
-    submit: (cause) => emitPage({ kind: 'searchSubmit', cause }),
-    escape: (cause) => emitPage({ kind: 'searchEscape', cause }),
-    close: () => emitPage({ kind: 'searchClose' }),
+const findBox = new FindBox(document.getElementById('find') as HTMLElement, search, {
+  content,
+  schedule: (task) => {
+    requestAnimationFrame(task);
   },
-  {
-    content,
-    schedule: (task) => {
-      requestAnimationFrame(task);
-    },
-    reveal: (range) => revealRange(range, { top: FIND_CLEARANCE, bottom: window.innerHeight }),
-    scrollY: () => window.scrollY,
-    scrollTo: (y) => window.scrollTo({ top: y }),
+  reveal: (range) => {
+    scroller.cancelAll();
+    revealRange(range, { top: FIND_CLEARANCE, bottom: window.innerHeight });
   },
-);
+  scrollY: () => window.scrollY,
+  scrollTo: (y) => {
+    scroller.cancelAll();
+    window.scrollTo({ top: y });
+  },
+});
 
-const outlinePanel = new OutlinePanel(document.getElementById('outline') as HTMLElement, (index) =>
-  emitPage({ kind: 'outlineJump', index }),
-);
-
-function applyOutline(open: boolean): void {
-  if (document.body.classList.contains('outline-open') === open) {
-    return;
-  }
-  const anchor = captureScrollAnchor();
-  document.body.classList.toggle('outline-open', open);
-  outlinePanel.setOpen(open);
-  restoreScrollAnchor(anchor);
-}
+const outlinePanel = new OutlinePanel(document.getElementById('outline') as HTMLElement, {
+  jump: jumpToHeading,
+  relayout: (open) => {
+    scroller.cancelAll();
+    const anchor = captureScrollAnchor();
+    document.body.classList.toggle('outline-open', open);
+    restoreScrollAnchor(anchor);
+  },
+});
 
 const rail = document.getElementById('rail') as HTMLElement;
-const toast = document.getElementById('toast') as HTMLElement;
+const toastView = new ToastView(document.getElementById('toast') as HTMLElement);
 
 let chrome: Chrome | null = null;
+let pendingKey: string | null = null;
 let currentHeading: number | null = null;
 let headings: HeadingInfo[] = [];
+let headingElements: HTMLElement[] = [];
+// NOTE: keys the TUI relays before the first document has rendered wait here:
+// run earlier, they would act on an empty page, and the render's scroll restore
+// would undo them.
+let earlyKeys: RelayedKey[] | null = [];
 const headingTracker = new HeadingTracker();
 
 applyLayoutVars(document.documentElement);
@@ -86,6 +79,7 @@ interface ContentPayload {
   markdown: string;
   baseDir: string;
   scrollTo: ScrollTo;
+  navigated: boolean;
 }
 
 function headingEls(): HTMLElement[] {
@@ -98,21 +92,24 @@ function scrollMax(): number {
   return document.documentElement.scrollHeight - window.innerHeight;
 }
 
+function scrollRatio(): number {
+  const max = scrollMax();
+  return max > 0 ? window.scrollY / max : 0;
+}
+
 function headingInfos(): HeadingInfo[] {
-  return headingEls().map((h) => ({
+  return headingElements.map((h) => ({
     level: Number(h.tagName.slice(1)),
     text: h.textContent ?? '',
   }));
 }
 
 function renderChromeUi(): void {
+  outlinePanel.markCurrent(currentHeading);
   if (chrome === null) {
     return;
   }
-  renderRail(rail, chrome, breadcrumb(headings, currentHeading));
-  renderToast(toast, chrome.toast);
-  applyOutline(chrome.outline.open);
-  outlinePanel.mark(chrome.outline.selected, currentHeading);
+  renderRail(rail, chrome, breadcrumb(headings, currentHeading), pendingKey);
 }
 
 interface ScrollAnchor {
@@ -122,10 +119,9 @@ interface ScrollAnchor {
 }
 
 function captureScrollAnchor(): ScrollAnchor {
-  const heads = headingEls();
   let id: string | null = null;
   let offset = 0;
-  for (const h of heads) {
+  for (const h of headingElements) {
     const top = h.getBoundingClientRect().top;
     if (reachedTop(top)) {
       id = h.id;
@@ -134,9 +130,7 @@ function captureScrollAnchor(): ScrollAnchor {
       break;
     }
   }
-  const max = scrollMax();
-  const ratio = max > 0 ? window.scrollY / max : 0;
-  return { id, offset, ratio };
+  return { id, offset, ratio: scrollRatio() };
 }
 
 function restoreScrollAnchor(anchor: ScrollAnchor): void {
@@ -152,12 +146,20 @@ function restoreScrollAnchor(anchor: ScrollAnchor): void {
 }
 
 function jumpTo(target: HTMLElement): void {
+  scroller.cancelAll();
   target.scrollIntoView({ block: 'start' });
   const index = target.closest('h1,h2,h3,h4,h5,h6')?.id.match(/^h(\d+)$/)?.[1];
   if (index !== undefined) {
     headingTracker.jumped(Number(index), window.scrollY);
   }
-  reportScrollState();
+  updateCurrentHeading();
+}
+
+function jumpToHeading(index: number): void {
+  const heading = document.getElementById(`h${index}`);
+  if (heading !== null) {
+    jumpTo(heading);
+  }
 }
 
 function scrollToAnchor(fragment: string): boolean {
@@ -170,6 +172,9 @@ function scrollToAnchor(fragment: string): boolean {
 }
 
 function applyScrollTarget(scrollTo: ScrollTo, anchor: ScrollAnchor): void {
+  if (scrollTo.kind !== 'preserve') {
+    scroller.cancelAll();
+  }
   switch (scrollTo.kind) {
     case 'preserve':
       restoreScrollAnchor(anchor);
@@ -190,17 +195,13 @@ function applyScrollTarget(scrollTo: ScrollTo, anchor: ScrollAnchor): void {
   }
 }
 
-function reportScrollState(): void {
-  const max = scrollMax();
-  const ratio = max > 0 ? window.scrollY / max : 0;
-  const heads = headingEls();
-  const currentHeadingIndex = headingTracker.current(
-    heads.map((h) => h.getBoundingClientRect().top),
+function updateCurrentHeading(): void {
+  const next = headingTracker.current(
+    headingElements.map((h) => h.getBoundingClientRect().top),
     window.scrollY,
   );
-  emitPage({ kind: 'scrollState', ratio, currentHeadingIndex, headingCount: heads.length });
-  if (currentHeadingIndex !== currentHeading) {
-    currentHeading = currentHeadingIndex;
+  if (next !== currentHeading) {
+    currentHeading = next;
     renderChromeUi();
   }
 }
@@ -266,13 +267,16 @@ async function stageLocalImages(root: HTMLElement): Promise<void> {
 
 async function setContent(payload: ContentPayload): Promise<void> {
   const generation = ++renderGeneration;
+  if (payload.navigated) {
+    findBox.reset();
+  }
   const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
   installHeadingAnchors(content);
+  headingElements = headingEls();
   headings = headingInfos();
   outlinePanel.setItems(headings);
-  await renderMermaid();
-  await stageLocalImages(content);
+  await Promise.all([renderMermaid(), stageLocalImages(content)]);
   // NOTE: a newer setContent superseded this one during the await (rapid reloads
   // race) — skip the stale scroll so only the latest render positions the viewport.
   if (generation !== renderGeneration) {
@@ -280,77 +284,39 @@ async function setContent(payload: ContentPayload): Promise<void> {
   }
   applyScrollTarget(payload.scrollTo, anchor);
   findBox.rerun();
-  reportScrollState();
+  updateCurrentHeading();
   renderChromeUi();
 }
 
-function scrollByAction(action: string): void {
-  const page = window.innerHeight - RAIL_HEIGHT;
-  const line = 60;
-  switch (action) {
-    case 'down':
-      window.scrollBy({ top: line });
-      break;
-    case 'up':
-      window.scrollBy({ top: -line });
-      break;
-    case 'halfDown':
-      window.scrollBy({ top: page / 2 });
-      break;
-    case 'halfUp':
-      window.scrollBy({ top: -page / 2 });
-      break;
-    case 'pageDown':
-      window.scrollBy({ top: page });
-      break;
-    case 'pageUp':
-      window.scrollBy({ top: -page });
-      break;
-    case 'top':
-      window.scrollTo({ top: 0 });
-      break;
-    case 'bottom':
-      window.scrollTo({ top: scrollMax() });
-      break;
-  }
-  reportScrollState();
-}
+const relayKey = installKeys(window, held, {
+  scroller,
+  outline: outlinePanel,
+  find: findBox,
+  jumpToHeading,
+  currentHeading: () => currentHeading,
+  headingCount: () => headings.length,
+  showPending: (key) => {
+    pendingKey = key;
+    renderChromeUi();
+  },
+  dismissToast: () => toastView.dismiss(),
+  request: (kind) => orzma.emit('page', { kind }),
+});
 
 orzma.on('content', (p: ContentPayload) => {
   void setContent(p).catch(console.error);
 });
-orzma.on('scroll', (p: { action: string }) => {
-  scrollByAction(p.action);
-});
-orzma.on('scrollToHeading', (p: { index: number }) => {
-  const heading = document.getElementById(`h${p.index}`);
-  if (heading !== null) {
-    jumpTo(heading);
+orzma.on('key', (key: RelayedKey) => {
+  if (earlyKeys === null) {
+    relayKey(key);
+  } else {
+    earlyKeys.push(key);
   }
-});
-
-orzma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
-  findBox.nav(p.dir);
-});
-orzma.on('searchType', (p: { text: string }) => {
-  findBox.typeText(p.text);
-});
-orzma.on('searchBackspace', () => {
-  findBox.backspace();
-});
-orzma.on('searchEnter', () => {
-  findBox.enter();
-});
-orzma.on('searchResolve', () => {
-  findBox.resolve();
-});
-orzma.on('searchCancel', () => {
-  findBox.cancel();
 });
 orzma.on('chrome', (c: Chrome) => {
   chrome = c;
+  toastView.show(c.toast);
   renderChromeUi();
-  findBox.setStage(c.search);
 });
 
 window.addEventListener('resize', renderChromeUi);
@@ -375,8 +341,7 @@ content.addEventListener('click', (e) => {
       scrollToAnchor(link.fragment);
       break;
     case 'markdown':
-      reportScrollState();
-      orzma.emit('navigate', { path: link.path, fragment: link.fragment });
+      orzma.emit('navigate', { path: link.path, fragment: link.fragment, ratio: scrollRatio() });
       break;
     case 'file':
       orzma.emit('openPath', { path: link.path });
@@ -389,9 +354,16 @@ content.addEventListener('click', (e) => {
   }
 });
 
-window.addEventListener('scroll', reportScrollState, { passive: true });
+window.addEventListener('scroll', updateCurrentHeading, { passive: true });
 
 void orzma
   .call<ContentPayload>('ready')
   .then((doc) => setContent(doc))
-  .catch(console.error);
+  .catch(console.error)
+  .finally(() => {
+    const keys = earlyKeys ?? [];
+    earlyKeys = null;
+    for (const key of keys) {
+      relayKey(key);
+    }
+  });

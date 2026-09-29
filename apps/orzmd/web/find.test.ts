@@ -8,31 +8,22 @@ const BOX =
   '<span class="find-count"><span class="find-wrap" hidden>↻</span><span class="find-num"></span></span>' +
   '<button data-act="prev"></button><button data-act="next"></button><button data-act="close"></button></div>';
 
-function setup(html = '<p data-y="100">foo</p><p data-y="200">foo</p>') {
+function setup(html = '<p data-y="100">foo</p><p data-y="200">foo</p>', scrollY = 0) {
   document.body.innerHTML = `${BOX}<div id="content">${html}</div>`;
   const root = document.getElementById('find') as HTMLElement;
   const content = document.getElementById('content') as HTMLElement;
   const search = new Search({ paint: () => {}, paintCurrent: () => {}, clear: () => {} }, (range) =>
     Number((range.startContainer.parentElement as HTMLElement).dataset.y ?? 0),
   );
-  const sent: string[] = [];
+  const scrolled: number[] = [];
   const queue: (() => void)[] = [];
-  const box = new FindBox(
-    root,
-    search,
-    {
-      submit: (cause) => sent.push(`submit:${cause}`),
-      escape: (cause) => sent.push(`escape:${cause}`),
-      close: () => sent.push('close'),
-    },
-    {
-      content,
-      schedule: (task) => queue.push(task),
-      reveal: () => {},
-      scrollY: () => 0,
-      scrollTo: () => {},
-    },
-  );
+  const box = new FindBox(root, search, {
+    content,
+    schedule: (task) => queue.push(task),
+    reveal: () => {},
+    scrollY: () => scrollY,
+    scrollTo: (y) => scrolled.push(y),
+  });
   const input = root.querySelector('input') as HTMLInputElement;
   const flush = () => {
     while (queue.length > 0) queue.shift()?.();
@@ -44,56 +35,81 @@ function setup(html = '<p data-y="100">foo</p><p data-y="200">foo</p>') {
   const key = (k: string, isComposing = false) =>
     input.dispatchEvent(new KeyboardEvent('keydown', { key: k, isComposing }));
   const count = () => root.querySelector('.find-num')?.textContent;
-  return { box, root, content, input, sent, queue, flush, type, key, count };
+  const button = (act: string) =>
+    (root.querySelector(`[data-act="${act}"]`) as HTMLElement).click();
+  return { box, root, content, input, scrolled, queue, flush, type, key, count, button };
 }
+
+type Setup = ReturnType<typeof setup>;
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe('FindBox', () => {
+  it('starts closed with a read-only input', () => {
+    const t = setup();
+    expect(t.box.stage).toBe('closed');
+    expect(t.input.readOnly).toBe(true);
+  });
+
+  it('opens for typing with the input focused', () => {
+    const t = setup();
+    t.box.open();
+    expect(t.box.stage).toBe('typing');
+    expect(t.root.hidden).toBe(false);
+    expect(t.input.readOnly).toBe(false);
+    expect(document.activeElement).toBe(t.input);
+  });
+
   it('ignores Enter and Escape while the IME is composing', () => {
     const t = setup();
-    t.box.setStage('typing');
+    t.box.open();
     t.type('foo');
     t.flush();
     t.key('Enter', true);
     t.key('Escape', true);
-    expect(t.sent).toEqual([]);
+    expect(t.box.stage).toBe('typing');
   });
 
-  it('submits on Enter only when there is a match', () => {
+  it('confirms on Enter only when there is a match', () => {
     const t = setup();
-    t.box.setStage('typing');
+    t.box.open();
     t.type('zzz');
     t.flush();
     t.key('Enter');
-    expect(t.sent).toEqual([]);
+    expect(t.box.stage).toBe('typing');
     t.type('foo');
     t.flush();
     t.key('Enter');
-    expect(t.sent).toEqual(['submit:key']);
+    expect(t.box.stage).toBe('active');
+    expect(t.root.hidden).toBe(false);
   });
 
   it('runs a pending search before deciding on Enter', () => {
     const t = setup();
-    t.box.setStage('typing');
+    t.box.open();
     t.type('foo');
     t.key('Enter');
-    expect(t.sent).toEqual(['submit:key']);
+    expect(t.box.stage).toBe('active');
   });
 
-  it('asks to cancel on Escape', () => {
-    const t = setup();
-    t.box.setStage('typing');
+  it('closes on Escape and returns to where the search started', () => {
+    const t = setup(undefined, 300);
+    t.box.open();
+    t.type('foo');
+    t.flush();
     t.key('Escape');
-    expect(t.sent).toEqual(['escape:key']);
+    expect(t.box.stage).toBe('closed');
+    expect(t.root.hidden).toBe(true);
+    expect(t.scrolled).toEqual([300]);
+    expect(t.count()).toBe('');
   });
 
   it('replaces the selection when the TUI relays a typed character', () => {
     const t = setup();
     t.input.value = 'old';
-    t.box.setStage('typing');
+    t.box.open();
     t.box.typeText('n');
     expect(t.input.value).toBe('n');
     t.box.typeText('o');
@@ -102,35 +118,45 @@ describe('FindBox', () => {
     expect(t.input.value).toBe('n');
   });
 
-  it('resolves a blur while typing by the match count', () => {
-    const hit = setup();
-    hit.box.setStage('typing');
+  it('ends a typed search on blur by its match count and leaves the page where it is', () => {
+    const hit = setup(undefined, 300);
+    hit.box.open();
     hit.type('foo');
     hit.flush();
     hit.input.dispatchEvent(new FocusEvent('blur'));
-    expect(hit.sent).toEqual(['submit:blur']);
+    expect(hit.box.stage).toBe('active');
 
-    const miss = setup();
-    miss.box.setStage('typing');
+    const miss = setup(undefined, 300);
+    miss.box.open();
     miss.type('zzz');
     miss.flush();
-    miss.box.resolve();
-    expect(miss.sent).toEqual(['escape:blur']);
+    miss.input.dispatchEvent(new FocusEvent('blur'));
+    expect(miss.box.stage).toBe('closed');
+    expect(miss.scrolled).toEqual([]);
   });
 
-  it('sends nothing when the input blurs after the search went active', () => {
-    const t = setup();
-    t.box.setStage('typing');
-    t.type('foo');
-    t.flush();
-    t.box.setStage('active');
-    t.input.dispatchEvent(new FocusEvent('blur'));
-    expect(t.sent).toEqual([]);
+  it('takes the focus off the input on every way out of typing', () => {
+    const exits: [string, (t: Setup) => void][] = [
+      ['Enter', (t) => t.key('Enter')],
+      ['Escape', (t) => t.key('Escape')],
+      ['blur', (t) => t.input.dispatchEvent(new FocusEvent('blur'))],
+      ['close button', (t) => t.button('close')],
+      ['reset', (t) => t.box.reset()],
+    ];
+    for (const [name, exit] of exits) {
+      const t = setup();
+      t.box.open();
+      t.type('foo');
+      t.flush();
+      expect(document.activeElement, name).toBe(t.input);
+      exit(t);
+      expect(document.activeElement, name).not.toBe(t.input);
+    }
   });
 
   it('coalesces a burst of input into one search', () => {
     const t = setup();
-    t.box.setStage('typing');
+    t.box.open();
     t.flush();
     t.type('f');
     t.type('fo');
@@ -142,17 +168,29 @@ describe('FindBox', () => {
 
   it('shows No results for an unmatched query', () => {
     const t = setup();
-    t.box.setStage('typing');
+    t.box.open();
     t.type('zzz');
     t.flush();
     expect(t.count()).toBe('No results');
     expect(t.root.classList.contains('no-results')).toBe(true);
   });
 
+  it('ignores next and prev while closed', () => {
+    const t = setup();
+    t.box.open();
+    t.type('foo');
+    t.flush();
+    t.key('Escape');
+    t.box.nav('next');
+    t.box.nav('prev');
+    expect(t.count()).toBe('');
+    expect(t.root.classList.contains('no-results')).toBe(false);
+  });
+
   it('shows the wrap mark for a moment after wrapping', () => {
     vi.useFakeTimers();
     const t = setup();
-    t.box.setStage('typing');
+    t.box.open();
     t.type('foo');
     t.flush();
     t.box.nav('next');
@@ -165,7 +203,7 @@ describe('FindBox', () => {
 
   it('keeps the count after the document re-renders with fewer matches', () => {
     const t = setup();
-    t.box.setStage('typing');
+    t.box.open();
     t.type('foo');
     t.flush();
     t.box.nav('next');
@@ -176,51 +214,80 @@ describe('FindBox', () => {
 
   it('searches the previous query again when reopened', () => {
     const t = setup();
-    t.box.setStage('typing');
+    t.box.open();
     t.type('foo');
     t.flush();
-    t.box.setStage('active');
-    t.box.setStage('closed');
-    t.box.setStage('typing');
+    t.key('Enter');
+    t.box.clearHighlights();
+    expect(t.box.stage).toBe('closed');
+    t.box.open();
     expect(t.queue).toHaveLength(1);
     t.flush();
     expect(t.count()).toBe('1 / 2');
   });
 
-  it('closes a confirmed search with the close button', () => {
-    const t = setup();
-    t.box.setStage('typing');
-    t.type('foo');
-    t.flush();
-    t.box.setStage('active');
-    (t.root.querySelector('[data-act="close"]') as HTMLElement).click();
-    expect(t.sent).toEqual(['close']);
+  it('closes a typed search with the close button as Escape does', () => {
+    const t = setup(undefined, 300);
+    t.box.open();
+    t.button('close');
+    expect(t.box.stage).toBe('closed');
+    expect(t.scrolled).toEqual([300]);
   });
 
-  it('takes no input and sends no second report once it reported the end', () => {
+  it('closes a confirmed search with the close button without moving the page', () => {
+    const t = setup(undefined, 300);
+    t.box.open();
+    t.type('foo');
+    t.key('Enter');
+    t.button('close');
+    expect(t.box.stage).toBe('closed');
+    expect(t.root.hidden).toBe(true);
+    expect(t.scrolled).toEqual([]);
+  });
+
+  it('takes no input once the typed search ended', () => {
     const t = setup();
-    t.box.setStage('typing');
+    t.box.open();
     t.type('foo');
     t.key('Enter');
     t.type('foon');
     t.box.typeText('x');
-    t.box.resolve();
+    t.box.backspace();
     t.key('Escape');
     t.flush();
-    expect(t.sent).toEqual(['submit:key']);
+    expect(t.box.stage).toBe('active');
     expect(t.count()).toBe('1 / 2');
     expect(t.input.readOnly).toBe(true);
-    t.box.setStage('active');
-    t.box.setStage('typing');
+    t.box.open();
     expect(t.input.readOnly).toBe(false);
   });
 
-  it('keeps the input read-only outside typing', () => {
+  it('clears a confirmed search but leaves a typed one alone', () => {
     const t = setup();
-    expect(t.input.readOnly).toBe(true);
-    t.box.setStage('typing');
-    expect(t.input.readOnly).toBe(false);
-    t.box.setStage('active');
-    expect(t.input.readOnly).toBe(true);
+    t.box.open();
+    t.box.clearHighlights();
+    expect(t.box.stage).toBe('typing');
+    t.type('foo');
+    t.key('Enter');
+    t.box.clearHighlights();
+    expect(t.box.stage).toBe('closed');
+    expect(t.root.hidden).toBe(true);
+  });
+
+  it('closes from any stage on reset without moving the page', () => {
+    const typing = setup(undefined, 300);
+    typing.box.open();
+    typing.box.reset();
+    expect(typing.box.stage).toBe('closed');
+    expect(typing.scrolled).toEqual([]);
+
+    const active = setup(undefined, 300);
+    active.box.open();
+    active.type('foo');
+    active.key('Enter');
+    active.box.reset();
+    expect(active.box.stage).toBe('closed');
+    expect(active.scrolled).toEqual([]);
+    expect(active.count()).toBe('');
   });
 });

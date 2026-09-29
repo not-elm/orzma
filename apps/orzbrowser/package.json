@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@orzma/scroller": "workspace:*",
     "@orzma/web": "workspace:*"
   },
   "devDependencies": {

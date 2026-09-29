@@ -1,5 +1,5 @@
+import { isScrollAction, type ScrollAction } from '@orzma/scroller';
 import type { KeyHandler } from './keys';
-import { isScrollAction, type ScrollAction } from './scroller';
 
 /** The parts of a window the frames talk through. */
 interface FrameWindow extends EventTarget {

@@ -1,22 +1,11 @@
-import type { SearchStage } from './chrome';
 import { SCROLL_OFFSET } from './layout';
 import { isCaseSensitive, type Search, type SearchResult } from './search';
 
 const WRAP_NOTICE_MS = 1500;
 const NO_RESULT: SearchResult = { total: 0, current: 0, wrapped: false };
 
-/** Why the page ended a typed search. */
-export type SearchCause = 'key' | 'blur';
-
-/** Receives the end of a typed search. */
-interface FindHost {
-  /** Reports that the typed search was confirmed. */
-  submit(cause: SearchCause): void;
-  /** Reports that the typed search was abandoned. */
-  escape(cause: SearchCause): void;
-  /** Reports that the confirmed search was closed with the close button. */
-  close(): void;
-}
+/** Stage of the in-page search: no box, a query being typed, or confirmed matches highlighted. */
+export type SearchStage = 'closed' | 'typing' | 'active';
 
 /** What the find box needs from the page besides the search. */
 interface FindDeps {
@@ -32,34 +21,26 @@ interface FindDeps {
   scrollTo: (y: number) => void;
 }
 
-/**
- * The stage the find box is in: the controller's stages, plus `reported` for a typed search whose
- * end was reported before the controller's next stage arrived.
- */
-type FindStage = SearchStage | 'reported';
-
-/** The find box: its input, its count, and the life of a typed search. */
+/** The find box: its input, its count, and the life of a search from typing to closing. */
 export class FindBox {
   private readonly root: HTMLElement;
   private readonly search: Search;
-  private readonly host: FindHost;
   private readonly deps: FindDeps;
   private readonly input: HTMLInputElement;
   private readonly caseMark: HTMLElement;
   private readonly wrapMark: HTMLElement;
   private readonly number: HTMLElement;
   private readonly navButtons: HTMLButtonElement[];
-  private stage: FindStage = 'closed';
+  private current: SearchStage = 'closed';
   private origin = 0;
   private savedScroll = 0;
   private pending = false;
   private last: SearchResult = NO_RESULT;
   private wrapTimer: ReturnType<typeof setTimeout> | undefined;
 
-  constructor(root: HTMLElement, search: Search, host: FindHost, deps: FindDeps) {
+  constructor(root: HTMLElement, search: Search, deps: FindDeps) {
     this.root = root;
     this.search = search;
-    this.host = host;
     this.deps = deps;
     this.input = root.querySelector('input') as HTMLInputElement;
     this.input.readOnly = true;
@@ -70,12 +51,12 @@ export class FindBox {
       root.querySelectorAll<HTMLButtonElement>('[data-act="prev"], [data-act="next"]'),
     );
     this.input.addEventListener('input', (e) => {
-      if (this.stage === 'typing' && !(e as InputEvent).isComposing) {
+      if (this.current === 'typing' && !(e as InputEvent).isComposing) {
         this.scheduleSearch();
       }
     });
     this.input.addEventListener('compositionend', () => {
-      if (this.stage === 'typing') {
+      if (this.current === 'typing') {
         this.scheduleSearch();
       }
     });
@@ -87,50 +68,42 @@ export class FindBox {
     root.querySelector('[data-act="prev"]')?.addEventListener('click', () => this.nav('prev'));
     root.querySelector('[data-act="next"]')?.addEventListener('click', () => this.nav('next'));
     root.querySelector('[data-act="close"]')?.addEventListener('click', () => {
-      if (this.stage === 'active') {
-        this.host.close();
-      } else {
+      if (this.current === 'typing') {
         this.escape();
+      } else {
+        this.clearHighlights();
       }
     });
   }
 
-  /**
-   * Applies the stage the controller reports. Entering `typing` remembers the scroll position,
-   * focuses the input with its text selected, and searches that text again; leaving to `closed`
-   * removes the highlights. Outside `typing`, and once the typed search has reported its end, the
-   * input is read-only; a `typing` stage arriving after that report changes nothing.
-   */
-  setStage(next: SearchStage): void {
-    const previous = this.stage;
-    if (next === previous || (next === 'typing' && previous === 'reported')) {
-      return;
-    }
-    this.stage = next;
-    this.root.hidden = next === 'closed';
-    this.input.readOnly = next !== 'typing';
-    if (next === 'typing') {
-      this.savedScroll = this.deps.scrollY();
-      this.origin = this.savedScroll + SCROLL_OFFSET;
-      this.input.focus();
-      this.input.select();
-      if (this.input.value.length > 0) {
-        this.scheduleSearch();
-      }
-    } else if (previous === 'typing' || previous === 'reported') {
-      this.input.blur();
-    }
-    if (next === 'closed') {
-      this.reset();
-    }
+  /** The stage the box is in. */
+  get stage(): SearchStage {
+    return this.current;
   }
 
   /**
-   * Types `text` into the input as a key press would, replacing the selection. Ignored outside a
-   * typed search and once it has reported its end.
+   * Starts typing a query: shows the box, remembers where the page is, focuses the input with its
+   * text selected, and searches that text again. Does nothing while a query is already typed.
    */
+  open(): void {
+    if (this.current === 'typing') {
+      return;
+    }
+    this.current = 'typing';
+    this.root.hidden = false;
+    this.input.readOnly = false;
+    this.savedScroll = this.deps.scrollY();
+    this.origin = this.savedScroll + SCROLL_OFFSET;
+    this.input.focus();
+    this.input.select();
+    if (this.input.value.length > 0) {
+      this.scheduleSearch();
+    }
+  }
+
+  /** Types `text` into the input as a key press would, replacing the selection. Ignored outside typing. */
   typeText(text: string): void {
-    if (this.stage !== 'typing') {
+    if (this.current !== 'typing') {
       return;
     }
     const end = this.input.value.length;
@@ -143,12 +116,9 @@ export class FindBox {
     this.scheduleSearch();
   }
 
-  /**
-   * Deletes backwards in the input as Backspace would. Ignored outside a typed search and once it
-   * has reported its end.
-   */
+  /** Deletes backwards in the input as Backspace would. Ignored outside typing. */
   backspace(): void {
-    if (this.stage !== 'typing') {
+    if (this.current !== 'typing') {
       return;
     }
     const start = this.input.selectionStart ?? this.input.value.length;
@@ -161,47 +131,52 @@ export class FindBox {
     this.scheduleSearch();
   }
 
-  /**
-   * Handles Enter: reports a confirmed search when there is at least one match. Does nothing
-   * outside a typed search and once it has reported its end.
-   */
+  /** Handles Enter: confirms the search when there is at least one match. Ignored outside typing. */
   enter(): void {
-    if (this.stage !== 'typing') {
+    if (this.current !== 'typing') {
       return;
     }
     this.flush();
     if (this.last.total > 0) {
-      this.end('submit', 'key');
+      this.finish('active');
     }
   }
 
-  /**
-   * Ends a typed search by its match count: confirmed with a match, abandoned without. Does
-   * nothing outside a typed search and once it has reported its end.
-   */
-  resolve(): void {
-    if (this.stage !== 'typing') {
+  /** Handles Escape: closes the box and returns to where the search started. Ignored outside typing. */
+  escape(): void {
+    if (this.current !== 'typing') {
       return;
     }
-    this.flush();
-    this.end(this.last.total > 0 ? 'submit' : 'escape', 'blur');
-  }
-
-  /** Removes the highlights and returns to the position the search started from. */
-  cancel(): void {
-    this.reset();
+    this.finish('closed');
     this.deps.scrollTo(this.savedScroll);
   }
 
-  /** Moves to the next or previous match. */
+  /** Moves to the next or previous match. Ignored while the box is closed. */
   nav(dir: 'next' | 'prev'): void {
+    if (this.current === 'closed') {
+      return;
+    }
     this.render(this.search.navigate(dir));
     this.revealCurrent();
   }
 
+  /** Closes a confirmed search and removes its highlights. Does nothing in any other stage. */
+  clearHighlights(): void {
+    if (this.current === 'active') {
+      this.finish('closed');
+    }
+  }
+
+  /** Closes the box from any stage without moving the page, as when another document replaces this one. */
+  reset(): void {
+    if (this.current !== 'closed') {
+      this.finish('closed');
+    }
+  }
+
   /** Searches the re-rendered document again while a search is open. */
   rerun(): void {
-    if (this.stage !== 'closed' && this.input.value.length > 0) {
+    if (this.current !== 'closed' && this.input.value.length > 0) {
       this.render(this.search.rerun(this.deps.content));
     }
   }
@@ -221,24 +196,31 @@ export class FindBox {
     }
   }
 
-  private escape(): void {
-    if (this.stage === 'typing') {
-      this.end('escape', 'key');
+  /** Ends a typed search when the input loses focus: confirmed with a match, closed without, and the page stays where it is. */
+  private resolve(): void {
+    if (this.current !== 'typing') {
+      return;
     }
+    this.flush();
+    this.finish(this.last.total > 0 ? 'active' : 'closed');
   }
 
-  /** Reports the end of the typed search and stops taking input until the next stage. */
-  private end(outcome: 'submit' | 'escape', cause: SearchCause): void {
-    this.stage = 'reported';
+  /**
+   * Leaves the current stage for `next`: the input turns read-only and loses focus, and closing
+   * hides the box and removes the highlights. The stage changes before the input loses focus, so
+   * the input's own blur does nothing.
+   */
+  private finish(next: 'active' | 'closed'): void {
+    this.current = next;
     this.input.readOnly = true;
-    if (outcome === 'submit') {
-      this.host.submit(cause);
-    } else {
-      this.host.escape(cause);
+    this.root.hidden = next === 'closed';
+    if (next === 'closed') {
+      this.clearMatches();
     }
+    this.input.blur();
   }
 
-  private reset(): void {
+  private clearMatches(): void {
     this.pending = false;
     this.search.clear();
     this.render(null);

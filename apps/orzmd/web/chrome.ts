@@ -1,8 +1,12 @@
 /** Severity of a toast message. */
 type ToastKind = 'error' | 'info';
 
-/** Stage of the in-page search. */
-export type SearchStage = 'closed' | 'typing' | 'active';
+/** A message the controller shows; `id` tells two messages apart even when their text matches. */
+interface Toast {
+  id: number;
+  kind: ToastKind;
+  text: string;
+}
 
 /** The chrome state the controller pushes with the `chrome` event. */
 export interface Chrome {
@@ -10,14 +14,8 @@ export interface Chrome {
   fileName: string;
   /** Whether the viewed file has been deleted. */
   missing: boolean;
-  /** First key of a pending two-key chord, or `null`. */
-  pendingKey: string | null;
   /** The message to show, or `null`. */
-  toast: { kind: ToastKind; text: string } | null;
-  /** Outline panel state; `selected` indexes the `id="h{n}"` headings. */
-  outline: { open: boolean; selected: number };
-  /** Stage of the in-page search. */
-  search: SearchStage;
+  toast: Toast | null;
 }
 
 /** A document heading: its level (1-6) and its text. */
@@ -52,10 +50,16 @@ export function breadcrumb(headings: readonly HeadingInfo[], current: number | n
 }
 
 /**
- * Draws the rail: the file name, the crumbs (each behind a `›`), the pending chord key and the
- * deleted-file badge. Crumbs that do not fit are dropped from the shallow end behind a `…`.
+ * Draws the rail: the file name, the crumbs (each behind a `›`), `pendingKey` — the first key of a
+ * pending chord — and the deleted-file badge. Crumbs that do not fit are dropped from the shallow
+ * end behind a `…`.
  */
-export function renderRail(rail: HTMLElement, chrome: Chrome, crumbs: readonly string[]): void {
+export function renderRail(
+  rail: HTMLElement,
+  chrome: Chrome,
+  crumbs: readonly string[],
+  pendingKey: string | null,
+): void {
   const file = rail.querySelector<HTMLElement>('.rail-file');
   const crumbBox = rail.querySelector<HTMLElement>('.rail-crumbs');
   const key = rail.querySelector<HTMLElement>('.rail-key');
@@ -65,19 +69,44 @@ export function renderRail(rail: HTMLElement, chrome: Chrome, crumbs: readonly s
   }
   file.textContent = chrome.fileName;
   fitCrumbs(crumbBox, crumbs);
-  key.hidden = chrome.pendingKey === null;
-  key.textContent = chrome.pendingKey ?? '';
+  key.hidden = pendingKey === null;
+  key.textContent = pendingKey ?? '';
   missing.hidden = !chrome.missing;
 }
 
-/** Shows `toast` in `el`, or hides `el` when `toast` is `null`. */
-export function renderToast(el: HTMLElement, toast: Chrome['toast']): void {
-  el.hidden = toast === null;
-  el.classList.toggle('toast-error', toast?.kind === 'error');
-  el.classList.toggle('toast-info', toast?.kind === 'info');
-  const text = el.querySelector<HTMLElement>('.toast-text');
-  if (text !== null) {
-    text.textContent = toast?.text ?? '';
+/** The toast element. A dismissed toast stays hidden until a toast with another `id` arrives. */
+export class ToastView {
+  private readonly el: HTMLElement;
+  private toast: Toast | null = null;
+  private dismissed: number | null = null;
+
+  constructor(el: HTMLElement) {
+    this.el = el;
+  }
+
+  /** Shows `toast`, or hides the element for `null`; a toast dismissed before stays hidden. */
+  show(toast: Toast | null): void {
+    this.toast = toast;
+    this.render();
+  }
+
+  /** Hides the toast on screen until a toast with another `id` arrives. */
+  dismiss(): void {
+    if (this.toast !== null) {
+      this.dismissed = this.toast.id;
+      this.render();
+    }
+  }
+
+  private render(): void {
+    const toast = this.toast !== null && this.toast.id !== this.dismissed ? this.toast : null;
+    this.el.hidden = toast === null;
+    this.el.classList.toggle('toast-error', toast?.kind === 'error');
+    this.el.classList.toggle('toast-info', toast?.kind === 'info');
+    const text = this.el.querySelector<HTMLElement>('.toast-text');
+    if (text !== null) {
+      text.textContent = toast?.text ?? '';
+    }
   }
 }
 

@@ -5,10 +5,25 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
 });
 
-function panel(onJump: (index: number) => void = () => {}) {
+const ABC = [
+  { level: 1, text: 'A' },
+  { level: 1, text: 'B' },
+  { level: 1, text: 'C' },
+];
+
+function panel() {
   const root = document.createElement('nav');
+  root.hidden = true;
   root.innerHTML = '<ol class="outline-list"></ol>';
-  return { root, panel: new OutlinePanel(root, onJump) };
+  const jumps: number[] = [];
+  const layouts: boolean[] = [];
+  const p = new OutlinePanel(root, {
+    jump: (index) => jumps.push(index),
+    relayout: (open) => layouts.push(open),
+  });
+  const marked = (cls: string) =>
+    Array.from(root.querySelectorAll(`.${cls}`)).map((li) => li.textContent);
+  return { root, panel: p, jumps, layouts, marked };
 }
 
 describe('OutlinePanel', () => {
@@ -37,64 +52,132 @@ describe('OutlinePanel', () => {
     expect(root.querySelector('[data-index]')?.textContent).toBe('(untitled)');
   });
 
+  it('opens on the heading being read and lays the page out for it', () => {
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.open(1);
+    expect(t.panel.isOpen()).toBe(true);
+    expect(t.root.hidden).toBe(false);
+    expect(t.layouts).toEqual([true]);
+    expect(t.marked('selected')).toEqual(['B']);
+  });
+
+  it('opens on the first heading above the first one, and on the last past the end', () => {
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.open(null);
+    expect(t.marked('selected')).toEqual(['A']);
+    t.panel.close();
+    t.panel.open(9);
+    expect(t.marked('selected')).toEqual(['C']);
+  });
+
+  it('does nothing when opened while open or closed while closed', () => {
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.close();
+    t.panel.open(0);
+    t.panel.open(2);
+    expect(t.marked('selected')).toEqual(['A']);
+    t.panel.close();
+    t.panel.close();
+    expect(t.layouts).toEqual([true, false]);
+    expect(t.panel.isOpen()).toBe(false);
+  });
+
   it('marks the selection and the current section separately', () => {
-    const { root, panel: p } = panel();
-    p.setItems([
-      { level: 1, text: 'A' },
-      { level: 1, text: 'B' },
-    ]);
-    p.mark(1, 0);
-    const [a, b] = Array.from(root.querySelectorAll<HTMLElement>('[data-index]'));
-    expect(a.classList.contains('current')).toBe(true);
-    expect(a.classList.contains('selected')).toBe(false);
-    expect(b.classList.contains('selected')).toBe(true);
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.open(1);
+    t.panel.markCurrent(0);
+    expect(t.marked('current')).toEqual(['A']);
+    expect(t.marked('selected')).toEqual(['B']);
+  });
+
+  it('marks nothing while closed', () => {
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.markCurrent(0);
+    expect(t.marked('current')).toEqual([]);
+    t.panel.open(0);
+    expect(t.marked('current')).toEqual(['A']);
+  });
+
+  it('moves the selection and stops at both ends', () => {
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.open(0);
+    t.panel.move(-1);
+    expect(t.marked('selected')).toEqual(['A']);
+    t.panel.move(1);
+    t.panel.move(1);
+    t.panel.move(1);
+    expect(t.marked('selected')).toEqual(['C']);
+  });
+
+  it('jumps to the selection', () => {
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.open(0);
+    t.panel.move(1);
+    t.panel.choose();
+    expect(t.jumps).toEqual([1]);
+  });
+
+  it('does nothing without headings', () => {
+    const t = panel();
+    t.panel.setItems([]);
+    t.panel.open(null);
+    t.panel.move(1);
+    t.panel.move(-1);
+    t.panel.choose();
+    expect(t.jumps).toEqual([]);
+    expect(t.marked('selected')).toEqual([]);
+  });
+
+  it('selects and jumps to a clicked heading', () => {
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.open(0);
+    (t.root.querySelectorAll<HTMLElement>('[data-index]')[1] as HTMLElement).click();
+    expect(t.jumps).toEqual([1]);
+    expect(t.marked('selected')).toEqual(['B']);
+  });
+
+  it('keeps the selection within the new headings', () => {
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.open(2);
+    t.panel.setItems(ABC.slice(0, 2));
+    expect(t.marked('selected')).toEqual(['B']);
   });
 
   it('scrolls to an unchanged selection once the panel is shown again', () => {
-    const { panel: p } = panel();
-    p.setItems([
-      { level: 1, text: 'A' },
-      { level: 1, text: 'B' },
-    ]);
+    const t = panel();
+    t.panel.setItems(ABC);
     const scrolled: string[] = [];
     Element.prototype.scrollIntoView = function (this: Element) {
       scrolled.push(this.textContent ?? '');
     };
-    p.mark(1, null);
-    p.setOpen(false);
-    p.mark(1, null);
-    p.setOpen(true);
-    p.mark(1, null);
-    p.mark(1, null);
+    t.panel.open(1);
+    t.panel.close();
+    t.panel.open(1);
+    t.panel.markCurrent(null);
     Element.prototype.scrollIntoView = () => {};
     expect(scrolled).toEqual(['B', 'B']);
   });
 
   it('moves the marks off the entries marked before', () => {
-    const { root, panel: p } = panel();
-    p.setItems([
-      { level: 1, text: 'A' },
-      { level: 1, text: 'B' },
-      { level: 1, text: 'C' },
-    ]);
-    p.mark(0, 0);
-    p.mark(2, 1);
-    const marked = (cls: string) =>
-      Array.from(root.querySelectorAll(`.${cls}`)).map((li) => li.textContent);
-    expect(marked('selected')).toEqual(['C']);
-    expect(marked('current')).toEqual(['B']);
-    p.mark(2, null);
-    expect(marked('current')).toEqual([]);
-  });
-
-  it('reports the clicked heading', () => {
-    const jumps: number[] = [];
-    const { root, panel: p } = panel((i) => jumps.push(i));
-    p.setItems([
-      { level: 1, text: 'A' },
-      { level: 1, text: 'B' },
-    ]);
-    (root.querySelectorAll<HTMLElement>('[data-index]')[1] as HTMLElement).click();
-    expect(jumps).toEqual([1]);
+    const t = panel();
+    t.panel.setItems(ABC);
+    t.panel.open(0);
+    t.panel.markCurrent(0);
+    t.panel.move(1);
+    t.panel.move(1);
+    t.panel.markCurrent(1);
+    expect(t.marked('selected')).toEqual(['C']);
+    expect(t.marked('current')).toEqual(['B']);
+    t.panel.markCurrent(null);
+    expect(t.marked('current')).toEqual([]);
   });
 });

@@ -4,7 +4,7 @@ import GithubSlugger from 'github-slugger';
  * Prepends a zero-width `<span class="orzmd-anchor" id="{slug}">` to every heading
  * under `root`, so `#section` links resolve. Slugs use GitHub's exact algorithm
  * (deduped). The heading's own `id="h{n}"` is left intact — those ids are what
- * the scroll-state reporting and outline jump depend on.
+ * the current-heading tracking and the outline jump depend on.
  */
 export function installHeadingAnchors(root: HTMLElement): void {
   const slugger = new GithubSlugger();
