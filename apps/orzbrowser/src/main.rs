@@ -13,7 +13,7 @@ use crate::address::{AddressTarget, SearchEngine};
 use crate::app::{App, Cmd, ScrollAction};
 use crate::chrome::Chrome;
 use crate::focus::{FocusDrain, Target};
-use crate::protocol::{AddressRequest, PageEvent, Preview};
+use crate::protocol::{AddressRequest, ChromeEvent, Preview};
 use anyhow::{anyhow, bail};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::Terminal;
@@ -224,11 +224,11 @@ fn apply_reports(
             views.page.navigate(url)?;
         }
     }
-    for event in views.chrome.read_events::<PageEvent>() {
-        if event == PageEvent::Ready {
+    for event in views.chrome.read_events::<ChromeEvent>() {
+        if event == ChromeEvent::Ready {
             *sent_chrome = None;
         }
-        if run_cmds(app.on_page_event(event), views, orzma)?.is_break() {
+        if run_cmds(app.on_chrome_event(event), views, orzma)?.is_break() {
             return Ok(ControlFlow::Break(()));
         }
     }
@@ -309,7 +309,7 @@ fn register_chrome(
                     Ok(preview)
                 },
             )
-            .add_event::<PageEvent>("page"),
+            .add_event::<ChromeEvent>("page"),
     )?;
     Ok(view)
 }

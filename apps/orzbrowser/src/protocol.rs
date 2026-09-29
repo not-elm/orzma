@@ -35,10 +35,10 @@ pub(crate) struct Preview {
     pub(crate) label: String,
 }
 
-/// A report from the chrome page (`page` event), tagged by `kind`.
+/// A report from the chrome page (`page` event of the chrome webview), tagged by `kind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
-pub(crate) enum PageEvent {
+pub(crate) enum ChromeEvent {
     /// The page's script has subscribed to the `chrome` event.
     Ready,
     /// Esc was pressed in the address bar.
@@ -139,20 +139,19 @@ mod tests {
         );
     }
 
-    /// Asserts that the page's `ready`, `cancel`, and `openAddress` reports
-    /// parse.
+    /// Asserts that the chrome page's `ready`, `cancel`, and `openAddress` reports parse.
     ///
     /// Case: the chrome page loads, then the user presses Esc in the address
     /// bar and clicks the omnibox.
     #[test]
-    fn page_events_parse_by_kind() {
+    fn chrome_events_parse_by_kind() {
         let parse =
-            |value| serde_json::from_value::<PageEvent>(value).expect("a page event parses");
-        assert_eq!(parse(json!({ "kind": "ready" })), PageEvent::Ready);
-        assert_eq!(parse(json!({ "kind": "cancel" })), PageEvent::Cancel);
+            |value| serde_json::from_value::<ChromeEvent>(value).expect("a page event parses");
+        assert_eq!(parse(json!({ "kind": "ready" })), ChromeEvent::Ready);
+        assert_eq!(parse(json!({ "kind": "cancel" })), ChromeEvent::Cancel);
         assert_eq!(
             parse(json!({ "kind": "openAddress" })),
-            PageEvent::OpenAddress
+            ChromeEvent::OpenAddress
         );
     }
 

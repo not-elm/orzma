@@ -4,7 +4,7 @@
 use crate::address::AddressTarget;
 use crate::focus::{FocusDrain, Target};
 use crate::keymap::{Action, KeySet, Mode};
-use crate::protocol::PageEvent;
+use crate::protocol::ChromeEvent;
 use std::mem;
 
 /// Scroll direction / magnitude for the webview.
@@ -259,12 +259,12 @@ impl App {
     /// Applies a report from the chrome page: the first ready lets an open
     /// address bar take keyboard focus, Esc closes the address bar, and a
     /// click on the omnibox in Normal mode opens it.
-    pub fn on_page_event(&mut self, event: PageEvent) -> Vec<Cmd> {
+    pub fn on_chrome_event(&mut self, event: ChromeEvent) -> Vec<Cmd> {
         let cmds = match event {
-            PageEvent::Ready => self.chrome_ready(),
-            PageEvent::Cancel if self.mode == Mode::Address => self.leave_address(None),
-            PageEvent::OpenAddress if self.mode == Mode::Normal => self.open_address(),
-            PageEvent::Cancel | PageEvent::OpenAddress => vec![],
+            ChromeEvent::Ready => self.chrome_ready(),
+            ChromeEvent::Cancel if self.mode == Mode::Address => self.leave_address(None),
+            ChromeEvent::OpenAddress if self.mode == Mode::Normal => self.open_address(),
+            ChromeEvent::Cancel | ChromeEvent::OpenAddress => vec![],
         };
         self.with_key_sets(cmds)
     }
@@ -440,7 +440,7 @@ mod tests {
     /// An app whose chrome page has reported ready.
     fn ready_app() -> App {
         let mut a = app();
-        a.on_page_event(PageEvent::Ready);
+        a.on_chrome_event(ChromeEvent::Ready);
         a
     }
 
@@ -544,10 +544,10 @@ mod tests {
             vec![chrome_keys(KeySet::Empty)]
         );
         assert_eq!(
-            a.on_page_event(PageEvent::Ready),
+            a.on_chrome_event(ChromeEvent::Ready),
             vec![Cmd::Focus(Target::Chrome)]
         );
-        assert_eq!(a.on_page_event(PageEvent::Ready), vec![]);
+        assert_eq!(a.on_chrome_event(ChromeEvent::Ready), vec![]);
     }
 
     /// Asserts that launching without an address opens an empty address bar
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(a.address_epoch(), 1);
         assert_eq!(a.on_focus_drain(drain(&[], &[])), vec![]);
         assert_eq!(
-            a.on_page_event(PageEvent::Ready),
+            a.on_chrome_event(ChromeEvent::Ready),
             vec![Cmd::Focus(Target::Chrome)]
         );
         assert_eq!(a.on_focus_drain(drain(&[], &[true])), vec![]);
@@ -635,7 +635,7 @@ mod tests {
             vec![]
         );
         assert_eq!(a.mode(), Mode::Address);
-        a.on_page_event(PageEvent::Cancel);
+        a.on_chrome_event(ChromeEvent::Cancel);
         assert_eq!(
             a.on_address_target(AddressTarget::Open("https://docs.rs/".to_owned())),
             vec![]
@@ -656,7 +656,7 @@ mod tests {
         );
         assert_eq!(a.on_focus_drain(drain(&[false], &[true])), vec![]);
         assert_eq!(
-            a.on_page_event(PageEvent::Cancel),
+            a.on_chrome_event(ChromeEvent::Cancel),
             vec![chrome_keys(KeySet::Normal), Cmd::Focus(Target::Page)]
         );
     }
@@ -674,7 +674,7 @@ mod tests {
         a.on_focus_drain(drain(&[false], &[true]));
         a.set_page_placed(false);
         assert_eq!(
-            a.on_page_event(PageEvent::Cancel),
+            a.on_chrome_event(ChromeEvent::Cancel),
             vec![chrome_keys(KeySet::Normal), Cmd::Blur]
         );
     }
@@ -689,7 +689,7 @@ mod tests {
         let mut a = ready_app();
         a.on_action(Action::OpenAddress);
         a.on_focus_drain(drain(&[], &[true]));
-        a.on_page_event(PageEvent::Cancel);
+        a.on_chrome_event(ChromeEvent::Cancel);
         a.on_action(Action::OpenAddress);
         assert_eq!(a.address_epoch(), 2);
         assert_eq!(a.on_focus_drain(drain(&[], &[false])), vec![]);
@@ -802,12 +802,12 @@ mod tests {
     fn an_omnibox_click_opens_the_address_bar_from_normal_only() {
         let mut a = ready_app();
         assert_eq!(
-            a.on_page_event(PageEvent::OpenAddress),
+            a.on_chrome_event(ChromeEvent::OpenAddress),
             vec![chrome_keys(KeySet::Empty), Cmd::Focus(Target::Chrome)]
         );
         let mut a = ready_app();
         a.on_action(Action::EnterInsert);
-        assert_eq!(a.on_page_event(PageEvent::OpenAddress), vec![]);
+        assert_eq!(a.on_chrome_event(ChromeEvent::OpenAddress), vec![]);
         assert_eq!(a.mode(), Mode::Insert);
     }
 
