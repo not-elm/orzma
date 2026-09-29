@@ -1,8 +1,7 @@
+import type { SearchStage } from './find';
+
 /** Severity of a toast message. */
 type ToastKind = 'error' | 'info';
-
-/** Stage of the in-page search. */
-export type SearchStage = 'closed' | 'typing' | 'active';
 
 /** The chrome state the controller pushes with the `chrome` event. */
 export interface Chrome {

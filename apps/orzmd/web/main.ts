@@ -5,7 +5,7 @@ import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
 import { breadcrumb, type Chrome, type HeadingInfo, renderRail, renderToast } from './chrome';
-import { FindBox, type SearchCause } from './find';
+import { FindBox } from './find';
 import { HeadingTracker } from './headings';
 import { collectLocalImages } from './images';
 import { applyLayoutVars, FIND_CLEARANCE, RAIL_HEIGHT, reachedTop } from './layout';
@@ -19,8 +19,6 @@ mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' 
 /** A report to the controller (`page` event), tagged by `kind`. */
 type PageEvent =
   | { kind: 'scrollState'; ratio: number; currentHeadingIndex: number | null; headingCount: number }
-  | { kind: 'searchSubmit' | 'searchEscape'; cause: SearchCause }
-  | { kind: 'searchClose' }
   | { kind: 'outlineJump'; index: number };
 
 function emitPage(event: PageEvent): void {
@@ -30,24 +28,15 @@ function emitPage(event: PageEvent): void {
 const content = document.getElementById('content') as HTMLElement;
 const search = new Search(new CssHighlightPainter(), measureTop);
 
-const findBox = new FindBox(
-  document.getElementById('find') as HTMLElement,
-  search,
-  {
-    submit: (cause) => emitPage({ kind: 'searchSubmit', cause }),
-    escape: (cause) => emitPage({ kind: 'searchEscape', cause }),
-    close: () => emitPage({ kind: 'searchClose' }),
+const findBox = new FindBox(document.getElementById('find') as HTMLElement, search, {
+  content,
+  schedule: (task) => {
+    requestAnimationFrame(task);
   },
-  {
-    content,
-    schedule: (task) => {
-      requestAnimationFrame(task);
-    },
-    reveal: (range) => revealRange(range, { top: FIND_CLEARANCE, bottom: window.innerHeight }),
-    scrollY: () => window.scrollY,
-    scrollTo: (y) => window.scrollTo({ top: y }),
-  },
-);
+  reveal: (range) => revealRange(range, { top: FIND_CLEARANCE, bottom: window.innerHeight }),
+  scrollY: () => window.scrollY,
+  scrollTo: (y) => window.scrollTo({ top: y }),
+});
 
 const outlinePanel = new OutlinePanel(document.getElementById('outline') as HTMLElement, (index) =>
   emitPage({ kind: 'outlineJump', index }),
@@ -86,6 +75,7 @@ interface ContentPayload {
   markdown: string;
   baseDir: string;
   scrollTo: ScrollTo;
+  navigated: boolean;
 }
 
 function headingEls(): HTMLElement[] {
@@ -266,6 +256,9 @@ async function stageLocalImages(root: HTMLElement): Promise<void> {
 
 async function setContent(payload: ContentPayload): Promise<void> {
   const generation = ++renderGeneration;
+  if (payload.navigated) {
+    findBox.reset();
+  }
   const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
   installHeadingAnchors(content);
@@ -329,28 +322,9 @@ orzma.on('scrollToHeading', (p: { index: number }) => {
   }
 });
 
-orzma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
-  findBox.nav(p.dir);
-});
-orzma.on('searchType', (p: { text: string }) => {
-  findBox.typeText(p.text);
-});
-orzma.on('searchBackspace', () => {
-  findBox.backspace();
-});
-orzma.on('searchEnter', () => {
-  findBox.enter();
-});
-orzma.on('searchResolve', () => {
-  findBox.resolve();
-});
-orzma.on('searchCancel', () => {
-  findBox.cancel();
-});
 orzma.on('chrome', (c: Chrome) => {
   chrome = c;
   renderChromeUi();
-  findBox.setStage(c.search);
 });
 
 window.addEventListener('resize', renderChromeUi);
