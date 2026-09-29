@@ -1,9 +1,9 @@
 //! Plain-text URL detection: the scanner over text, and the lookup that
 //! maps a match back to the viewport cells showing it.
 
-use crate::screen::cell::Cell;
+use crate::screen::cell::{Cell, GlyphClass};
+use std::iter;
 use std::ops::Range;
-use unicode_width::UnicodeWidthChar;
 
 /// A viewport cell: a zero-based row counted from the top of the
 /// viewport and a zero-based column.
@@ -33,11 +33,11 @@ impl DetectedUrl {
     /// `rows` holds the viewport's cells row by row. `wraps[r]` is how many
     /// leading cells of row `r` continue on row `r + 1`, and a missing
     /// entry reads as `None`. `continues_from_above` says whether row 0
-    /// continues a line from above the viewport. The URL is found by
-    /// [`UrlMatch::scan`] over the cell's logical line: its rows joined
-    /// through their wraps, the cells past a row's wrap and continuation
-    /// columns left out, and a cell carrying an OSC 8 hyperlink read as a
-    /// blank.
+    /// continues a line from above the viewport. A URL is recognized as
+    /// [`UrlMatch::scan`] recognizes one in the cell's logical line, which
+    /// joins its rows through their wraps. That line skips continuation
+    /// columns and the cells past a row's wrap, and reads a cell carrying
+    /// an OSC 8 hyperlink as a blank.
     ///
     /// Returns `None` when the cell shows no URL, and when the URL may run
     /// past the viewport: on a line continuing from above, a match that
@@ -65,9 +65,8 @@ impl DetectedUrl {
 pub struct UrlMatch {
     /// The URL, with trailing punctuation trimmed.
     pub url: Range<usize>,
-    /// The span the scan covered before trimming. It starts where `url`
-    /// starts and ends at or after `url`'s end.
-    pub raw: Range<usize>,
+    /// Where the scan ended before trimming, at or after `url`'s end.
+    pub scan_end: usize,
 }
 
 impl UrlMatch {
@@ -82,24 +81,25 @@ impl UrlMatch {
     /// body ends the URL there when it is whitespace, a control, a width-2
     /// character, or one of `’”»›–—`, and voids the URL otherwise. A URL
     /// with nothing left after its scheme is not reported. Scanning
-    /// resumes at each match's `raw` end, so a scheme inside a URL never
+    /// resumes at each match's `scan_end`, so a scheme inside a URL never
     /// starts a second match.
-    pub fn scan(text: &str) -> Vec<Self> {
+    pub fn scan(text: &str) -> impl Iterator<Item = Self> {
         let bytes = text.as_bytes();
-        let mut found = Vec::new();
         let mut from = 0;
-        while let Some((start, body)) = next_scheme(bytes, from) {
-            let (end, voided) = body_end(text, body);
-            let url_end = trimmed_end(bytes, body, end);
-            if !voided && url_end > body {
-                found.push(Self {
-                    url: start..url_end,
-                    raw: start..end,
-                });
+        iter::from_fn(move || {
+            while let Some((start, body)) = next_scheme(bytes, from) {
+                let (end, voided) = body_end(text, body);
+                let url_end = trimmed_end(bytes, body, end);
+                from = end;
+                if !voided && url_end > body {
+                    return Some(Self {
+                        url: start..url_end,
+                        scan_end: end,
+                    });
+                }
             }
-            from = end;
-        }
-        found
+            None
+        })
     }
 }
 
@@ -137,13 +137,15 @@ impl LogicalLine {
         while last + 1 < rows.len() && wrap(last).is_some() {
             last += 1;
         }
+        let held = rows.get(first..=last).unwrap_or_default();
+        let capacity = held.iter().map(Vec::len).sum();
         let mut line = Self {
-            text: String::new(),
-            origins: Vec::new(),
+            text: String::with_capacity(capacity),
+            origins: Vec::with_capacity(capacity),
             cut_above: first == 0 && continues_from_above,
             cut_below: wrap(last).is_some(),
         };
-        for (index, cells) in rows.iter().enumerate().take(last + 1).skip(first) {
+        for (index, cells) in (first..).zip(held) {
             let limit =
                 wrap(index).map_or(cells.len(), |count| usize::from(count).min(cells.len()));
             for (col, cell) in cells.iter().enumerate().take(limit) {
@@ -161,7 +163,7 @@ impl LogicalLine {
     fn url_at(&self, at: ViewportCell) -> Option<DetectedUrl> {
         let target = self.origins.iter().position(|origin| *origin == at)?;
         let found = UrlMatch::scan(&self.text)
-            .into_iter()
+            .take_while(|found| found.url.start <= target)
             .find(|found| found.url.contains(&target))?;
         if !self.is_wholly_visible(&found) {
             return None;
@@ -179,8 +181,8 @@ impl LogicalLine {
             && self
                 .text
                 .find(|c: char| !is_url_body(c))
-                .is_none_or(|stop| found.raw.start < stop);
-        let may_end_below = self.cut_below && found.raw.end == self.text.len();
+                .is_none_or(|stop| found.url.start < stop);
+        let may_end_below = self.cut_below && found.scan_end == self.text.len();
         !may_start_above && !may_end_below
     }
 
@@ -254,7 +256,7 @@ fn voids_url(c: char) -> bool {
     !c.is_ascii()
         && !c.is_whitespace()
         && !c.is_control()
-        && UnicodeWidthChar::width(c) != Some(2)
+        && GlyphClass::of(c) != Some(GlyphClass::Wide)
         && !CLOSING_PUNCTUATION.contains(&c)
 }
 

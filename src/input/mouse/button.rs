@@ -440,6 +440,7 @@ mod tests {
     use super::*;
     use crate::action::terminal::TerminalOpenUri;
     use crate::input::focus::{MouseClaimedByWebview, TerminalMouseDisabled};
+    use crate::input::hyperlink::hold_link_modifier;
     use crate::input::mouse::test_support::{set_phys_cursor, test_metrics};
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::message::Messages;
@@ -594,15 +595,6 @@ mod tests {
 
     /// Holds the platform's link-activation modifier (Cmd on macOS, Ctrl
     /// elsewhere) for the rest of the test.
-    fn hold_link_modifier(app: &mut App) {
-        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        if cfg!(target_os = "macos") {
-            keys.press(KeyCode::SuperLeft);
-        } else {
-            keys.press(KeyCode::ControlLeft);
-        }
-    }
-
     fn last_pointer(app: &App) -> (Entity, PointerInput) {
         *app.world()
             .resource::<Log>()
@@ -1139,7 +1131,7 @@ mod tests {
         assert!(
             !log.iter().any(|heard| matches!(
                 heard,
-                    Heard::Pointer(entity, PointerInput { kind: PointerKind::Cancel, .. }) if *entity == left
+                Heard::Pointer(entity, PointerInput { kind: PointerKind::Cancel, .. }) if *entity == left
             )),
             "{log:?}"
         );

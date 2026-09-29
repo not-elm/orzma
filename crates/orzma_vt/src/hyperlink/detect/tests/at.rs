@@ -10,7 +10,7 @@ use crate::screen::cell::CellWidth;
 fn row(text: &str, cols: usize) -> Vec<Cell> {
     let mut cells = Vec::new();
     for c in text.chars() {
-        if UnicodeWidthChar::width(c) == Some(2) {
+        if GlyphClass::of(c) == Some(GlyphClass::Wide) {
             let body = Cell {
                 c,
                 width: CellWidth::Wide,

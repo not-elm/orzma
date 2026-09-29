@@ -6,7 +6,6 @@ use crate::hyperlink::is_allowed;
 /// The URLs `UrlMatch::scan` finds in `text`, as the text they cover.
 fn urls(text: &str) -> Vec<&str> {
     UrlMatch::scan(text)
-        .into_iter()
         .filter_map(|found| text.get(found.url))
         .collect()
 }
@@ -167,17 +166,17 @@ fn a_scheme_inside_a_url_starts_no_second_match() {
     assert_eq!(urls(text), [text]);
 }
 
-/// Asserts that ranges are byte offsets, correct after multibyte text,
-/// and that the raw range keeps the trimmed tail.
+/// Asserts that offsets are byte offsets, correct after multibyte text,
+/// and that the scan end keeps the trimmed tail.
 ///
 /// Case: a Japanese log line ends a sentence with a URL.
 #[test]
-fn ranges_are_byte_offsets_and_raw_keeps_the_trimmed_tail() {
+fn offsets_are_bytes_and_the_scan_end_keeps_the_trimmed_tail() {
     assert_eq!(
-        UrlMatch::scan("日本 https://a.example."),
+        UrlMatch::scan("日本 https://a.example.").collect::<Vec<_>>(),
         [UrlMatch {
             url: 7..24,
-            raw: 7..25
+            scan_end: 25
         }]
     );
 }

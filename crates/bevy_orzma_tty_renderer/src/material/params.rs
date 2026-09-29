@@ -49,8 +49,7 @@ pub(crate) use write::TerminalParamsPlugin;
 /// | 324    | `overlay_desaturate`        |
 /// | 328    | `cursor_packed`             |
 /// | 332    | `default_fg_packed`         |
-/// | 336    | `hover_span_first`          |
-/// | 340    | `hover_span_last`           |
+/// | 336    | `hover_span`                |
 ///
 /// # Invariants
 ///
@@ -127,12 +126,11 @@ pub(super) struct TerminalParams {
     cursor_packed: u32,
     /// The default foreground in the cell-color packing.
     default_fg_packed: u32,
-    /// Linear index (`row * cols + col`) of the first cell of the detected
-    /// URL the pointer hovers in this pane while the activation modifier
-    /// is held; above `hover_span_last` when there is none.
-    hover_span_first: u32,
-    /// Linear index of that URL's last cell.
-    hover_span_last: u32,
+    /// Linear indices (`row * cols + col`) of the first (`x`) and last
+    /// (`y`) cells of the detected URL the pointer hovers in this pane
+    /// while the activation modifier is held; `x` is above `y` when there
+    /// is none.
+    hover_span: UVec2,
 }
 
 impl Default for TerminalParams {
@@ -164,8 +162,7 @@ impl Default for TerminalParams {
             overlay_desaturate: 0.0,
             cursor_packed: 0,
             default_fg_packed: 0,
-            hover_span_first: Self::NO_HOVER_SPAN.0,
-            hover_span_last: Self::NO_HOVER_SPAN.1,
+            hover_span: Self::NO_HOVER_SPAN,
         }
     }
 }
@@ -173,7 +170,7 @@ impl Default for TerminalParams {
 impl TerminalParams {
     /// The span written when no detected URL is hovered: its first index
     /// is past its last, so no cell falls inside it.
-    const NO_HOVER_SPAN: (u32, u32) = (1, 0);
+    const NO_HOVER_SPAN: UVec2 = UVec2::new(1, 0);
 
     /// Builds the per-frame uniform block from the current view and the
     /// caret paint the policy settled on.
@@ -190,8 +187,7 @@ impl TerminalParams {
     ///   paints no selection.
     /// - `overlay_rects` is left at its default; the caller fills it from
     ///   the entity's overlays.
-    /// - `hover_span_first` and `hover_span_last` are left at the empty
-    ///   span; the caller fills them from the hover state.
+    /// - A `None` `hover_span` writes the empty span.
     fn new(
         view: &TerminalView,
         palette: &Palette,
@@ -202,6 +198,7 @@ impl TerminalParams {
         fallback: [u8; 3],
         hover_hyperlink_id: u32,
         hover_active: u32,
+        hover_span: Option<UVec2>,
         caret: Option<CaretPaint>,
         cursor_thickness: f32,
     ) -> Self {
@@ -247,8 +244,7 @@ impl TerminalParams {
                 .filter(|color| *color != palette.foreground)
                 .map_or(0, pack_linear),
             default_fg_packed: pack_linear(palette.foreground),
-            hover_span_first: Self::NO_HOVER_SPAN.0,
-            hover_span_last: Self::NO_HOVER_SPAN.1,
+            hover_span: hover_span.unwrap_or(Self::NO_HOVER_SPAN),
         }
     }
 }
@@ -355,6 +351,7 @@ mod tests {
             0,
             0,
             None,
+            None,
             0.3,
         );
         assert_eq!(params.cell_size_px, Vec2::new(7.0, 15.0));
@@ -413,7 +410,7 @@ mod tests {
     #[test]
     fn terminal_params_default_hover_span_is_empty() {
         let params = TerminalParams::default();
-        assert!(params.hover_span_first > params.hover_span_last);
+        assert!(params.hover_span.x > params.hover_span.y);
     }
 
     /// Asserts the std140 offsets of the fields after `dim`, where a
@@ -462,12 +459,7 @@ mod tests {
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(26),
             336,
-            "hover_span_first after default_fg_packed"
-        );
-        assert_eq!(
-            <TerminalParams as ShaderType>::METADATA.offset(27),
-            340,
-            "hover_span_last after hover_span_first"
+            "hover_span (UVec2, 8-byte aligned) after default_fg_packed"
         );
     }
 
@@ -574,6 +566,7 @@ mod tests {
             0,
             0,
             None,
+            None,
             0.25,
         )
     }
@@ -671,12 +664,8 @@ mod tests {
             .filter(|line| !line.is_empty())
             .collect();
         assert_eq!(
-            fields[fields.len() - 3..],
-            [
-                "default_fg_packed: u32,",
-                "hover_span_first: u32,",
-                "hover_span_last: u32,"
-            ]
+            fields[fields.len() - 2..],
+            ["default_fg_packed: u32,", "hover_span: vec2<u32>,"]
         );
     }
 

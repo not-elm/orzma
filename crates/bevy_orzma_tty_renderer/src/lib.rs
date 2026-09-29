@@ -28,7 +28,7 @@ pub mod prelude {
         TerminalFontPlugin, TerminalFontSize, TerminalFonts, physical_font_size,
     };
     pub use crate::grid::{TerminalCells, TerminalGridPlugin, TerminalView};
-    pub use crate::hyperlink::{DetectedSpan, HyperlinkHoverState};
+    pub use crate::hyperlink::HyperlinkHoverState;
     pub use crate::material::{
         OVERLAY_SLOTS, TerminalOverlays, TerminalPaddingFallback, TerminalUiMaterial,
     };

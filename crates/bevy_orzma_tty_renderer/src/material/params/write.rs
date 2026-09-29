@@ -15,6 +15,7 @@ use crate::{
     system_set::MaterialStage,
 };
 use bevy::{prelude::*, window::PrimaryWindow};
+use orzma_vt::prelude::{DetectedUrl, ViewportCell};
 
 /// Padding colour used for the area outside a terminal grid (and the whole
 /// quad while a grid is unpainted) when the terminal's default background
@@ -74,12 +75,16 @@ fn write_terminal_params(
         let Some(mut material) = materials.get_mut(&node.0) else {
             continue;
         };
-        let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
-            (Some(hovered), Some(id)) if hovered == entity => {
-                (id.get(), u32::from(hover.modifier_held))
-            }
+        let hovered = hover.entity == Some(entity);
+        let (hover_hyperlink_id, hover_active) = match hover.hyperlink_id {
+            Some(id) if hovered => (id.get(), u32::from(hover.modifier_held)),
             _ => (0, 0),
         };
+        let hover_span = hover
+            .detected
+            .as_ref()
+            .filter(|_| hovered)
+            .map(|url| linear_span(url, view.cols));
         let caret = CaretPaint::new(
             view.caret(),
             CaretPaintInput {
@@ -99,15 +104,10 @@ fn write_terminal_params(
             fallback.0,
             hover_hyperlink_id,
             hover_active,
+            hover_span,
             caret,
             cursor_config.thickness,
         );
-        if let (Some(hovered), Some(span)) = (hover.entity, hover.detected)
-            && hovered == entity
-            && hover.modifier_held
-        {
-            (params.hover_span_first, params.hover_span_last) = span.linear(view.cols);
-        }
         match overlays {
             Some(overlays) => {
                 params.overlay_rects = overlays.rects;
@@ -119,14 +119,19 @@ fn write_terminal_params(
     }
 }
 
+/// The first and last cells of `url` as indices into a row-major grid
+/// `cols` cells wide.
+fn linear_span(url: &DetectedUrl, cols: u16) -> UVec2 {
+    let index = |cell: ViewportCell| u32::from(cell.row) * u32::from(cols) + u32::from(cell.col);
+    UVec2::new(index(url.first), index(url.last))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::font::TerminalFonts;
-    use crate::hyperlink::DetectedSpan;
     use bevy::asset::uuid_handle;
     use orzma_vt::prelude::HyperlinkId;
-    use orzma_vt::prelude::ViewportCell;
 
     /// An app running only the uniform write, for one pane and no primary
     /// window; returns the pane and its material.
@@ -225,13 +230,13 @@ mod tests {
     }
 
     /// Asserts that the hovered detected URL is written as its row-major
-    /// span only while the modifier is held over this pane, and as the
-    /// empty span otherwise.
+    /// span in the pane it is detected in, and as the empty span in any
+    /// other pane.
     ///
-    /// Case: the user holds Cmd over a URL printed by `npm run dev`, lets
-    /// go of Cmd, then holds it again over another pane.
+    /// Case: the user holds Cmd over a URL printed by `npm run dev`, then
+    /// moves the pointer onto another pane.
     #[test]
-    fn a_hovered_detected_url_writes_its_span_only_while_the_modifier_is_held() {
+    fn a_hovered_detected_url_writes_its_span_only_in_its_pane() {
         let (mut app, pane, material) = params_app();
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         app.world_mut().entity_mut(pane).insert(TerminalView {
@@ -243,29 +248,21 @@ mod tests {
             let mut hover = app.world_mut().resource_mut::<HyperlinkHoverState>();
             hover.entity = Some(pane);
             hover.modifier_held = true;
-            hover.detected = Some(DetectedSpan {
+            hover.detected = Some(DetectedUrl {
+                uri: "https://a.b".to_string(),
                 first: ViewportCell { row: 0, col: 2 },
                 last: ViewportCell { row: 1, col: 3 },
             });
         }
         app.update();
-        let params = &material_of(&app, &material).params;
-        assert_eq!((params.hover_span_first, params.hover_span_last), (2, 13));
+        assert_eq!(
+            material_of(&app, &material).params.hover_span,
+            UVec2::new(2, 13)
+        );
 
-        app.world_mut()
-            .resource_mut::<HyperlinkHoverState>()
-            .modifier_held = false;
+        app.world_mut().resource_mut::<HyperlinkHoverState>().entity = Some(Entity::PLACEHOLDER);
         app.update();
-        let params = &material_of(&app, &material).params;
-        assert!(params.hover_span_first > params.hover_span_last);
-
-        {
-            let mut hover = app.world_mut().resource_mut::<HyperlinkHoverState>();
-            hover.modifier_held = true;
-            hover.entity = Some(Entity::PLACEHOLDER);
-        }
-        app.update();
-        let params = &material_of(&app, &material).params;
-        assert!(params.hover_span_first > params.hover_span_last);
+        let span = material_of(&app, &material).params.hover_span;
+        assert!(span.x > span.y);
     }
 }

@@ -50,9 +50,9 @@ impl TerminalCells {
         Some((id, self.hyperlinks.get(&id)?))
     }
 
-    /// The URL shown in plain text at the visible cell (`row`, `col`),
-    /// found by [`DetectedUrl::at`] over these cells, their wraps and
-    /// `continues_from_above`; `None` when the cell shows no URL.
+    /// The URL shown in plain text at the visible cell (`row`, `col`);
+    /// `None` when the cell shows no URL or the URL may run past the
+    /// viewport.
     pub fn detected_url_at(&self, row: u16, col: u16) -> Option<DetectedUrl> {
         DetectedUrl::at(
             &self.cells,

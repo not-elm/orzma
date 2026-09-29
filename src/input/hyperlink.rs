@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_orzma_tty_renderer::prelude::{
-    DetectedSpan, HyperlinkHoverState, TerminalCellMetricsResource, TerminalCells, TerminalView,
+    HyperlinkHoverState, TerminalCellMetricsResource, TerminalCells, TerminalView,
 };
 use bevy_orzmux::prelude::{OrzmuxSeparator, PaneGeometry, SplitOrientation};
 use orzma_configs::shortcuts::Modifiers;
@@ -49,6 +49,18 @@ pub(crate) fn link_modifier_held(mods: &Modifiers) -> bool {
         mods.meta
     } else {
         mods.ctrl
+    }
+}
+
+/// Test-only input: presses the platform's hyperlink-activation modifier
+/// in `app`'s keyboard state.
+#[cfg(test)]
+pub(crate) fn hold_link_modifier(app: &mut App) {
+    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+    if cfg!(target_os = "macos") {
+        keys.press(KeyCode::SuperLeft);
+    } else {
+        keys.press(KeyCode::ControlLeft);
     }
 }
 
@@ -104,7 +116,9 @@ type HoverSurfaces<'w, 's> = Query<
 /// link. A divider the pointer holds or hovers claims the cursor before any
 /// surface is read, leaving the hover state empty; a held divider keeps the
 /// cursor even while the pointer reports no position, which is what a drag past
-/// the window's edge does.
+/// the window's edge does. While the pointer reports no position, the hover
+/// state is cleared, `modifier_held` included. The hover state is written only
+/// when it changes.
 fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
@@ -119,20 +133,18 @@ fn hyperlink_hover_and_cursor(
         .ok()
         .and_then(|window| Some(window.cursor_position()? * window.scale_factor()))
     else {
-        reset_hover_state(&mut hover);
+        hover.set_if_neq(HyperlinkHoverState::default());
         *was_over_webview = false;
         apply_cursor(&mut cursor_icons, cursor_decision(targets.unlocated()));
         return;
     };
 
-    let mods = current_modifiers(&keys);
-    hover.modifier_held = link_modifier_held(&mods);
-
-    hover.entity = None;
-    hover.hyperlink_id = None;
-    hover.detected = None;
-
-    let target = targets.target(&mut hover, cursor_phys);
+    let mut next = HyperlinkHoverState {
+        modifier_held: link_modifier_held(&current_modifiers(&keys)),
+        ..HyperlinkHoverState::default()
+    };
+    let target = targets.target(&mut next, cursor_phys);
+    hover.set_if_neq(next);
     let over_webview = matches!(target, HoverTarget::Webview);
     let entering_webview = over_webview && !*was_over_webview;
     *was_over_webview = over_webview;
@@ -142,16 +154,6 @@ fn hyperlink_hover_and_cursor(
         cursor_decision(target)
     };
     apply_cursor(&mut cursor_icons, decision);
-}
-
-/// Clears every per-cursor field of the hover state, including
-/// `modifier_held`. Call this when the keyboard was not read this frame,
-/// since the modifier state cannot be trusted otherwise.
-fn reset_hover_state(hover: &mut HyperlinkHoverState) {
-    hover.entity = None;
-    hover.hyperlink_id = None;
-    hover.detected = None;
-    hover.modifier_held = false;
 }
 
 /// Applies a cursor decision: writes the icon when `Some`, leaves the
@@ -294,15 +296,14 @@ impl HoverTargetParams<'_, '_> {
             .and_then(|(row, col)| cells.hyperlink_at(row, col))
             .map(|(id, _uri)| id);
         let detected = cell
-            .filter(|_| id.is_none() && hover.modifier_held)
-            .and_then(|(row, col)| cells.detected_url_at(row, col))
-            .as_ref()
-            .map(DetectedSpan::from);
+            .filter(|_| hover.modifier_held)
+            .and_then(|(row, col)| cells.detected_url_at(row, col));
+        let has_link = id.is_some() || detected.is_some();
         hover.entity = Some(entity);
         hover.hyperlink_id = id;
         hover.detected = detected;
         HoverTarget::Terminal {
-            has_link: id.is_some() || detected.is_some(),
+            has_link,
             modifier_held: hover.modifier_held,
         }
     }
@@ -381,7 +382,7 @@ fn watch_primary_window_cursor(
 mod tests {
     use super::*;
     use bevy_orzmux::prelude::SplitId;
-    use orzma_vt::prelude::{HyperlinkId, HyperlinkUri, ViewportCell};
+    use orzma_vt::prelude::{DetectedUrl, HyperlinkId, HyperlinkUri, ViewportCell};
 
     fn empty() -> Modifiers {
         Modifiers::default()
@@ -589,14 +590,7 @@ mod tests {
         app.init_resource::<OrzmaMouseConfig>();
         app.add_systems(Update, hyperlink_hover_and_cursor);
 
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            if cfg!(target_os = "macos") {
-                keys.press(KeyCode::SuperLeft);
-            } else {
-                keys.press(KeyCode::ControlLeft);
-            }
-        }
+        hold_link_modifier(&mut app);
 
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
@@ -664,14 +658,7 @@ mod tests {
         app.init_resource::<OrzmaMouseConfig>();
         app.add_systems(Update, hyperlink_hover_and_cursor);
 
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            if cfg!(target_os = "macos") {
-                keys.press(KeyCode::SuperLeft);
-            } else {
-                keys.press(KeyCode::ControlLeft);
-            }
-        }
+        hold_link_modifier(&mut app);
 
         let mut window = Window::default();
         window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
@@ -1297,15 +1284,6 @@ mod tests {
         )
     }
 
-    fn hold_link_modifier(app: &mut App) {
-        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        if cfg!(target_os = "macos") {
-            keys.press(KeyCode::SuperLeft);
-        } else {
-            keys.press(KeyCode::ControlLeft);
-        }
-    }
-
     /// A hover world with the pointer on the first cell of `url_grid`,
     /// with the link modifier held when `hold` is set; returns the app,
     /// the window and the pane.
@@ -1363,7 +1341,8 @@ mod tests {
         assert_eq!(hover.hyperlink_id, None);
         assert_eq!(
             hover.detected,
-            Some(DetectedSpan {
+            Some(DetectedUrl {
+                uri: "http://a.b".to_string(),
                 first: ViewportCell { row: 0, col: 0 },
                 last: ViewportCell { row: 0, col: 9 },
             })

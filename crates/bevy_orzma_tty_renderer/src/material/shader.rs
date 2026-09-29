@@ -37,8 +37,8 @@ fn wgsl_cursor_covers_both_halves_of_a_wide_glyph() {
 fn wgsl_underlines_only_the_non_blank_cells_of_the_hovered_url() {
     let src = include_str!("../shaders/terminal_ui_material.wgsl");
     let in_url = wgsl_fn_body(src, "in_hovered_url");
-    assert!(in_url.contains("index >= params.hover_span_first"));
-    assert!(in_url.contains("index <= params.hover_span_last"));
+    assert!(in_url.contains("index >= params.hover_span.x"));
+    assert!(in_url.contains("index <= params.hover_span.y"));
     assert!(in_url.contains("hit.cell.glyph_index != GLYPH_NONE"));
     let underline = wgsl_fn_body(src, "paint_underline");
     assert!(underline.contains("in_hovered_url(hit)"));

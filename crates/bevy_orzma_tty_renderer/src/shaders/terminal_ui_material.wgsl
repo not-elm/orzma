@@ -32,8 +32,7 @@ struct TerminalParams {
     overlay_desaturate: f32,
     cursor_packed: u32,
     default_fg_packed: u32,
-    hover_span_first: u32,
-    hover_span_last: u32,
+    hover_span: vec2<u32>,
 };
 
 struct Cell {
@@ -321,8 +320,8 @@ fn paint_underline(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
 // the blanks inside the span are wrap fillers and cells past a wrap.
 fn in_hovered_url(hit: CellHit) -> bool {
     let index = cell_index(hit.row, hit.col);
-    return index >= params.hover_span_first
-        && index <= params.hover_span_last
+    return index >= params.hover_span.x
+        && index <= params.hover_span.y
         && hit.cell.glyph_index != GLYPH_NONE;
 }
 
