@@ -326,23 +326,13 @@ impl Binding {
     ///
     /// # Errors
     ///
-    /// `LeaderRepeatToken` when the value, after any `r:`, starts with
-    /// `<Leader:r>`; `Chord` when the remaining chord does not parse,
-    /// including an empty one.
-    fn parse(value: &str) -> Result<Self, BindingParseError> {
-        /// The rejected leader repeat token; `r:<Leader>` replaces it.
-        const LEADER_REPEAT_TOKEN: &str = "<Leader:r>";
-
+    /// Returns the [`KeyChordParseError`] of the chord after the tokens when
+    /// it does not parse, including an empty one.
+    fn parse(value: &str) -> Result<Self, KeyChordParseError> {
         let (rest, repeat) = match value.split_at_checked(Self::REPEAT_TOKEN.len()) {
             Some((head, rest)) if head.eq_ignore_ascii_case(Self::REPEAT_TOKEN) => (rest, true),
             _ => (value, false),
         };
-        if rest
-            .get(..LEADER_REPEAT_TOKEN.len())
-            .is_some_and(|head| head.eq_ignore_ascii_case(LEADER_REPEAT_TOKEN))
-        {
-            return Err(BindingParseError::LeaderRepeatToken);
-        }
         Ok(match strip_leader_prefix(rest) {
             Some(chord) => Self::Leader {
                 chord: parse_key_chord(chord)?,
@@ -911,17 +901,6 @@ fn strip_leader_prefix(value: &str) -> Option<&str> {
     let (head, rest) = value.split_at_checked(Binding::LEADER_TOKEN.len())?;
     head.eq_ignore_ascii_case(Binding::LEADER_TOKEN)
         .then_some(rest)
-}
-
-/// Reason a `[shortcuts]` binding value failed to parse.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-enum BindingParseError {
-    /// The chord after the tokens is not a valid chord.
-    #[error(transparent)]
-    Chord(#[from] KeyChordParseError),
-    /// The value uses the `<Leader:r>` token, which is not accepted.
-    #[error("`<Leader:r>` is no longer accepted; write `r:<Leader>` instead, e.g. `r:<Leader>h`")]
-    LeaderRepeatToken,
 }
 
 /// serde field deserializer for `Option<Binding>`: empty string is unbind
@@ -1927,31 +1906,16 @@ kill-pane = "<Leader>d"
         assert!(Binding::parse("r:r:x").is_err());
     }
 
-    /// Asserts that the `<Leader:r>` token is rejected with its own error,
-    /// with or without a leading `r:`.
+    /// Asserts that the old `<Leader:r>` spelling is rejected, with or without
+    /// a leading `r:`.
     ///
     /// Case: a user upgrades with a config that still says
     /// `resize-left-pane = "<Leader:r>Shift+H"`.
     #[test]
     fn parse_binding_rejects_the_leader_repeat_token() {
         for value in ["<Leader:r>h", "<leader:R>h", "r:<Leader:r>h"] {
-            assert_eq!(
-                Binding::parse(value),
-                Err(BindingParseError::LeaderRepeatToken),
-                "{value}"
-            );
+            assert!(Binding::parse(value).is_err(), "{value}");
         }
-    }
-
-    /// Asserts that a config using `<Leader:r>` fails to load with a message
-    /// that names the `r:<Leader>` replacement.
-    ///
-    /// Case: a user starts orzma with `kill-pane = "<Leader:r>d"` and reads
-    /// the warning on stderr.
-    #[test]
-    fn the_leader_repeat_token_error_names_the_replacement() {
-        let err = toml::from_str::<Shortcuts>("kill-pane = \"<Leader:r>d\"\n").unwrap_err();
-        assert!(err.to_string().contains("r:<Leader>"), "{err}");
     }
 
     /// Asserts that repeatable bindings serialize with the `r:` token.
