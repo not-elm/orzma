@@ -100,23 +100,61 @@ impl ClickTracker {
     }
 }
 
-/// Carries the sub-notch wheel remainder across frames, per axis, scoped to the
-/// last terminal the wheel targeted.
+/// One frame's wheel travel in whole steps: notches on the vertical axis,
+/// and wheel reports, one per whole cell, on both axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(in crate::input::mouse) struct WheelSteps {
+    /// Vertical notches; positive is up.
+    pub up: i32,
+    /// Vertical reports; positive is up.
+    pub report_up: i32,
+    /// Horizontal reports; positive is right.
+    pub report_right: i32,
+}
+
+/// Carries the wheel remainders across frames, scoped to the last terminal
+/// the wheel targeted: the sub-notch remainder of the vertical axis, and
+/// the sub-cell remainder of each axis's report count.
 #[derive(Resource, Default)]
 pub(in crate::input::mouse) struct WheelAccumulator {
     pub residual_cells: f32,
-    pub residual_cells_h: f32,
+    pub report_residual_cells: f32,
+    pub report_residual_cells_h: f32,
     last_target: Option<Entity>,
 }
 
 impl WheelAccumulator {
-    /// Resets both residuals when the wheel target changes, so a sub-notch
-    /// fraction accumulated over one terminal cannot bleed into the next.
-    pub(in crate::input::mouse) fn retarget(&mut self, entity: Entity) {
+    /// Resets every residual when the wheel target changes, so a fraction
+    /// accumulated over one terminal cannot bleed into the next.
+    pub fn retarget(&mut self, entity: Entity) {
         if self.last_target != Some(entity) {
             self.residual_cells = 0.0;
-            self.residual_cells_h = 0.0;
+            self.report_residual_cells = 0.0;
+            self.report_residual_cells_h = 0.0;
             self.last_target = Some(entity);
+        }
+    }
+
+    /// Adds one frame's travel in cells, where positive is up and right,
+    /// and returns the whole steps it completes: a vertical notch per
+    /// `cells_per_notch` cells, and a report per whole cell on each axis.
+    /// Each remainder carries to the next frame and resets when its axis
+    /// reverses.
+    pub fn accumulate(&mut self, up: f32, right: f32, cells_per_notch: f32) -> WheelSteps {
+        // NOTE: the threshold sits just under one cell because a cell split over
+        // many frames can sum to 0.9999999 in f32; an exact 1.0 then sends no
+        // report for that cell.
+        /// Cells of travel one wheel report stands for.
+        const CELLS_PER_REPORT: f32 = 0.9999;
+
+        WheelSteps {
+            up: accumulate_notches(&mut self.residual_cells, up, cells_per_notch),
+            report_up: accumulate_notches(&mut self.report_residual_cells, up, CELLS_PER_REPORT),
+            report_right: accumulate_notches(
+                &mut self.report_residual_cells_h,
+                right,
+                CELLS_PER_REPORT,
+            ),
         }
     }
 }
@@ -271,32 +309,84 @@ mod tests {
         assert_eq!(accumulate_notches(&mut acc.residual_cells, -1.0, 0.5), -2);
     }
 
+    /// Asserts that a change of wheel target clears the notch residual and
+    /// both report residuals, while the same target keeps them.
+    ///
+    /// Case: the user swipes part of a cell over one pane, keeps swiping
+    /// over it, then moves the pointer onto the neighboring pane.
     #[test]
-    fn wheel_accumulator_resets_residual_on_target_change() {
+    fn wheel_accumulator_resets_every_residual_on_target_change() {
         let mut world = World::new();
         let a = world.spawn_empty().id();
         let b = world.spawn_empty().id();
         let mut acc = WheelAccumulator::default();
         acc.retarget(a);
-        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 0);
+        assert_eq!(
+            acc.accumulate(0.6, 0.6, 0.5),
+            WheelSteps { up: 1, ..default() }
+        );
         acc.retarget(a);
         assert_eq!(
-            accumulate_notches(&mut acc.residual_cells, 0.3, 0.5),
-            1,
-            "0.3 + 0.3 = 0.6 → one notch on the same target"
+            acc.accumulate(0.6, 0.6, 0.5),
+            WheelSteps {
+                up: 1,
+                report_up: 1,
+                report_right: 1
+            }
         );
+        acc.accumulate(0.3, 0.3, 0.5);
         acc.retarget(b);
+        assert_eq!(acc.residual_cells, 0.0);
+        assert_eq!(acc.report_residual_cells, 0.0);
+        assert_eq!(acc.report_residual_cells_h, 0.0);
+    }
+
+    /// Asserts that a report residual resets when its axis reverses, so a
+    /// leftover of the old direction cannot swallow the new one's report.
+    ///
+    /// Case: the user swipes up three quarters of a cell, then reverses
+    /// and swipes down one full cell.
+    #[test]
+    fn a_report_residual_resets_when_the_wheel_reverses() {
+        let mut acc = WheelAccumulator::default();
+        assert_eq!(acc.accumulate(0.75, 0.0, 0.5).report_up, 0);
+        assert_eq!(acc.accumulate(-1.0, 0.0, 0.5).report_up, -1);
+    }
+
+    /// Asserts that one cell of travel split into many small frames still
+    /// completes exactly one report.
+    ///
+    /// Case: the user slowly swipes a trackpad up one line on a 24-pixel
+    /// line height, which macOS delivers as twelve 2-pixel events in
+    /// separate frames.
+    #[test]
+    fn one_cell_split_into_small_frames_completes_one_report() {
+        let mut acc = WheelAccumulator::default();
+        let reports: i32 = (0..12)
+            .map(|_| acc.accumulate(2.0 / 24.0, 0.0, 0.5).report_up)
+            .sum();
+        assert_eq!(reports, 1);
+    }
+
+    /// Asserts that reports count whole cells whatever the notch
+    /// threshold, while notches follow `cells_per_notch`.
+    ///
+    /// Case: a user who set `cells_per_notch = 0.25` swipes up half a cell
+    /// twice.
+    #[test]
+    fn reports_count_whole_cells_whatever_the_notch_threshold() {
+        let mut acc = WheelAccumulator::default();
         assert_eq!(
-            accumulate_notches(&mut acc.residual_cells, 0.3, 0.5),
-            0,
-            "switching target clears the carried residual"
+            acc.accumulate(0.5, 0.0, 0.25),
+            WheelSteps { up: 2, ..default() }
         );
-        assert_eq!(accumulate_notches(&mut acc.residual_cells_h, 0.3, 0.5), 0);
-        acc.retarget(a);
         assert_eq!(
-            accumulate_notches(&mut acc.residual_cells_h, 0.3, 0.5),
-            0,
-            "a target change must clear the carried horizontal residual too"
+            acc.accumulate(0.5, 0.0, 0.25),
+            WheelSteps {
+                up: 2,
+                report_up: 1,
+                report_right: 0
+            }
         );
     }
 
