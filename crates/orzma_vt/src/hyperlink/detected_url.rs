@@ -1,10 +1,12 @@
 //! Plain-text URL lookup: the URL a viewport cell shows, found across
 //! soft wraps and mapped back to the cells showing it.
 
-use crate::hyperlink::url_match::{UrlMatch, is_url_body};
+use crate::hyperlink::detected_url::url_match::{UrlMatch, is_url_body};
 use crate::screen::cell::Cell;
 use crate::screen::grid::coords::GridColumn;
 use crate::screen::viewport::{ViewportLine, ViewportPoint};
+
+mod url_match;
 
 /// A URL shown in the viewport's plain text, with the cells that show its
 /// first and last characters.
@@ -24,17 +26,27 @@ impl DetectedUrl {
     /// `rows` holds the viewport's cells row by row. `wraps[r]` is how many
     /// leading cells of row `r` continue on row `r + 1`, and a missing
     /// entry reads as `None`. `continues_from_above` says whether row 0
-    /// continues a line from above the viewport. A URL is recognized as
-    /// [`UrlMatch::scan`] recognizes one in the cell's logical line, which
-    /// joins its rows through their wraps. That line skips continuation
-    /// columns and the cells past a row's wrap, and reads a cell carrying
-    /// an OSC 8 hyperlink as a blank.
+    /// continues a line from above the viewport. The URL is looked up in
+    /// the cell's logical line, which joins its rows through their wraps.
+    /// That line skips continuation columns and the cells past a row's
+    /// wrap, and reads a cell carrying an OSC 8 hyperlink as a blank.
+    ///
+    /// A URL starts with `http://`, `https://`, `ftp://` or `mailto:`,
+    /// matched ASCII case-insensitively, at the start of the line or after
+    /// a character that is not an ASCII letter or digit. Its body runs over
+    /// printable ASCII other than ``<>"`{}|\^``, keeping balanced `()` and
+    /// `[]`, and ends before an unmatched `)` or `]`; trailing `.,:;!?'([`
+    /// are then trimmed. A non-ASCII character right after the body ends
+    /// the URL there when it is whitespace, a control, a width-2 character,
+    /// or one of `’”»›–—`, and voids the URL otherwise. A scheme with
+    /// nothing left after it is not a URL, and a scheme inside a URL does
+    /// not start another one.
     ///
     /// Returns `None` when the cell shows no URL, and when the URL may run
-    /// past the viewport: on a line continuing from above, a match that
-    /// starts before the line's first visible character that cannot be
-    /// in a URL body; on a line continuing below, a match whose scan
-    /// reached the line's last visible character.
+    /// past the viewport: on a line continuing from above, a URL that
+    /// starts before the line's first visible character that cannot be in
+    /// a URL body; on a line continuing below, a URL whose body, before
+    /// trimming, runs to the line's last visible character.
     pub fn at(
         rows: &[Vec<Cell>],
         wraps: &[Option<u16>],

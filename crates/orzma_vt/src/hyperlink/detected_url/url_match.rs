@@ -7,7 +7,7 @@ use std::ops::Range;
 
 /// One URL found in plain text, as byte ranges into that text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UrlMatch {
+pub(super) struct UrlMatch {
     /// The URL, with trailing punctuation trimmed.
     pub url: Range<usize>,
     /// Where the scan ended before trimming, at or after `url`'s end.
