@@ -2,8 +2,7 @@
 """Generate licenses/THIRD-PARTY-LICENSES.md aggregating all third-party licenses.
 
 Sections, in fixed order: Rust crates (cargo-about), npm packages
-(@quantco/pnpm-licenses, scoped to @orzma/orzmd-web prod deps), bundled fonts,
-and CEF/Chromium. Output is deterministic so CI can detect drift.
+(@quantco/pnpm-licenses, scoped to @orzma/orzmd-web prod deps), ported source (Vimium), bundled fonts, and CEF/Chromium. Output is deterministic so CI can detect drift.
 """
 from __future__ import annotations
 
@@ -21,6 +20,7 @@ LICENSES_DIR = REPO_ROOT / "licenses"
 OUTPUT_PATH = LICENSES_DIR / "THIRD-PARTY-LICENSES.md"
 NPM_DIR = REPO_ROOT / "apps" / "orzmd"
 FENCE = "~~~"
+NON_FONT_DIRS = {"chromium", "vimium"}
 
 HEADER = (
     "# Third-Party Licenses\n"
@@ -72,7 +72,7 @@ def render_npm_section(entries: list[dict]) -> str:
 def render_fonts_section(licenses_dir: Path) -> str:
     lines = ["## Bundled fonts\n"]
     vendors = sorted(
-        p for p in licenses_dir.iterdir() if p.is_dir() and p.name != "chromium"
+        p for p in licenses_dir.iterdir() if p.is_dir() and p.name not in NON_FONT_DIRS
     )
     for vendor in vendors:
         for license_file in sorted(f for f in vendor.iterdir() if f.is_file()):
@@ -95,11 +95,24 @@ def render_chromium_section(licenses_dir: Path) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def render_ported_section(licenses_dir: Path) -> str:
+    license_text = (licenses_dir / "vimium" / "MIT-LICENSE.txt").read_text(encoding="utf-8")
+    lines = [
+        "## Ported source\n",
+        "orzbrowser's page scroller (`apps/orzbrowser/web/page/scroller.ts`) is ported\n"
+        "from Vimium's `content_scripts/scroller.js` (https://github.com/philc/vimium).\n"
+        "Its license follows.\n",
+        _fenced(license_text),
+    ]
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
 def assemble(rust_body: str, npm_entries: list[dict], licenses_dir: Path) -> str:
     parts = [
         HEADER,
         render_rust_section(rust_body),
         render_npm_section(npm_entries),
+        render_ported_section(licenses_dir),
         render_fonts_section(licenses_dir),
         render_chromium_section(licenses_dir),
     ]
