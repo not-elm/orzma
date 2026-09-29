@@ -452,8 +452,14 @@ impl<V: Vt> OrzmaTty<V> {
         let modes = self.routing_modes();
         let mut bytes = Vec::new();
         for decision in [
-            WheelDecision::route(modes, input.up, input.report_up, input.mods, cfg),
-            WheelDecision::route_horizontal(modes, input.report_right, input.mods, cfg),
+            WheelDecision::route(
+                modes,
+                input.steps.up,
+                input.steps.report_up,
+                input.mods,
+                cfg,
+            ),
+            WheelDecision::route_horizontal(modes, input.steps.report_right, input.mods, cfg),
         ] {
             self.stage_wheel_decision(&mut bytes, decision, input, modes);
         }

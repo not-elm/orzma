@@ -38,14 +38,16 @@ fn apply_wheel(e: On<RequestTtyWheel>, panes: PaneSender) {
 mod tests {
     use super::*;
     use crate::requests::test_support::{app_with_connection, sent, spawn_pane};
-    use orzma_tty::prelude::{CellCoord, ProtocolModifiers, WheelModifiers};
+    use orzma_tty::prelude::{CellCoord, ProtocolModifiers, WheelModifiers, WheelSteps};
     use orzmux::prelude::PaneId;
 
     fn input() -> WheelInput {
         WheelInput {
-            up: 2,
-            report_up: 1,
-            report_right: 0,
+            steps: WheelSteps {
+                up: 2,
+                report_up: 1,
+                report_right: 0,
+            },
             mods: WheelModifiers::default(),
             cell: Some(CellCoord { col: 1, row: 1 }),
             report_mods: ProtocolModifiers::default(),

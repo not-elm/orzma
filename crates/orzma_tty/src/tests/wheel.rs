@@ -3,19 +3,6 @@
 
 use super::*;
 
-/// A wheel frame of `up` vertical notches, as many vertical reports, and
-/// `right` horizontal reports over cell (6, 4), with no modifiers held.
-fn wheel(up: i32, right: i32) -> WheelInput {
-    WheelInput {
-        up,
-        report_up: up,
-        report_right: right,
-        mods: WheelModifiers::default(),
-        cell: Some(CellCoord { col: 6, row: 4 }),
-        report_mods: ProtocolModifiers::default(),
-    }
-}
-
 /// The routing policy these tests pin: three lines per notch, one fine
 /// line, and at most eight reports or notches per call.
 fn policy() -> WheelConfig {
@@ -50,8 +37,11 @@ fn send_wheel_over_a_tracking_terminal_writes_its_reports_in_one_write() {
 fn send_wheel_over_a_tracking_terminal_writes_the_reports_not_the_notches() {
     let (mut term, sink) = tracking_term();
     let input = WheelInput {
-        up: 3,
-        report_up: 1,
+        steps: WheelSteps {
+            up: 3,
+            report_up: 1,
+            report_right: 0,
+        },
         ..wheel(0, 0)
     };
     term.send_wheel(input, &policy()).expect("send_wheel");

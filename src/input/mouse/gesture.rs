@@ -2,7 +2,7 @@
 
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
-use orzma_tty::prelude::{CellCoord, PointerButton};
+use orzma_tty::prelude::{CellCoord, PointerButton, WheelSteps};
 use std::time::Duration;
 
 /// The terminal a held button locked the gesture to, and which buttons are
@@ -100,26 +100,14 @@ impl ClickTracker {
     }
 }
 
-/// One frame's wheel travel in whole steps: notches on the vertical axis,
-/// and wheel reports, one per whole cell, on both axes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(in crate::input::mouse) struct WheelSteps {
-    /// Vertical notches; positive is up.
-    pub up: i32,
-    /// Vertical reports; positive is up.
-    pub report_up: i32,
-    /// Horizontal reports; positive is right.
-    pub report_right: i32,
-}
-
 /// Carries the wheel remainders across frames, scoped to the last terminal
 /// the wheel targeted: the sub-notch remainder of the vertical axis, and
 /// the sub-cell remainder of each axis's report count.
 #[derive(Resource, Default)]
 pub(in crate::input::mouse) struct WheelAccumulator {
-    pub residual_cells: f32,
-    pub report_residual_cells: f32,
-    pub report_residual_cells_h: f32,
+    residual_cells: f32,
+    report_residual_cells: f32,
+    report_residual_cells_h: f32,
     last_target: Option<Entity>,
 }
 
@@ -135,6 +123,11 @@ impl WheelAccumulator {
         }
     }
 
+    /// Drops the sub-cell remainder of the horizontal report count.
+    pub fn drop_horizontal_residual(&mut self) {
+        self.report_residual_cells_h = 0.0;
+    }
+
     /// Adds one frame's travel in cells, where positive is up and right,
     /// and returns the whole steps it completes: a vertical notch per
     /// `cells_per_notch` cells, and a report per whole cell on each axis.
@@ -148,9 +141,9 @@ impl WheelAccumulator {
         const CELLS_PER_REPORT: f32 = 0.9999;
 
         WheelSteps {
-            up: accumulate_notches(&mut self.residual_cells, up, cells_per_notch),
-            report_up: accumulate_notches(&mut self.report_residual_cells, up, CELLS_PER_REPORT),
-            report_right: accumulate_notches(
+            up: accumulate_steps(&mut self.residual_cells, up, cells_per_notch),
+            report_up: accumulate_steps(&mut self.report_residual_cells, up, CELLS_PER_REPORT),
+            report_right: accumulate_steps(
                 &mut self.report_residual_cells_h,
                 right,
                 CELLS_PER_REPORT,
@@ -170,28 +163,6 @@ pub(in crate::input::mouse) fn wheel_delta_cells(
         MouseScrollUnit::Line => y,
         MouseScrollUnit::Pixel => y / cell_h.max(1.0),
     }
-}
-
-/// Adds `delta_cells` to `residual` and returns whole notches to emit
-/// (positive = up/older for the vertical axis, right for the horizontal axis),
-/// carrying the remainder. Resets `residual` on a sign flip, then processes the
-/// new delta at full magnitude. A zero / negative-zero delta has no direction
-/// and must not trip the sign-flip reset.
-pub(in crate::input::mouse) fn accumulate_notches(
-    residual: &mut f32,
-    delta_cells: f32,
-    cells_per_notch: f32,
-) -> i32 {
-    if *residual != 0.0 && delta_cells != 0.0 && (*residual).signum() != delta_cells.signum() {
-        *residual = 0.0;
-    }
-    let threshold = cells_per_notch.max(f32::EPSILON);
-    *residual += delta_cells;
-    let notches = (*residual / threshold).trunc() as i32;
-    if notches != 0 {
-        *residual -= notches as f32 * threshold;
-    }
-    notches
 }
 
 /// Dominant-axis lock for a single frame's `(vertical, horizontal)` cell
@@ -219,6 +190,24 @@ pub(in crate::input::mouse) fn lock_dominant_axis(
     } else {
         (vertical, 0.0)
     }
+}
+
+/// Adds `delta_cells` to `residual` and returns the whole steps of
+/// `cells_per_step` cells to emit (positive = up/older for the vertical axis,
+/// right for the horizontal axis), carrying the remainder. Resets `residual`
+/// on a sign flip, then processes the new delta at full magnitude. A zero /
+/// negative-zero delta has no direction and must not trip the sign-flip reset.
+fn accumulate_steps(residual: &mut f32, delta_cells: f32, cells_per_step: f32) -> i32 {
+    if *residual != 0.0 && delta_cells != 0.0 && (*residual).signum() != delta_cells.signum() {
+        *residual = 0.0;
+    }
+    let threshold = cells_per_step.max(f32::EPSILON);
+    *residual += delta_cells;
+    let steps = (*residual / threshold).trunc() as i32;
+    if steps != 0 {
+        *residual -= steps as f32 * threshold;
+    }
+    steps
 }
 
 #[cfg(test)]
@@ -304,9 +293,9 @@ mod tests {
     #[test]
     fn accumulator_emits_on_threshold_and_carries_remainder() {
         let mut acc = WheelAccumulator::default();
-        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 0);
-        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 1);
-        assert_eq!(accumulate_notches(&mut acc.residual_cells, -1.0, 0.5), -2);
+        assert_eq!(accumulate_steps(&mut acc.residual_cells, 0.3, 0.5), 0);
+        assert_eq!(accumulate_steps(&mut acc.residual_cells, 0.3, 0.5), 1);
+        assert_eq!(accumulate_steps(&mut acc.residual_cells, -1.0, 0.5), -2);
     }
 
     /// Asserts that a change of wheel target clears the notch residual and
@@ -393,9 +382,9 @@ mod tests {
     #[test]
     fn accumulator_zero_delta_does_not_reset_residual() {
         let mut acc = WheelAccumulator::default();
-        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 0);
-        assert_eq!(accumulate_notches(&mut acc.residual_cells, -0.0, 0.5), 0);
-        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 1);
+        assert_eq!(accumulate_steps(&mut acc.residual_cells, 0.3, 0.5), 0);
+        assert_eq!(accumulate_steps(&mut acc.residual_cells, -0.0, 0.5), 0);
+        assert_eq!(accumulate_steps(&mut acc.residual_cells, 0.3, 0.5), 1);
     }
 
     #[test]

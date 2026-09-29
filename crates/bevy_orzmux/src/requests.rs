@@ -151,7 +151,7 @@ mod tests {
     use crate::requests::test_support::{app_with_connection, spawn_pane};
     use orzma_tty::prelude::{
         CellCoord, KeyText, PointerButton, PointerInput, PointerKind, ProtocolModifiers,
-        TerminalKey, TerminalModifiers, WheelInput, WheelModifiers,
+        TerminalKey, TerminalModifiers, WheelInput, WheelModifiers, WheelSteps,
     };
     use orzma_vt::prelude::Scroll;
     use orzmux::prelude::{CloseTarget, PaneId, SplitId, WorkspaceId};
@@ -187,9 +187,11 @@ mod tests {
         world.trigger(RequestTtyWheel {
             terminal: pane,
             input: WheelInput {
-                up: 1,
-                report_up: 1,
-                report_right: 0,
+                steps: WheelSteps {
+                    up: 1,
+                    report_up: 1,
+                    report_right: 0,
+                },
                 mods: WheelModifiers::default(),
                 cell: Some(CellCoord { col: 1, row: 1 }),
                 report_mods: ProtocolModifiers::default(),

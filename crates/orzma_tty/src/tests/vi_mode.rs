@@ -98,54 +98,32 @@ fn an_unmoved_double_click_in_vi_mode_copies_nothing() {
     assert_eq!(term.vt.selection_text(), None);
 }
 
-/// Asserts that the wheel in vi mode scrolls the scrollback and reports
-/// nothing, even while the application tracks the mouse.
-///
-/// Case: a program that tracks the mouse has printed more than a screenful,
-/// and the user enters vi mode and turns the wheel up.
-#[test]
-fn the_wheel_in_vi_mode_scrolls_while_the_app_tracks_the_mouse() {
-    let (mut term, sink) = real_term(3);
-    term.feed_bytes(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\x1b[?1000h\x1b[?1006h")
-        .expect("the VT interprets the bytes");
-    term.switch_vi_mode(ViModeSwitch::Enter);
-    let wheel = WheelInput {
-        up: 1,
-        report_up: 1,
-        report_right: 0,
-        mods: WheelModifiers::default(),
-        cell: Some(CellCoord { col: 1, row: 1 }),
-        report_mods: ProtocolModifiers::default(),
-    };
-    term.send_wheel(wheel, &WheelConfig::default())
-        .expect("send_wheel");
-    term.settle_writes();
-    assert_ne!(term.vt.display_offset(), DisplayOffset(0));
-    assert_eq!(sink.contents(), b"");
-}
-
-/// Asserts that the wheel in vi mode scrolls by the notches rather than
-/// the reports, so a divergent report count changes nothing.
+/// Asserts that the wheel in vi mode scrolls the scrollback by the
+/// notches rather than the reports, and reports nothing, even while the
+/// application tracks the mouse.
 ///
 /// Case: a program that tracks the mouse has printed more than a screenful,
 /// and the user enters vi mode and turns the wheel up one notch while the
 /// frame carries five reports.
 #[test]
-fn the_wheel_in_vi_mode_scrolls_by_the_notches_not_the_reports() {
+fn the_wheel_in_vi_mode_scrolls_by_the_notches_while_the_app_tracks_the_mouse() {
     let (mut term, sink) = real_term(3);
     term.feed_bytes(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\x1b[?1000h\x1b[?1006h")
         .expect("the VT interprets the bytes");
     term.switch_vi_mode(ViModeSwitch::Enter);
-    let wheel = WheelInput {
-        up: 1,
-        report_up: 5,
-        report_right: 0,
-        mods: WheelModifiers::default(),
-        cell: Some(CellCoord { col: 1, row: 1 }),
-        report_mods: ProtocolModifiers::default(),
+    let input = WheelInput {
+        steps: WheelSteps {
+            up: 1,
+            report_up: 5,
+            report_right: 0,
+        },
+        ..wheel(0, 0)
     };
-    term.send_wheel(wheel, &WheelConfig::default())
-        .expect("send_wheel");
+    let cfg = WheelConfig {
+        lines_per_notch: 1,
+        ..WheelConfig::default()
+    };
+    term.send_wheel(input, &cfg).expect("send_wheel");
     term.settle_writes();
     assert_eq!(term.vt.display_offset(), DisplayOffset(1));
     assert_eq!(sink.contents(), b"");

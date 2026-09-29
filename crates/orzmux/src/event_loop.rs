@@ -623,7 +623,7 @@ mod tests {
     use crossbeam_channel::{RecvTimeoutError, bounded, unbounded};
     use orzma_tty::prelude::{
         CellCoord, KeyText, OrzmaTty, PointerButton, PointerInput, PointerKind, ProtocolModifiers,
-        WheelConfig, WheelModifiers,
+        WheelConfig, WheelModifiers, WheelSteps,
     };
     use orzma_tty::test_support::BlockingSink;
     use orzma_vt::Vt;
@@ -1169,9 +1169,11 @@ mod tests {
     /// One wheel-up notch and report over cell (1, 1) with nothing held.
     fn wheel_up() -> WheelInput {
         WheelInput {
-            up: 1,
-            report_up: 1,
-            report_right: 0,
+            steps: WheelSteps {
+                up: 1,
+                report_up: 1,
+                report_right: 0,
+            },
             mods: WheelModifiers::default(),
             cell: Some(CellCoord { col: 1, row: 1 }),
             report_mods: ProtocolModifiers::default(),

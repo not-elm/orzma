@@ -45,9 +45,10 @@ pub struct WheelModifiers {
     pub fine: bool,
 }
 
-/// One frame's wheel travel over a terminal, with what routing it needs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct WheelInput {
+/// One frame's wheel travel in whole steps: notches on the vertical axis,
+/// and wheel reports on both axes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WheelSteps {
     /// Vertical notches; positive is wheel-up. Cursor keys and viewport
     /// scrolls move by these.
     pub up: i32,
@@ -57,6 +58,13 @@ pub struct WheelInput {
     /// Horizontal wheel reports, one per whole cell of travel; positive is
     /// rightward.
     pub report_right: i32,
+}
+
+/// One frame's wheel travel over a terminal, with what routing it needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WheelInput {
+    /// The notches and reports the frame completed.
+    pub steps: WheelSteps,
     /// The held modifiers routing reads.
     pub mods: WheelModifiers,
     /// The cell under the cursor, or `None` when no cell was resolved for
@@ -152,7 +160,7 @@ impl WheelDecision {
         mods: WheelModifiers,
         cfg: &WheelConfig,
     ) -> Self {
-        if reports == 0 || !modes.mouse_reporting_active() || mods.shift {
+        if !modes.mouse_reporting_active() || mods.shift {
             return Self::Noop;
         }
         let button = if reports > 0 {
@@ -264,8 +272,8 @@ mod tests {
         );
     }
 
-    /// Asserts that reports count reports, not lines, whatever the lines
-    /// per notch and the fine modifier say.
+    /// Asserts that the report count follows the frame's reports, not
+    /// lines, whatever the lines per notch and the fine modifier say.
     ///
     /// Case: a user who set `lines_per_notch = 5` holds the fine modifier
     /// while spinning the wheel one click, three notches and one report,
@@ -310,24 +318,15 @@ mod tests {
         );
     }
 
-    /// Asserts that the report route sends the frame's report count and
-    /// ignores its notch count, so notches without a report send nothing.
+    /// Asserts that a tracking terminal gets nothing for notches that come
+    /// without a report.
     ///
-    /// Case: nvim tracks the mouse, and the user swipes the trackpad up one
-    /// cell, which the host counts as three notches and one report, then
-    /// nudges it a third of a cell, which completes a notch but no report.
+    /// Case: nvim tracks the mouse, and the user nudges the trackpad a
+    /// third of a cell, which completes a notch but no report.
     #[test]
-    fn the_report_route_counts_reports_not_notches() {
-        let cfg = policy();
+    fn notches_without_a_report_route_nothing_while_tracking() {
         assert_eq!(
-            WheelDecision::route(tracking(), 3, 1, PLAIN, &cfg),
-            WheelDecision::Report {
-                button: MouseButton::WheelUp,
-                count: 1
-            }
-        );
-        assert_eq!(
-            WheelDecision::route(tracking(), 1, 0, PLAIN, &cfg),
+            WheelDecision::route(tracking(), 1, 0, PLAIN, &policy()),
             WheelDecision::Noop
         );
     }
