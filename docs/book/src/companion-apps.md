@@ -112,10 +112,10 @@ contains an uppercase letter.
 ## orzbrowser
 
 orzbrowser runs inside an orzma pane and loads a remote URL in an embedded
-webview, wrapped in native terminal chrome: a status line, an address bar, and
-a help modal. You drive it from the keyboard like a Vim-style pager — scrolling,
-following links by typing hint labels, and stepping through history — while the
-page renders in the webview.
+webview below a two-row toolbar. You drive it from the keyboard like a
+Vim-style pager — scrolling, following links by typing hint labels, and
+stepping through history — and type addresses or search terms into the
+toolbar's address bar.
 
 ### Features
 
@@ -126,8 +126,10 @@ page renders in the webview.
   then type a label to follow it. Landing on a text field switches to Insert
   mode automatically.
 - **History** — `H` and `L` step back and forward through the session history.
-- **Address bar** — `o` (or `:`) opens the address bar pre-filled with the
-  current URL; a scheme-less entry like `github.com` is completed to `https://`.
+- **Address bar with search** — `o` (or `:`, or a click on the address) opens
+  the address bar. Type an address to open it, or any other words to search
+  for them. The caret moves with the arrow keys, and input methods work, so
+  you can search in any language.
 - **Modal input** — Normal, Insert, Address, Hint, and Help modes. `i` hands
   keyboard focus to the page so you can type into it; `Esc` returns to Normal.
 - **In-app help** — `?` shows the full shortcut list.
@@ -135,20 +137,44 @@ page renders in the webview.
 ### Usage
 
 ```bash
-orzbrowser <url>
+orzbrowser [address or search terms]
 ```
 
-The status line at the top shows the current mode and the loaded URL:
+`orzbrowser github.com` opens a site, and `orzbrowser rust async` searches for
+the words. With no argument, orzbrowser opens the search engine's front page
+with the address bar ready for typing.
 
-```
-[Normal] https://example.com
+The toolbar shows the mode, the address with its host in bold, and the main
+keys of the mode. An `http` address shows **Not secure** before its host.
+
+### Address bar
+
+The address bar decides what Enter does as you type, and shows it on the right
+(`↵ Open github.com` or `↵ Search DuckDuckGo`):
+
+| You type | Enter does |
+| --- | --- |
+| An `http://` or `https://` URL | Opens it |
+| A URL with another scheme, such as `file:///etc` | Nothing; the reason turns red |
+| Text with a space, such as `rust async` | Searches for it |
+| `localhost`, an IP address, or `name:port` | Opens it over `http` |
+| A name with a dot and a letter-only ending, such as `docs.rs/serde` | Opens it over `https` |
+| Anything else, such as `rust` or `3.14` | Searches for it |
+| `?` followed by words, such as `? node.js` | Searches for the words, even when they look like an address |
+
+Pressing Enter on the current address reloads the page. `Esc` closes the
+address bar without navigating. While the address bar is open, `Ctrl-c` does
+not quit; press `Esc` and then `q`.
+
+Searches go to DuckDuckGo. To use another engine, set `ORZBROWSER_SEARCH_URL`
+to its search URL with `{}` where the search terms go:
+
+```bash
+export ORZBROWSER_SEARCH_URL='https://www.google.com/search?q={}'
 ```
 
-Opening the address bar with `o` or `:` replaces it with an editable prompt:
-
-```
-> https://example.com_
-```
+The URL must be `http` or `https` and contain exactly one `{}`, in its path,
+query, or fragment; otherwise orzbrowser exits with an error.
 
 ### Keyboard shortcuts
 
@@ -173,19 +199,17 @@ Opening the address bar with `o` or `:` replaces it with an editable prompt:
 | `?` | Show help |
 | `q` / `Ctrl-c` | Quit |
 
-While the page has keyboard focus, `Ctrl-c` copies in the page instead of
-quitting; `q` still quits, since Normal mode forwards it to the TUI even
-while the page is focused.
+While the page or the toolbar has keyboard focus, `Ctrl-c` copies instead of
+quitting; `q` still quits, since Normal mode forwards it to orzbrowser even
+while either has focus.
 
 #### Address bar
 
 | Key | Action |
 | --- | --- |
-| (type) | Edit the URL |
-| `Backspace` | Delete the last character |
-| `Enter` | Navigate to the URL |
+| (type) | Edit the address; the arrow keys, `Home`, and `End` move the caret |
+| `Enter` | Open the address, or search for the words |
 | `Esc` | Cancel |
-| `Ctrl-c` | Quit |
 
 #### Hint
 
