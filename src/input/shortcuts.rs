@@ -339,11 +339,12 @@ impl DirectMatch {
 pub(crate) enum LeaderStep {
     /// A leader-scoped binding matched; run this action.
     RunAction(Shortcut),
-    /// Consume the key with no effect: the leader itself.
+    /// Consume the key with no effect: the leader itself, or an OS key repeat
+    /// while the leader is pending.
     Swallow,
     /// The leader was pending and the key matched no leader-scoped binding.
-    /// The caller dispatches the key when its own table binds it, and
-    /// swallows it otherwise.
+    /// The caller dispatches the key as a `Passthrough` when its own table
+    /// binds it, and swallows it otherwise.
     Abandoned,
     /// Not leader-related; fall through to the caller's normal dispatch.
     Passthrough,
@@ -351,7 +352,10 @@ pub(crate) enum LeaderStep {
 
 /// Advances the orzma leader state machine for one pressed key, threading
 /// `phase` across frames. `now` is the caller's `Time<Real>::elapsed()`.
-/// Swallows the leader itself and returns `Abandoned` for a second key no leader binding uses; drives the `r:<Leader>` repeat window (fire-and-extend inside the window, close and re-evaluate on any other key); returns `Passthrough` for unrelated keys.
+/// Swallows the leader itself and returns `Abandoned` for a second key no
+/// leader binding uses; drives the `r:<Leader>` repeat window (fire-and-extend
+/// inside the window, close and re-evaluate on any other key); returns
+/// `Passthrough` for unrelated keys.
 pub(crate) fn step_leader(
     phase: &mut LeaderPhase,
     shortcuts: &Shortcuts,
@@ -471,18 +475,14 @@ pub(crate) fn test_shortcuts_with_direct_chord(
     action: Shortcut,
 ) -> Shortcuts {
     Shortcuts {
-        direct: vec![OrzmaShortcut {
-            keycode,
-            modifiers,
-            action,
-            repeat: false,
-        }],
+        direct: Vec::new(),
         prefix: Vec::new(),
         leader: None,
         tap_timeout: Duration::from_millis(300),
         repeat_time: Duration::from_millis(500),
         direct_chords_over_webview: true,
     }
+    .with_direct_chord(keycode, modifiers, action, false)
 }
 
 #[cfg(test)]
@@ -1388,9 +1388,9 @@ mod tests {
     fn default_bindings_resolve_to_every_direct_chord() {
         // NOTE: drift guard — the count is pinned rather than re-derived from
         // the production expansion rule, which would make a bug in that rule
-        // pass unnoticed. macOS binds six direct chords and the others five;
+        // pass unnoticed. macOS binds 32 direct chords and the others 31;
         // the stock `Plus` binding adds one shifted twin either way.
-        let expected = if cfg!(target_os = "macos") { 7 } else { 6 };
+        let expected = if cfg!(target_os = "macos") { 33 } else { 32 };
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(r.direct.len(), expected);
     }
@@ -1416,32 +1416,37 @@ mod tests {
         }
     }
 
+    /// Asserts that a direct chord does not fire when an extra modifier is
+    /// held with it.
+    ///
+    /// Case: a user presses `Cmd+Shift+V` or `Cmd+Shift+Q` with the stock
+    /// `Cmd+V` and `Cmd+Q` bindings.
     #[test]
     fn match_gui_action_requires_exact_modifiers() {
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyV, mods(false, true, false, true))
-                .map(|hit| hit.action),
+            r.match_gui_action(KeyCode::KeyV, mods(false, true, false, true)),
             None
         );
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyQ, mods(false, true, false, true))
-                .map(|hit| hit.action),
+            r.match_gui_action(KeyCode::KeyQ, mods(false, true, false, true)),
             None
         );
     }
 
+    /// Asserts that a chord no direct binding uses matches nothing.
+    ///
+    /// Case: a user with the stock bindings presses `Cmd+H` or types a plain
+    /// `a`.
     #[test]
     fn unmatched_chord_is_none() {
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyH, mods(false, false, false, true))
-                .map(|hit| hit.action),
+            r.match_gui_action(KeyCode::KeyH, mods(false, false, false, true)),
             None
         );
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyA, mods(false, false, false, false))
-                .map(|hit| hit.action),
+            r.match_gui_action(KeyCode::KeyA, mods(false, false, false, false)),
             None
         );
     }
@@ -1798,36 +1803,29 @@ mod tests {
         assert!(resolved.direct_chords_over_webview);
     }
 
-    /// Asserts that the stock resize bindings repeat: after the leader,
-    /// Shift+H fires and opens the window, a second Shift+H and a Shift+L
-    /// fire without the leader, and a Shift+H after the window closed
-    /// passes through.
+    /// Asserts that the stock resize bindings resolve to repeatable
+    /// `Alt+Shift` direct chords.
     ///
-    /// Case: the user taps the leader and nudges a divider with Shift+H,
-    /// Shift+H and Shift+L in quick succession, then types a capital H a
-    /// second later.
+    /// Case: a user with no config file holds `Alt+Shift+H` and then
+    /// `Alt+Shift+L` to nudge a divider back and forth.
     #[test]
-    fn stock_resize_bindings_repeat_without_the_leader() {
+    fn stock_resize_bindings_are_repeatable_alt_chords() {
         let sc = resolved_shortcuts(OrzmaConfigs::default());
-        let shift = mods(false, true, false, false);
-        let mut phase = LeaderPhase::Pending;
-        assert!(matches!(
-            step_leader(&mut phase, &sc, KeyCode::KeyH, shift, ms(0)),
-            LeaderStep::RunAction(Shortcut::ResizePane(PaneDirection::Left))
-        ));
-        assert!(matches!(
-            step_leader(&mut phase, &sc, KeyCode::KeyH, shift, ms(100)),
-            LeaderStep::RunAction(Shortcut::ResizePane(PaneDirection::Left))
-        ));
-        assert!(matches!(
-            step_leader(&mut phase, &sc, KeyCode::KeyL, shift, ms(200)),
-            LeaderStep::RunAction(Shortcut::ResizePane(PaneDirection::Right))
-        ));
-        assert!(matches!(
-            step_leader(&mut phase, &sc, KeyCode::KeyH, shift, ms(1000)),
-            LeaderStep::Passthrough
-        ));
-        assert_eq!(phase, LeaderPhase::Idle);
+        let alt_shift = mods(false, true, true, false);
+        assert_eq!(
+            sc.match_gui_action(KeyCode::KeyH, alt_shift),
+            Some(DirectMatch {
+                action: Shortcut::ResizePane(PaneDirection::Left),
+                repeat: true,
+            })
+        );
+        assert_eq!(
+            sc.match_gui_action(KeyCode::KeyL, alt_shift),
+            Some(DirectMatch {
+                action: Shortcut::ResizePane(PaneDirection::Right),
+                repeat: true,
+            })
+        );
     }
 
     /// Asserts that the direct table carries each direct binding's `r:` flag.

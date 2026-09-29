@@ -65,11 +65,9 @@ impl HeldModifiers {
     pub fn for_key(&self, logical: &Key, policy: AltPolicy) -> Modifiers {
         let composes = self.composes_character(logical);
         Modifiers {
-            ctrl: self.ctrl,
-            shift: self.shift,
             alt: self.left_counts_as_alt(policy, composes)
                 || self.right_counts_as_alt(policy, composes),
-            meta: self.meta,
+            ..self.raw()
         }
     }
 
@@ -118,10 +116,7 @@ pub(crate) struct AltPolicy {
 impl Default for AltPolicy {
     /// Counts both sides as Alt.
     fn default() -> Self {
-        Self {
-            left_always_alt: true,
-            right_always_alt: true,
-        }
+        Self::for_option_as_alt(OptionAsAlt::Both)
     }
 }
 
@@ -129,11 +124,11 @@ impl AltPolicy {
     /// Returns the policy for the platform this build targets: the
     /// `option_as_alt` sides on macOS, and both sides elsewhere.
     pub fn for_host(option_as_alt: OptionAsAlt) -> Self {
-        if cfg!(target_os = "macos") {
-            Self::for_option_as_alt(option_as_alt)
+        Self::for_option_as_alt(if cfg!(target_os = "macos") {
+            option_as_alt
         } else {
-            Self::default()
-        }
+            OptionAsAlt::Both
+        })
     }
 
     /// Returns the policy that makes exactly the Option keys `option_as_alt`

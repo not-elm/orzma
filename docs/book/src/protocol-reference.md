@@ -215,7 +215,7 @@ the initial list;
 `set_forward_keys` replaces it wholesale. Each chord is:
 
 ```json
-{ "mods": ["alt"], "key": "h" }
+{ "mods": ["alt"], "key": "b" }
 ```
 
 `mods` is any subset of `"alt"`, `"ctrl"`, `"shift"`, `"meta"`. `key` is one of:
