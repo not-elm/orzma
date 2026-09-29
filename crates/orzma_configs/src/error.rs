@@ -1,14 +1,16 @@
-//! Error type for orzma config loading.
+//! The error type the config loader reports, and the result alias built on it.
 
 use crate::shortcuts::{DuplicateChord, KeyChord};
 use crate::vi_mode::DuplicateViModeKey;
 use std::path::PathBuf;
+use thiserror::Error;
 
-/// Result alias for the config loader.
+/// A `Result` whose error is [`OrzmaConfigsError`].
 pub type OrzmaConfigsResult<T = ()> = Result<T, OrzmaConfigsError>;
 
-/// Errors that can occur while resolving, reading, or parsing the config file.
-#[derive(Debug, thiserror::Error)]
+/// Every failure the config loader reports: resolving, reading, parsing, or
+/// validating the config file.
+#[derive(Debug, Error)]
 pub enum OrzmaConfigsError {
     /// Reading the config file failed for a reason other than `NotFound`.
     #[error("failed to read config file at {path}")]
@@ -83,6 +85,72 @@ pub enum OrzmaConfigsError {
     /// Neither `$XDG_CONFIG_HOME` nor a home directory could be resolved.
     #[error("could not determine config directory (no $XDG_CONFIG_HOME and no home dir)")]
     HomeDirNotFound,
+
+    /// A `[shortcuts]` chord string that does not parse.
+    #[error(transparent)]
+    KeyChord(#[from] KeyChordParseError),
+
+    /// A `[vi-mode]` key string that does not parse.
+    #[error(transparent)]
+    ViModeKey(#[from] ViModeKeyParseError),
+
+    /// A `[font]` style string with a token that names no weight or slant.
+    #[error(transparent)]
+    FontStyleToken(#[from] InvalidFontStyleToken),
+}
+
+/// The reason a chord string does not parse.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum KeyChordParseError {
+    /// Consecutive `+` or trailing `+` produced an empty token between separators.
+    #[error("empty token in chord string (consecutive '+' or trailing '+')")]
+    EmptyToken,
+    /// A token that is neither a known modifier nor a known named key.
+    #[error("unknown named key: {0:?}")]
+    UnknownNamedKey(String),
+    /// The same modifier bit was set twice. Catches both literal duplicates
+    /// (`"Cmd+Cmd+S"`) and alias collisions (`"Cmd+Meta+S"`, both set `meta`).
+    #[error("duplicate modifier {token:?} (normalized to {normalized_bit})")]
+    DuplicateModifier {
+        /// The offending token as it appeared in the input.
+        token: String,
+        /// Which `Modifiers` bit was already set.
+        normalized_bit: &'static str,
+    },
+    /// More than one non-modifier token appeared in the chord.
+    #[error("multiple key tokens in chord string")]
+    MultipleKeyTokens,
+}
+
+/// The reason a vi-mode key string does not parse.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ViModeKeyParseError {
+    /// Empty key token.
+    #[error("empty vi-mode key")]
+    Empty,
+    /// A modifier other than `Ctrl` (`Cmd`/`Alt`/`Shift`/aliases).
+    #[error(
+        "modifier {0:?} is not allowed in [vi-mode] (only Ctrl+); express Shift via the character case"
+    )]
+    ForbiddenModifier(String),
+    /// More than one `+`-separated segment beyond `Ctrl+<key>`.
+    #[error("too many tokens in vi-mode key {0:?} (expected [Ctrl+]<key>)")]
+    TooManyTokens(String),
+    /// A multi-character token that is not a known named key.
+    #[error("unknown vi-mode key {0:?} (expected one character or a named key)")]
+    UnknownKey(String),
+    /// `Ctrl+` with a non-alphanumeric character.
+    #[error("Ctrl+{0:?} is not allowed (Ctrl accepts ASCII alphanumerics and named keys only)")]
+    CtrlNonAlphanumeric(String),
+}
+
+/// A `style` string that contained a token matching neither a weight nor a
+/// slant name.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[error("unknown font style token {token:?}")]
+pub struct InvalidFontStyleToken {
+    /// The offending token, as written by the user.
+    pub token: String,
 }
 
 fn format_dupes(dupes: &[DuplicateChord]) -> String {

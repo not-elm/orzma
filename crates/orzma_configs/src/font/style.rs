@@ -1,5 +1,6 @@
 //! Parser turning a `style` string into a font weight + slant.
 
+use crate::error::{InvalidFontStyleToken, OrzmaConfigsError};
 use std::str::FromStr;
 
 /// A parsed font `style` string: an OpenType weight (100–950) plus slant.
@@ -22,16 +23,8 @@ pub enum FontSlant {
     Oblique,
 }
 
-/// A `style` string that contained a token matching neither a weight nor a
-/// slant name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InvalidFontStyleToken {
-    /// The offending token, as written by the user.
-    pub token: String,
-}
-
 impl FromStr for FontStyleSpec {
-    type Err = InvalidFontStyleToken;
+    type Err = OrzmaConfigsError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         // Collapse away spaces and hyphens so "Extra Bold", "extra-bold", and
@@ -202,7 +195,9 @@ mod tests {
 
     #[test]
     fn unknown_token_errors_and_names_the_token() {
-        let err = FontStyleSpec::from_str("Blod").unwrap_err();
+        let Err(OrzmaConfigsError::FontStyleToken(err)) = FontStyleSpec::from_str("Blod") else {
+            panic!("expected FontStyleToken");
+        };
         assert_eq!(err.token, "Blod");
     }
 }

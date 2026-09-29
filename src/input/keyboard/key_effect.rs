@@ -2,6 +2,7 @@
 //! pressed key's effect, with no ECS handles.
 
 use crate::action::vi::ResolvedViModeKeys;
+use crate::input::keyboard::held_modifiers::{AltPolicy, HeldModifiers};
 use crate::input::shortcuts::{
     LeaderPhase, LeaderStep, Shortcuts, is_modifier_key, refire_held_repeat, step_leader,
 };
@@ -38,14 +39,19 @@ pub(crate) enum KeyEffect {
         logical: Key,
         /// The physical key, for named-key mapping.
         key_code: KeyCode,
+        /// The modifiers the key is typed with.
+        mods: Modifiers,
     },
 }
 
 /// Per-batch context needed to classify one frame's pressed keys, beyond
 /// the leader/shortcut state threaded through `leader_phase`.
 pub(crate) struct BatchContext<'a> {
-    /// The frame's modifier snapshot, shared by every event in the batch.
-    pub(crate) mods: Modifiers,
+    /// The frame's held modifier keys, shared by every event in the batch.
+    pub(crate) held: HeldModifiers,
+    /// Which held Alt / Option keys count as Alt for a key that composes a
+    /// character.
+    pub(crate) alt_policy: AltPolicy,
     /// The caller's `Time<Real>::elapsed()`, for the repeat-window deadline.
     pub(crate) now: Duration,
     /// Whether the focused terminal is currently in vi mode.
@@ -59,18 +65,17 @@ pub(crate) struct BatchContext<'a> {
 }
 
 impl BatchContext<'_> {
-    /// Whether a direct chord bound to `action` claims the key, rather than
-    /// leaving it to vi-mode resolution or to the PTY.
+    /// Whether a direct chord bound to `action` claims a key pressed with
+    /// `mods`, rather than leaving it to vi-mode resolution or to the PTY.
     ///
     /// A direct `Copy` on a Ctrl-only chord claims the key only while a
     /// selection exists, so `Ctrl+C` still reaches the PTY as `0x03` with
     /// nothing to copy. A direct `Paste` does not claim the key in vi mode,
     /// where the action is inert.
-    fn claims_direct_chord(&self, action: Shortcut) -> bool {
+    fn claims_direct_chord(&self, action: Shortcut, mods: Modifiers) -> bool {
         match action {
             Shortcut::Copy => {
-                let ctrl_only =
-                    self.mods.ctrl && !self.mods.shift && !self.mods.alt && !self.mods.meta;
+                let ctrl_only = mods.ctrl && !mods.shift && !mods.alt && !mods.meta;
                 self.has_selection || !ctrl_only
             }
             Shortcut::Paste => !self.in_vi_mode,
@@ -81,10 +86,10 @@ impl BatchContext<'_> {
 
 /// The result of classifying one frame's pressed keys: the per-key
 /// `KeyEffect`s, plus the physical keys withheld from the focused webview —
-/// those the leader claimed, the direct chords that fired, and those that
-/// matched a forward chord. The caller applies the frame's modifier snapshot
-/// when withholding them from CEF via `CefKeyboardFilter`; it is empty on the
-/// non-webview path.
+/// those the leader claimed, those a direct chord matched (including an OS
+/// repeat that does not fire it again), and those that matched a forward
+/// chord. The caller applies the frame's modifier snapshot when withholding
+/// them from CEF via `CefKeyboardFilter`; it is empty on the non-webview path.
 pub(crate) struct ClassifiedKeys {
     pub(crate) effects: Vec<KeyEffect>,
     pub(crate) webview_suppressed: Vec<KeyCode>,
@@ -120,15 +125,18 @@ pub(crate) fn classify_key_batch<'a>(
     let mut effects = Vec::new();
     let mut webview_suppressed = Vec::new();
     for ev in events.filter(|ev| ev.state == ButtonState::Pressed) {
+        let mods = ctx.held.for_key(&ev.logical_key, ctx.alt_policy);
+        let step = step_with_repeat(leader_phase, held_repeat, shortcuts, ev, mods, ctx.now);
+        let abandoned = step == LeaderStep::Abandoned;
         if ctx.webview_focused {
             // NOTE: the leader, and the direct chords `match_over_webview`
             // admits, run even while a webview owns the keyboard, ahead of the
             // chords the webview declared as forward keys. Every key they claim
-            // (the leader chord itself, an abandoned second key, a fired
-            // binding, or a forwarded chord) is recorded in `webview_suppressed`
-            // so the caller withholds it from CEF; any other key still reaches
-            // the page.
-            match step_with_repeat(leader_phase, held_repeat, shortcuts, ev, ctx.mods, ctx.now) {
+            // (the leader chord itself, an abandoned second key, a direct
+            // chord, including its repeats, or a forwarded chord) is recorded
+            // in `webview_suppressed` so the caller withholds it from CEF; any
+            // other key still reaches the page.
+            match step {
                 LeaderStep::Swallow => {
                     webview_suppressed.push(ev.key_code);
                 }
@@ -139,37 +147,49 @@ pub(crate) fn classify_key_batch<'a>(
                         via_leader: true,
                     });
                 }
-                LeaderStep::Passthrough => {
-                    if let Some(action) = shortcuts.match_over_webview(ev.key_code, ctx.mods) {
+                LeaderStep::Passthrough | LeaderStep::Abandoned => {
+                    if let Some(hit) = shortcuts.match_over_webview(ev.key_code, mods) {
                         webview_suppressed.push(ev.key_code);
-                        effects.push(KeyEffect::Shortcut {
-                            action,
-                            via_leader: false,
-                        });
+                        if hit.fires(ev.repeat) {
+                            effects.push(KeyEffect::Shortcut {
+                                action: hit.action,
+                                via_leader: false,
+                            });
+                        }
                     } else if ctx
                         .forward_chords
                         .iter()
-                        .any(|chord| chord_matches(chord, ev.key_code, &ev.logical_key, ctx.mods))
+                        .any(|chord| chord_matches(chord, ev.key_code, &ev.logical_key, mods))
                     {
                         webview_suppressed.push(ev.key_code);
                         effects.push(KeyEffect::Type {
                             logical: ev.logical_key.clone(),
                             key_code: ev.key_code,
+                            mods,
                         });
+                    } else if abandoned {
+                        webview_suppressed.push(ev.key_code);
                     }
                 }
             }
             continue;
         }
-        let action =
-            match step_with_repeat(leader_phase, held_repeat, shortcuts, ev, ctx.mods, ctx.now) {
-                LeaderStep::Swallow => continue,
-                LeaderStep::RunAction(action) => Some((action, true)),
-                LeaderStep::Passthrough => shortcuts
-                    .match_gui_action(ev.key_code, ctx.mods)
-                    .filter(|action| ctx.claims_direct_chord(*action))
-                    .map(|action| (action, false)),
-            };
+        let action = match step {
+            LeaderStep::Swallow => continue,
+            LeaderStep::RunAction(action) => Some((action, true)),
+            LeaderStep::Passthrough | LeaderStep::Abandoned => {
+                match shortcuts.match_gui_action(ev.key_code, mods) {
+                    None if abandoned => continue,
+                    Some(hit) if ctx.claims_direct_chord(hit.action, mods) => {
+                        if !hit.fires(ev.repeat) {
+                            continue;
+                        }
+                        Some((hit.action, false))
+                    }
+                    _ => None,
+                }
+            }
+        };
         if let Some((action, via_leader)) = action {
             effects.push(KeyEffect::Shortcut { action, via_leader });
             continue;
@@ -178,19 +198,18 @@ pub(crate) fn classify_key_batch<'a>(
         // dispatch declined the key, and a vi-mode key never falls through
         // to Type — an unmatched key in vi mode is swallowed, not typed.
         if ctx.in_vi_mode {
-            if let Some(vi_action) =
-                resolved_vi_mode.resolve(&ev.logical_key, ev.key_code, ctx.mods)
-            {
+            if let Some(vi_action) = resolved_vi_mode.resolve(&ev.logical_key, ev.key_code, mods) {
                 effects.push(KeyEffect::ViMode(vi_action));
             }
             continue;
         }
-        if is_modifier_key(ev.key_code) || ctx.mods.meta {
+        if is_modifier_key(ev.key_code) || mods.meta {
             continue;
         }
         effects.push(KeyEffect::Type {
             logical: ev.logical_key.clone(),
             key_code: ev.key_code,
+            mods,
         });
     }
     ClassifiedKeys {
@@ -268,7 +287,8 @@ mod tests {
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
     use bevy::prelude::Entity;
-    use orzma_configs::shortcuts::FontSizeStep;
+    use orzma_configs::keyboard::OptionAsAlt;
+    use orzma_configs::shortcuts::{FontSizeStep, PaneDirection};
     use orzma_configs::vi_mode::ViModeSelection;
 
     fn ms(n: u64) -> Duration {
@@ -308,13 +328,34 @@ mod tests {
 
     fn ctx(mods: Modifiers, now: Duration) -> BatchContext<'static> {
         BatchContext {
-            mods,
+            held: HeldModifiers::from(mods),
+            alt_policy: AltPolicy::default(),
             now,
             in_vi_mode: false,
             has_selection: false,
             webview_focused: false,
             forward_chords: &[],
         }
+    }
+
+    fn policy_ctx(held: HeldModifiers, alt_policy: AltPolicy) -> BatchContext<'static> {
+        BatchContext {
+            held,
+            alt_policy,
+            ..ctx(no_mods(), ms(0))
+        }
+    }
+
+    fn alt() -> Modifiers {
+        mods(false, false, true, false)
+    }
+
+    fn alt_shift() -> Modifiers {
+        mods(false, true, true, false)
+    }
+
+    fn ctrl() -> Modifiers {
+        mods(true, false, false, false)
     }
 
     fn run<'a>(
@@ -324,16 +365,7 @@ mod tests {
         events: &'a [KeyboardInput],
         ctx: BatchContext<'a>,
     ) -> Vec<KeyEffect> {
-        let mut held = None;
-        classify_key_batch(
-            leader_phase,
-            &mut held,
-            shortcuts,
-            resolved_vi_mode,
-            events.iter(),
-            ctx,
-        )
-        .effects
+        run_full(leader_phase, shortcuts, resolved_vi_mode, events, ctx).effects
     }
 
     fn run_full<'a>(
@@ -350,6 +382,20 @@ mod tests {
             shortcuts,
             resolved_vi_mode,
             events.iter(),
+            ctx,
+        )
+    }
+
+    fn classify_idle<'a>(
+        shortcuts: &Shortcuts,
+        events: &'a [KeyboardInput],
+        ctx: BatchContext<'a>,
+    ) -> ClassifiedKeys {
+        run_full(
+            &mut LeaderPhase::Idle,
+            shortcuts,
+            &ResolvedViModeKeys::default(),
+            events,
             ctx,
         )
     }
@@ -434,6 +480,9 @@ mod tests {
         );
     }
 
+    /// Asserts that a key no binding uses is typed with the held modifiers.
+    ///
+    /// Case: a user types `a` into the shell with the stock bindings.
     #[test]
     fn plain_key_emits_type() {
         let sc = Shortcuts::default();
@@ -452,6 +501,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("a".into()),
                 key_code: KeyCode::KeyA,
+                mods: no_mods(),
             }]
         );
     }
@@ -483,6 +533,11 @@ mod tests {
         );
     }
 
+    /// Asserts that an OS key repeat outside the repeat window is typed and
+    /// does not step the leader machine.
+    ///
+    /// Case: a user holds `h` in the shell while `h` is also a repeat-marked
+    /// leader key and no leader is pending.
     #[test]
     fn repeat_outside_window_passthrough_no_step() {
         let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(500));
@@ -501,6 +556,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("h".into()),
                 key_code: KeyCode::KeyH,
+                mods: no_mods(),
             }],
             "an auto-repeat outside the window must not step the leader machine"
         );
@@ -570,11 +626,13 @@ mod tests {
         );
     }
 
+    /// Asserts that a fresh press with no leader engaged disarms a stale
+    /// hold-to-repeat key and is typed rather than re-firing the shortcut.
+    ///
+    /// Case: a user held a repeat-marked leader key earlier, released it, and
+    /// presses it again later without the leader.
     #[test]
     fn fresh_press_without_leader_clears_stale_held_repeat() {
-        // A key armed by an earlier hold must NOT keep re-firing after it is
-        // released and re-pressed WITHOUT the leader: the fresh (repeat:false)
-        // press with no leader engaged disarms the stale hold, so it types.
         let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(500));
         let rc = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
@@ -597,6 +655,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("h".into()),
                 key_code: KeyCode::KeyH,
+                mods: no_mods(),
             }],
             "and the key types normally instead of re-firing the shortcut"
         );
@@ -675,6 +734,11 @@ mod tests {
         assert_eq!(phase, LeaderPhase::Idle);
     }
 
+    /// Asserts that after an unbound second key abandons the leader, a later
+    /// key in the same frame is typed.
+    ///
+    /// Case: a user taps the leader and quickly types `ab`, where no binding
+    /// uses `a`, and both keys land in one frame.
     #[test]
     fn pending_types_trailing_same_frame_key() {
         let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::KillPane, ms(500));
@@ -696,6 +760,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("b".into()),
                 key_code: KeyCode::KeyB,
+                mods: no_mods(),
             }],
             "a trailing same-frame key after the suppressed second key must be typed"
         );
@@ -731,6 +796,11 @@ mod tests {
         );
     }
 
+    /// Asserts that a key no repeat-marked binding uses is typed during the
+    /// repeat window and closes it.
+    ///
+    /// Case: a user fires a repeat-marked leader binding and then types `b`
+    /// right away.
     #[test]
     fn repeat_window_types_non_matching_key() {
         let sc =
@@ -752,6 +822,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("b".into()),
                 key_code: KeyCode::KeyB,
+                mods: no_mods(),
             }],
             "a non-matching key during the repeat window must reach the terminal"
         );
@@ -762,6 +833,11 @@ mod tests {
         );
     }
 
+    /// Asserts that once a key closes the repeat window, a repeat-marked key
+    /// later in the same frame is typed.
+    ///
+    /// Case: a user fires a repeat-marked leader binding on `h` and then types
+    /// `bh` fast enough that both keys land in one frame.
     #[test]
     fn window_closing_key_stops_withholding_same_frame() {
         let sc =
@@ -787,10 +863,12 @@ mod tests {
                 KeyEffect::Type {
                     logical: Key::Character("b".into()),
                     key_code: KeyCode::KeyB,
+                    mods: no_mods(),
                 },
                 KeyEffect::Type {
                     logical: Key::Character("h".into()),
                     key_code: KeyCode::KeyH,
+                    mods: no_mods(),
                 },
             ],
             "the non-matching key closes the window for the rest of the frame; the \
@@ -798,6 +876,10 @@ mod tests {
         );
     }
 
+    /// Asserts that a modified key no binding uses is typed with its
+    /// modifiers rather than swallowed.
+    ///
+    /// Case: a user presses `Ctrl+Shift+Escape` with the stock bindings.
     #[test]
     fn unbound_ctrl_shift_escape_emits_type() {
         let sc = Shortcuts::default();
@@ -816,6 +898,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Escape,
                 key_code: KeyCode::Escape,
+                mods: mods(true, true, false, false),
             }],
             "a chord bound to no action falls through to Type; the decider never \
              swallows on its own — the applier decides"
@@ -956,6 +1039,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("c".into()),
                 key_code: KeyCode::KeyC,
+                mods: mods(true, false, false, false),
             }],
             "Ctrl+C with no selection must reach the PTY"
         );
@@ -1204,6 +1288,7 @@ mod tests {
                 vec![KeyEffect::Type {
                     logical: Key::Character("?".into()),
                     key_code,
+                    mods: mods(false, true, false, false),
                 }],
                 "`?` produced by {key_code:?} must match the `?` chord"
             );
@@ -1270,6 +1355,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("G".into()),
                 key_code: KeyCode::KeyG,
+                mods: mods(false, true, false, false),
             }]
         );
     }
@@ -1304,6 +1390,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("k".into()),
                 key_code: KeyCode::KeyK,
+                mods: no_mods(),
             }]
         );
         assert_eq!(out.webview_suppressed, vec![KeyCode::KeyK]);
@@ -1527,6 +1614,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("c".into()),
                 key_code: KeyCode::KeyC,
+                mods: ctrl,
             }]
         );
         assert_eq!(out.webview_suppressed, vec![KeyCode::KeyC]);
@@ -1556,6 +1644,7 @@ mod tests {
             vec![KeyEffect::Type {
                 logical: Key::Character("=".into()),
                 key_code: KeyCode::Equal,
+                mods: meta(),
             }]
         );
         assert_eq!(out.webview_suppressed, vec![KeyCode::Equal]);
@@ -1614,6 +1703,339 @@ mod tests {
                 via_leader: false,
             }],
             "with no webview focused the release chord still resolves as an action, never a Type"
+        );
+    }
+
+    /// Asserts that a key typed with a composing Option key is typed as its
+    /// character with no Alt, and does not fire the matching Alt chord.
+    ///
+    /// Case: a macOS user with `option_as_alt = "right"` types `˙` with left
+    /// Option+h while `Alt+h` selects the left pane.
+    #[test]
+    fn a_composing_option_key_types_its_character_without_alt() {
+        let sc = test_shortcuts_with_direct_chord(
+            KeyCode::KeyH,
+            alt(),
+            Shortcut::SelectPane(PaneDirection::Left),
+        );
+        let held = HeldModifiers {
+            alt_left: true,
+            ..Default::default()
+        };
+        let events = [press(KeyCode::KeyH, Key::Character("˙".into()))];
+        let effects = classify_idle(
+            &sc,
+            &events,
+            policy_ctx(held, AltPolicy::for_option_as_alt(OptionAsAlt::Right)),
+        )
+        .effects;
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("˙".into()),
+                key_code: KeyCode::KeyH,
+                mods: no_mods(),
+            }]
+        );
+    }
+
+    /// Asserts that the Option key `option_as_alt` names fires the Alt chord.
+    ///
+    /// Case: a macOS user with `option_as_alt = "right"` presses right
+    /// Option+h to select the left pane.
+    #[test]
+    fn the_alt_option_key_fires_the_alt_chord() {
+        let sc = test_shortcuts_with_direct_chord(
+            KeyCode::KeyH,
+            alt(),
+            Shortcut::SelectPane(PaneDirection::Left),
+        );
+        let held = HeldModifiers {
+            alt_right: true,
+            ..Default::default()
+        };
+        let events = [press(KeyCode::KeyH, Key::Character("h".into()))];
+        let effects = classify_idle(
+            &sc,
+            &events,
+            policy_ctx(held, AltPolicy::for_option_as_alt(OptionAsAlt::Right)),
+        )
+        .effects;
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::SelectPane(PaneDirection::Left),
+                via_leader: false,
+            }]
+        );
+    }
+
+    /// Asserts that an AltGr-typed punctuation character matches an
+    /// unmodified forward chord for that character on a focused webview.
+    ///
+    /// Case: a user on a German layout types `[` with AltGr+8 while a page
+    /// holds the keyboard and its program forwards `[`.
+    #[test]
+    fn altgr_punctuation_matches_a_plain_forward_chord() {
+        let sc = test_shortcuts_with_direct_chord(KeyCode::KeyQ, alt(), Shortcut::KillPane);
+        let chords = [NormalizedChord {
+            key: ChordKey::Char('['),
+            alt: false,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        }];
+        let held = HeldModifiers {
+            alt_right: true,
+            alt_graph: true,
+            ..Default::default()
+        };
+        let events = [press(KeyCode::Digit8, Key::Character("[".into()))];
+        let classified = classify_idle(
+            &sc,
+            &events,
+            BatchContext {
+                webview_focused: true,
+                forward_chords: &chords,
+                ..policy_ctx(held, AltPolicy::default())
+            },
+        );
+        assert_eq!(
+            classified.effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("[".into()),
+                key_code: KeyCode::Digit8,
+                mods: no_mods(),
+            }]
+        );
+        assert_eq!(classified.webview_suppressed, vec![KeyCode::Digit8]);
+    }
+
+    /// Asserts that an unmarked direct chord fires once while held and its OS
+    /// key repeats are neither fired nor typed.
+    ///
+    /// Case: a user holds `Alt+p` a moment too long while closing one pane.
+    #[test]
+    fn an_unmarked_direct_chord_fires_once_while_held() {
+        let sc = test_shortcuts_with_direct_chord(KeyCode::KeyP, alt(), Shortcut::KillPane);
+        let p = || Key::Character("p".into());
+        let events = [
+            press(KeyCode::KeyP, p()),
+            press_repeat(KeyCode::KeyP, p()),
+            press_repeat(KeyCode::KeyP, p()),
+        ];
+        let effects = classify_idle(&sc, &events, ctx(alt(), ms(0))).effects;
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::KillPane,
+                via_leader: false,
+            }]
+        );
+    }
+
+    /// Asserts that an `r:` direct chord fires on every OS key repeat.
+    ///
+    /// Case: a user holds `Alt+Shift+H` to keep moving a divider left.
+    #[test]
+    fn a_repeat_marked_direct_chord_fires_on_every_repeat() {
+        let sc = Shortcuts::default().with_direct_chord(
+            KeyCode::KeyH,
+            alt_shift(),
+            Shortcut::ResizePane(PaneDirection::Left),
+            true,
+        );
+        let h = || Key::Character("H".into());
+        let events = [
+            press(KeyCode::KeyH, h()),
+            press_repeat(KeyCode::KeyH, h()),
+            press_repeat(KeyCode::KeyH, h()),
+        ];
+        let effects = classify_idle(&sc, &events, ctx(alt_shift(), ms(0))).effects;
+        assert_eq!(effects.len(), 3);
+        assert!(effects.iter().all(|effect| *effect
+            == KeyEffect::Shortcut {
+                action: Shortcut::ResizePane(PaneDirection::Left),
+                via_leader: false,
+            }));
+    }
+
+    /// Asserts that an unmarked direct chord's repeats are withheld from a
+    /// focused webview without firing again.
+    ///
+    /// Case: a page holds the keyboard and the user holds `Alt+p`.
+    #[test]
+    fn an_unmarked_direct_chord_repeat_is_withheld_from_the_page() {
+        let sc = test_shortcuts_with_direct_chord(KeyCode::KeyP, alt(), Shortcut::KillPane);
+        let p = || Key::Character("p".into());
+        let events = [press(KeyCode::KeyP, p()), press_repeat(KeyCode::KeyP, p())];
+        let classified = classify_idle(
+            &sc,
+            &events,
+            BatchContext {
+                webview_focused: true,
+                ..ctx(alt(), ms(0))
+            },
+        );
+        assert_eq!(classified.effects.len(), 1);
+        assert_eq!(
+            classified.webview_suppressed,
+            vec![KeyCode::KeyP, KeyCode::KeyP]
+        );
+    }
+
+    /// Asserts that a copy chord refused for lack of a selection keeps typing
+    /// on every OS key repeat.
+    ///
+    /// Case: a user holds `Ctrl+C` with nothing selected to interrupt a
+    /// program.
+    #[test]
+    fn a_refused_copy_chord_types_on_every_repeat() {
+        let sc = test_shortcuts_with_direct_chord(KeyCode::KeyC, ctrl(), Shortcut::Copy);
+        let c = || Key::Character("c".into());
+        let events = [press(KeyCode::KeyC, c()), press_repeat(KeyCode::KeyC, c())];
+        let effects = classify_idle(&sc, &events, ctx(ctrl(), ms(0))).effects;
+        let typed = KeyEffect::Type {
+            logical: c(),
+            key_code: KeyCode::KeyC,
+            mods: ctrl(),
+        };
+        assert_eq!(effects, vec![typed.clone(), typed]);
+    }
+
+    /// Asserts that a copy chord refused for lack of a selection is typed
+    /// after a pending leader.
+    ///
+    /// Case: a user taps the leader by accident and then presses `Ctrl+C`
+    /// with nothing selected.
+    #[test]
+    fn a_refused_copy_after_an_abandoned_leader_is_typed() {
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterViMode, ms(500))
+            .with_direct_chord(KeyCode::KeyC, ctrl(), Shortcut::Copy, false);
+        let mut phase = LeaderPhase::Pending;
+        let events = [press(KeyCode::KeyC, Key::Character("c".into()))];
+        let effects = run(
+            &mut phase,
+            &sc,
+            &ResolvedViModeKeys::default(),
+            &events,
+            ctx(ctrl(), ms(0)),
+        );
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("c".into()),
+                key_code: KeyCode::KeyC,
+                mods: ctrl(),
+            }]
+        );
+    }
+
+    /// Asserts that a forward chord pressed while the leader is pending is
+    /// forwarded on a focused webview.
+    ///
+    /// Case: a page holds the keyboard, the user taps the leader by accident,
+    /// and then presses the program's `Alt+h` forward key.
+    #[test]
+    fn a_forward_chord_after_an_abandoned_leader_is_forwarded() {
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterViMode, ms(500));
+        let chords = [NormalizedChord {
+            key: ChordKey::Code(KeyCode::KeyH),
+            alt: true,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        }];
+        let mut phase = LeaderPhase::Pending;
+        let events = [press(KeyCode::KeyH, Key::Character("h".into()))];
+        let classified = run_full(
+            &mut phase,
+            &sc,
+            &ResolvedViModeKeys::default(),
+            &events,
+            BatchContext {
+                webview_focused: true,
+                forward_chords: &chords,
+                ..ctx(alt(), ms(0))
+            },
+        );
+        assert_eq!(
+            classified.effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("h".into()),
+                key_code: KeyCode::KeyH,
+                mods: alt(),
+            }]
+        );
+        assert_eq!(classified.webview_suppressed, vec![KeyCode::KeyH]);
+    }
+
+    /// Asserts that holding an unmarked direct chord right after a stray
+    /// leader tap fires it once, types nothing, and clears the pending leader.
+    ///
+    /// Case: on Windows a user taps Alt alone by accident and then holds
+    /// `Alt+p`.
+    #[test]
+    fn a_held_direct_chord_after_a_stray_tap_fires_once() {
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterViMode, ms(500))
+            .with_direct_chord(KeyCode::KeyP, alt(), Shortcut::KillPane, false);
+        let mut phase = LeaderPhase::Pending;
+        let p = || Key::Character("p".into());
+        let events = [
+            press(KeyCode::KeyP, p()),
+            press_repeat(KeyCode::KeyP, p()),
+            press_repeat(KeyCode::KeyP, p()),
+        ];
+        let effects = run(
+            &mut phase,
+            &sc,
+            &ResolvedViModeKeys::default(),
+            &events,
+            ctx(alt(), ms(0)),
+        );
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::KillPane,
+                via_leader: false,
+            }]
+        );
+        assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    /// Asserts that a held `r:` direct chord keeps firing in vi mode instead
+    /// of resolving as a vi-mode key.
+    ///
+    /// Case: a user in vi mode holds `Alt+Shift+H` to widen the pane they are
+    /// reading.
+    #[test]
+    fn a_repeat_marked_direct_chord_keeps_firing_in_vi_mode() {
+        let sc = Shortcuts::default().with_direct_chord(
+            KeyCode::KeyH,
+            alt_shift(),
+            Shortcut::ResizePane(PaneDirection::Left),
+            true,
+        );
+        let h = || Key::Character("H".into());
+        let events = [press(KeyCode::KeyH, h()), press_repeat(KeyCode::KeyH, h())];
+        let effects = classify_idle(
+            &sc,
+            &events,
+            BatchContext {
+                in_vi_mode: true,
+                ..ctx(alt_shift(), ms(0))
+            },
+        )
+        .effects;
+        assert_eq!(
+            effects,
+            vec![
+                KeyEffect::Shortcut {
+                    action: Shortcut::ResizePane(PaneDirection::Left),
+                    via_leader: false,
+                };
+                2
+            ]
         );
     }
 }

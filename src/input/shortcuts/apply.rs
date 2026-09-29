@@ -66,13 +66,13 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
                     trigger_vi_mode_action(&mut commands, entity, *action);
                 }
             }
-            KeyEffect::Type { logical, .. } => {
+            KeyEffect::Type { logical, mods, .. } => {
                 if msg.focused.is_some()
                     && let Some(key) = bevy_key_to_terminal_key(logical)
                 {
                     commands.trigger(RequestActiveKeyInput {
                         key,
-                        modifiers: terminal_modifiers(msg.mods),
+                        modifiers: terminal_modifiers(*mods),
                     });
                 }
             }
@@ -242,34 +242,22 @@ mod tests {
         (app, term)
     }
 
-    fn meta_mods() -> Modifiers {
-        Modifiers {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            meta: true,
-        }
-    }
-
-    fn dispatch(
-        app: &mut App,
-        effects: Vec<KeyEffect>,
-        focused: Option<Entity>,
-        in_vi_mode: bool,
-        mods: Modifiers,
-    ) {
+    fn dispatch(app: &mut App, effects: Vec<KeyEffect>, focused: Option<Entity>, in_vi_mode: bool) {
         for effect in effects {
             app.world_mut().write_message(KeyEffectMessage {
                 effect,
                 focused,
                 in_vi_mode,
-                mods,
             });
         }
     }
 
     fn type_effect(logical: Key, key_code: KeyCode) -> KeyEffect {
-        KeyEffect::Type { logical, key_code }
+        KeyEffect::Type {
+            logical,
+            key_code,
+            mods: Modifiers::default(),
+        }
     }
 
     fn action_effect(action: Shortcut, via_leader: bool) -> KeyEffect {
@@ -289,7 +277,6 @@ mod tests {
             vec![type_effect(Key::Character("a".into()), KeyCode::KeyA)],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -310,22 +297,12 @@ mod tests {
         dispatch(
             &mut app,
             vec![
-                KeyEffect::Type {
-                    logical: Key::Character("x".into()),
-                    key_code: KeyCode::KeyX,
-                },
-                KeyEffect::Shortcut {
-                    action: Shortcut::SelectPane(PaneDirection::Right),
-                    via_leader: true,
-                },
-                KeyEffect::Type {
-                    logical: Key::Character("y".into()),
-                    key_code: KeyCode::KeyY,
-                },
+                type_effect(Key::Character("x".into()), KeyCode::KeyX),
+                action_effect(Shortcut::SelectPane(PaneDirection::Right), true),
+                type_effect(Key::Character("y".into()), KeyCode::KeyY),
             ],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -356,7 +333,6 @@ mod tests {
             ],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         let c = app.world().resource::<Captured>();
@@ -385,7 +361,6 @@ mod tests {
             )],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -412,7 +387,6 @@ mod tests {
             )],
             Some(term),
             false,
-            Modifiers::default(),
         );
         dispatch(
             &mut app,
@@ -422,7 +396,6 @@ mod tests {
             )],
             Some(term),
             true,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -440,6 +413,9 @@ mod tests {
         );
     }
 
+    /// Asserts that a direct paste chord pastes outside vi mode.
+    ///
+    /// Case: a user presses the stock paste chord in the shell.
     #[test]
     fn direct_paste_outside_vi_mode_pastes() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -448,7 +424,6 @@ mod tests {
             vec![action_effect(Shortcut::Paste, false)],
             Some(term),
             false,
-            meta_mods(),
         );
         app.update();
         assert_eq!(
@@ -458,6 +433,11 @@ mod tests {
         );
     }
 
+    /// Asserts that a direct copy chord copies the focused terminal's
+    /// selection outside vi mode.
+    ///
+    /// Case: a user selects text with the mouse and presses the stock copy
+    /// chord.
     #[test]
     fn direct_copy_outside_vi_mode_fires_selection_copy() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -466,7 +446,6 @@ mod tests {
             vec![action_effect(Shortcut::Copy, false)],
             Some(term),
             false,
-            meta_mods(),
         );
         app.update();
         assert_eq!(
@@ -476,6 +455,10 @@ mod tests {
         );
     }
 
+    /// Asserts that a direct copy chord copies in vi mode too, unlike a direct
+    /// paste.
+    ///
+    /// Case: a user selects text in vi mode and presses the stock copy chord.
     #[test]
     fn direct_copy_in_vi_mode_also_fires_selection_copy() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -484,7 +467,6 @@ mod tests {
             vec![action_effect(Shortcut::Copy, false)],
             Some(term),
             true,
-            meta_mods(),
         );
         app.update();
         assert_eq!(
@@ -494,6 +476,10 @@ mod tests {
         );
     }
 
+    /// Asserts that a direct paste chord does nothing in vi mode.
+    ///
+    /// Case: a user presses the stock paste chord while reading scrollback in
+    /// vi mode.
     #[test]
     fn direct_paste_in_vi_mode_suppressed() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -502,7 +488,6 @@ mod tests {
             vec![action_effect(Shortcut::Paste, false)],
             Some(term),
             true,
-            meta_mods(),
         );
         app.update();
         assert_eq!(
@@ -512,6 +497,9 @@ mod tests {
         );
     }
 
+    /// Asserts that a leader-scoped paste pastes even in vi mode.
+    ///
+    /// Case: a user who bound paste to `<Leader>v` pastes while in vi mode.
     #[test]
     fn leader_paste_in_vi_mode_pastes() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -520,7 +508,6 @@ mod tests {
             vec![action_effect(Shortcut::Paste, true)],
             Some(term),
             true,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -530,6 +517,9 @@ mod tests {
         );
     }
 
+    /// Asserts that `EnterViMode` fires even when vi mode is already active.
+    ///
+    /// Case: a user in vi mode presses the enter-vi-mode chord again.
     #[test]
     fn enter_vi_mode_fires_even_when_already_in_vi_mode() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
@@ -538,7 +528,6 @@ mod tests {
             vec![action_effect(Shortcut::EnterViMode, false)],
             Some(term),
             true,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -565,7 +554,6 @@ mod tests {
                 vec![action_effect(Shortcut::FontSize(step), false)],
                 Some(term),
                 false,
-                Modifiers::default(),
             );
             app.update();
 
@@ -607,7 +595,6 @@ mod tests {
                 .collect(),
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(
@@ -646,7 +633,6 @@ mod tests {
             vec![action_effect(Shortcut::RenameWorkspace, true)],
             Some(term),
             false,
-            Modifiers::default(),
         );
         app.update();
         assert_eq!(app.world().resource::<RenameStarts>().0, vec![None]);
