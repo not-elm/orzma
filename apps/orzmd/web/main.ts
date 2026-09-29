@@ -17,9 +17,12 @@ import { CssHighlightPainter, measureTop, revealRange, Search } from './search';
 mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' });
 
 /** A report to the controller (`page` event), tagged by `kind`. */
-type PageEvent =
-  | { kind: 'scrollState'; ratio: number; currentHeadingIndex: number | null; headingCount: number }
-  | { kind: 'outlineJump'; index: number };
+type PageEvent = {
+  kind: 'scrollState';
+  ratio: number;
+  currentHeadingIndex: number | null;
+  headingCount: number;
+};
 
 function emitPage(event: PageEvent): void {
   orzma.emit('page', event);
@@ -38,19 +41,14 @@ const findBox = new FindBox(document.getElementById('find') as HTMLElement, sear
   scrollTo: (y) => window.scrollTo({ top: y }),
 });
 
-const outlinePanel = new OutlinePanel(document.getElementById('outline') as HTMLElement, (index) =>
-  emitPage({ kind: 'outlineJump', index }),
-);
-
-function applyOutline(open: boolean): void {
-  if (document.body.classList.contains('outline-open') === open) {
-    return;
-  }
-  const anchor = captureScrollAnchor();
-  document.body.classList.toggle('outline-open', open);
-  outlinePanel.setOpen(open);
-  restoreScrollAnchor(anchor);
-}
+const outlinePanel = new OutlinePanel(document.getElementById('outline') as HTMLElement, {
+  jump: jumpToHeading,
+  relayout: (open) => {
+    const anchor = captureScrollAnchor();
+    document.body.classList.toggle('outline-open', open);
+    restoreScrollAnchor(anchor);
+  },
+});
 
 const rail = document.getElementById('rail') as HTMLElement;
 const toast = document.getElementById('toast') as HTMLElement;
@@ -96,13 +94,12 @@ function headingInfos(): HeadingInfo[] {
 }
 
 function renderChromeUi(): void {
+  outlinePanel.markCurrent(currentHeading);
   if (chrome === null) {
     return;
   }
   renderRail(rail, chrome, breadcrumb(headings, currentHeading));
   renderToast(toast, chrome.toast);
-  applyOutline(chrome.outline.open);
-  outlinePanel.mark(chrome.outline.selected, currentHeading);
 }
 
 interface ScrollAnchor {
@@ -148,6 +145,13 @@ function jumpTo(target: HTMLElement): void {
     headingTracker.jumped(Number(index), window.scrollY);
   }
   reportScrollState();
+}
+
+function jumpToHeading(index: number): void {
+  const heading = document.getElementById(`h${index}`);
+  if (heading !== null) {
+    jumpTo(heading);
+  }
 }
 
 function scrollToAnchor(fragment: string): boolean {
@@ -314,12 +318,6 @@ orzma.on('content', (p: ContentPayload) => {
 });
 orzma.on('scroll', (p: { action: string }) => {
   scrollByAction(p.action);
-});
-orzma.on('scrollToHeading', (p: { index: number }) => {
-  const heading = document.getElementById(`h${p.index}`);
-  if (heading !== null) {
-    jumpTo(heading);
-  }
 });
 
 orzma.on('chrome', (c: Chrome) => {
