@@ -32,6 +32,7 @@ struct TerminalParams {
     overlay_desaturate: f32,
     cursor_packed: u32,
     default_fg_packed: u32,
+    hover_span: vec2<u32>,
 };
 
 struct Cell {
@@ -280,13 +281,7 @@ fn in_left_neighbor_px(in_cell_px: vec2<f32>) -> vec2<f32> {
 // paint_grid_cell and paint_right_strip so the strip cannot drift from the
 // grid path on overlay sequence or argument order.
 fn paint_cell_overlays(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
-    var color = paint_text_decorations(
-        hit.cell.style_flags,
-        hit.in_cell_px,
-        fg,
-        base,
-        hit.cell.hyperlink_id,
-    );
+    var color = paint_text_decorations(hit, fg, base);
     color = paint_cursor(hit.row, hit.col, hit.in_cell_px, hit.cell, color);
     color = paint_selection(hit.row, hit.col, color);
     return color;
@@ -294,38 +289,40 @@ fn paint_cell_overlays(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32
 
 // Paints the decoration lines the cell's style and link ask for: the
 // underline, then the strike line.
-fn paint_text_decorations(
-    style: u32,
-    in_cell_px: vec2<f32>,
-    fg: vec4<f32>,
-    base: vec4<f32>,
-    cell_hyperlink_id: u32,
-) -> vec4<f32> {
-    let color = paint_underline(style, in_cell_px.y, fg, base, cell_hyperlink_id);
-    return paint_strike(style, in_cell_px.y, fg, color);
+fn paint_text_decorations(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
+    let color = paint_underline(hit, fg, base);
+    return paint_strike(hit.cell.style_flags, hit.in_cell_px.y, fg, color);
 }
 
-// Paints the underline of an underlined or hyperlinked cell at the cell-local
-// `y`, in the accent color while the cell's link is hovered. The underline
-// metrics come from font-derived uniforms.
-fn paint_underline(
-    style: u32,
-    y: f32,
-    fg: vec4<f32>,
-    base: vec4<f32>,
-    cell_hyperlink_id: u32,
-) -> vec4<f32> {
-    if cell_hyperlink_id == 0u && (style & STYLE_UNDERLINE) == 0u {
+// Paints the underline of an underlined, hyperlinked, or hovered
+// detected-URL cell at the cell-local `y`, in the accent color while the
+// cell's link or detected URL is hovered. The underline metrics come from
+// font-derived uniforms.
+fn paint_underline(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
+    let style = hit.cell.style_flags;
+    let in_url = in_hovered_url(hit);
+    if hit.cell.hyperlink_id == 0u && (style & STYLE_UNDERLINE) == 0u && !in_url {
         return base;
     }
     // underline_position_phys is negative (below baseline). The actual
     // y in the cell is baseline + |underline_position|.
     let top = params.ascent_px - params.underline_position_phys;
-    if !in_band(y, top, params.underline_thickness_phys) {
+    if !in_band(hit.in_cell_px.y, top, params.underline_thickness_phys) {
         return base;
     }
-    let line_color = select(fg, ACCENT_LINK_COLOR, is_hovered_link(cell_hyperlink_id));
+    let hovered = in_url || is_hovered_link(hit.cell.hyperlink_id);
+    let line_color = select(fg, ACCENT_LINK_COLOR, hovered);
     return paint_line(base, line_color);
+}
+
+// Whether the cell shows a character of the detected URL the pointer
+// hovers: inside the hovered span and not blank. A URL holds no blank, so
+// the blanks inside the span are wrap fillers and cells past a wrap.
+fn in_hovered_url(hit: CellHit) -> bool {
+    let index = cell_index(hit.row, hit.col);
+    return index >= params.hover_span.x
+        && index <= params.hover_span.y
+        && hit.cell.glyph_index != GLYPH_NONE;
 }
 
 // Paints the strike line of a struck-through cell at the cell-local `y`.

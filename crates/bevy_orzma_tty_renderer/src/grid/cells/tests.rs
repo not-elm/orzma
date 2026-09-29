@@ -4,6 +4,7 @@ use super::*;
 use crate::grid::test_support::run_with_link;
 
 mod apply;
+mod detected_url_at;
 mod hyperlink_at;
 mod refill_row;
 

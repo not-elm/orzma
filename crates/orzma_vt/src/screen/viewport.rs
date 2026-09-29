@@ -1,7 +1,7 @@
 //! Viewport state: where the visible window sits relative to the live
 //! tail, and how it moves.
 
-use crate::screen::grid::coords::GridLine;
+use crate::screen::grid::coords::{GridColumn, GridLine};
 
 /// Number of scrollback rows the viewport sits above the live tail.
 ///
@@ -37,6 +37,18 @@ impl ViewportLine {
         let offset = i32::try_from(offset.0).expect("scrollback never exceeds i32::MAX rows");
         GridLine(i32::from(self.0) - offset)
     }
+}
+
+/// A cell in viewport coordinates.
+///
+/// The same point names different content once the user scrolls or the
+/// grid is resized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewportPoint {
+    /// The line, counted from the top of the viewport.
+    pub line: ViewportLine,
+    /// The column.
+    pub column: GridColumn,
 }
 
 /// A viewport motion over the scrollback, clamped by the VT at both

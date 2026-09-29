@@ -6,6 +6,7 @@
 
 - [Multiplexer](multiplexer.md)
 - [Vi Mode](vi-mode.md)
+- [Links](links.md)
 - [Companion Apps](companion-apps.md)
 
 # Reference

@@ -1,8 +1,11 @@
-//! OSC 8 hyperlink vocabulary and the id interner that dedupes it.
+//! OSC 8 hyperlink vocabulary, the id interner that dedupes it, and
+//! plain-text URL detection.
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+
+pub mod detected_url;
 
 /// OSC 8 hyperlink: an interned id → URI mapping.
 ///
@@ -55,6 +58,9 @@ impl HyperlinkUri {
 /// Returns `true` when `uri` carries a scheme on the allowlist
 /// (`http`, `https`, `mailto`, `ftp`), case-insensitive.
 pub fn is_allowed(uri: &str) -> bool {
+    /// The schemes an OSC 8 URI may carry, in lowercase.
+    const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
+
     scheme_of(uri)
         .map(|s| s.to_ascii_lowercase())
         .is_some_and(|s| ALLOWED_SCHEMES.contains(&s.as_str()))
@@ -149,8 +155,6 @@ struct SourceHyperlink {
     id: HyperlinkSourceId,
     uri: HyperlinkUri,
 }
-
-const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
 
 /// Parses an RFC 3986 scheme. The first byte is ALPHA, and each later
 /// byte is ALPHA, DIGIT, `+`, `-`, or `.`. Returns `None` for malformed
