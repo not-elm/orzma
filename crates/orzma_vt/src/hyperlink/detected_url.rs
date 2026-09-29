@@ -84,39 +84,27 @@ impl LogicalLine {
         continues_from_above: bool,
         line: ViewportLine,
     ) -> Option<Self> {
-        let wrap = |index: usize| wraps.get(index).copied().flatten();
         let row = usize::from(line.0);
         if row >= rows.len() {
             return None;
         }
-        let mut first = row;
-        while first > 0 && wrap(first - 1).is_some() {
-            first -= 1;
-        }
-        let mut last = row;
-        while last + 1 < rows.len() && wrap(last).is_some() {
-            last += 1;
-        }
+        let first = first_row_of_line(wraps, row);
+        let last = last_row_of_line(wraps, row, rows.len());
         let held = rows.get(first..=last).unwrap_or_default();
         let capacity = held.iter().map(Vec::len).sum();
-        let mut line = Self {
+        let mut logical = Self {
             text: String::with_capacity(capacity),
             origins: Vec::with_capacity(capacity),
             cut_above: first == 0 && continues_from_above,
-            cut_below: wrap(last).is_some(),
+            cut_below: continues_below(wraps, last),
         };
         for (index, cells) in (first..).zip(held) {
-            let limit =
-                wrap(index).map_or(cells.len(), |count| usize::from(count).min(cells.len()));
-            for (col, cell) in cells.iter().enumerate().take(limit) {
-                let at = ViewportPoint {
-                    line: ViewportLine(index as u16),
-                    column: GridColumn(col as u16),
-                };
-                line.push_cell(cell, at);
-            }
+            logical.push_row(
+                ViewportLine(index as u16),
+                cells_on_line(cells, wraps, index),
+            );
         }
-        Some(line)
+        Some(logical)
     }
 
     /// The URL covering the cell `at`, unless an edge rule drops it.
@@ -146,6 +134,18 @@ impl LogicalLine {
         !may_start_above && !may_end_below
     }
 
+    /// Appends `cells` as the cells of viewport row `line`, the first at
+    /// column zero.
+    fn push_row(&mut self, line: ViewportLine, cells: &[Cell]) {
+        for (col, cell) in cells.iter().enumerate() {
+            let at = ViewportPoint {
+                line,
+                column: GridColumn(col as u16),
+            };
+            self.push_cell(cell, at);
+        }
+    }
+
     /// Appends the characters `cell` shows, or a blank for an OSC 8 cell.
     fn push_cell(&mut self, cell: &Cell, at: ViewportPoint) {
         if cell.hyperlink_id.is_some() {
@@ -160,6 +160,39 @@ impl LogicalLine {
     fn push(&mut self, c: char, at: ViewportPoint) {
         self.text.push(c);
         self.origins.resize(self.text.len(), at);
+    }
+}
+
+/// The first row of the logical line holding `row`.
+fn first_row_of_line(wraps: &[Option<u16>], row: usize) -> usize {
+    let mut first = row;
+    while first > 0 && continues_below(wraps, first - 1) {
+        first -= 1;
+    }
+    first
+}
+
+/// The last row of the logical line holding `row`, among `row_count` rows.
+fn last_row_of_line(wraps: &[Option<u16>], row: usize, row_count: usize) -> usize {
+    let mut last = row;
+    while last + 1 < row_count && continues_below(wraps, last) {
+        last += 1;
+    }
+    last
+}
+
+/// Whether row `row` wraps onto the row below it.
+fn continues_below(wraps: &[Option<u16>], row: usize) -> bool {
+    wraps.get(row).is_some_and(Option::is_some)
+}
+
+/// The cells of row `row` that its logical line holds: the leading cells
+/// that continue on the next row when the row wraps, and all of `cells`
+/// otherwise.
+fn cells_on_line<'a>(cells: &'a [Cell], wraps: &[Option<u16>], row: usize) -> &'a [Cell] {
+    match wraps.get(row).copied().flatten() {
+        Some(count) => cells.get(..usize::from(count)).unwrap_or(cells),
+        None => cells,
     }
 }
 
