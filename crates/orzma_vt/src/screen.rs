@@ -1257,6 +1257,23 @@ impl Screen {
         self.grid.row(line.to_grid(self.viewport.offset))
     }
 
+    /// The recorded wrap of every viewport row, top first: how many
+    /// leading cells of the row belong to a logical line that continues on
+    /// the next row, or `None` when the row ends its line.
+    pub fn viewport_wraps(&self) -> impl Iterator<Item = Option<u16>> + '_ {
+        (0..self.grid.size().rows).map(|line| {
+            self.grid
+                .wrap_at(ViewportLine(line).to_grid(self.viewport.offset))
+        })
+    }
+
+    /// Whether the top viewport row continues the logical line of the row
+    /// above it; `false` when the grid retains no row above.
+    pub fn viewport_continues_from_above(&self) -> bool {
+        let top = ViewportLine(0).to_grid(self.viewport.offset);
+        self.grid.wrap_at(GridLine(top.0 - 1)).is_some()
+    }
+
     /// Number of scrollback rows the viewport sits above the live tail.
     #[inline]
     pub const fn display_offset(&self) -> DisplayOffset {

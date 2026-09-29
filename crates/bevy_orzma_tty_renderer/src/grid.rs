@@ -365,4 +365,25 @@ mod tests {
         assert!(!TerminalView::settled().differs_from(&quiet_frame()));
         assert!(!TerminalCells::settled().differs_from(&quiet_frame()));
     }
+
+    /// Asserts that a frame which only changes the soft wraps marks the
+    /// cells changed and leaves the view untouched.
+    ///
+    /// Case: a line in the pane wraps onto the next row while the cursor,
+    /// the viewport and every repainted row stay as they were.
+    #[test]
+    fn a_wraps_only_frame_touches_only_the_cells() {
+        let (mut app, terminal) = app_with_terminal();
+        app.world_mut().trigger(TtyFrameSignal {
+            terminal,
+            frame: Frame {
+                wraps: Some(vec![Some(1)]),
+                ..quiet_frame()
+            },
+        });
+        app.update();
+        let seen = app.world().resource::<ChangedCounts>();
+        assert_eq!(seen.views, 0);
+        assert_eq!(seen.cells, 1);
+    }
 }

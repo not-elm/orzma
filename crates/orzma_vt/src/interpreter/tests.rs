@@ -188,6 +188,7 @@ mod device_attributes;
 mod device_status;
 mod dynamic_colors;
 mod erase;
+mod frame_wraps;
 mod hyperlink;
 mod interpret_output;
 mod keypad;

@@ -23,6 +23,7 @@ impl TerminalCells {
     pub(crate) fn settled() -> Self {
         Self {
             cells: vec![vec![Cell::default()]],
+            wraps: vec![None],
             ..Default::default()
         }
     }
@@ -42,6 +43,8 @@ pub(crate) fn quiet_frame() -> Frame {
         placements: None,
         palette: None,
         hyperlinks: vec![],
+        wraps: None,
+        continues_from_above: false,
     }
 }
 

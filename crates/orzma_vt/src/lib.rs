@@ -134,6 +134,9 @@ pub trait Vt {
     ///   alternate-screen flip).
     /// - A frame's placements and display offset describe the same
     ///   instant as its rows.
+    /// - The next frame after a change to the viewport's soft wraps
+    ///   carries the complete [`Frame::wraps`] list, whether or not the
+    ///   rows whose wraps changed are repainted.
     fn frame(&mut self) -> Option<Frame>;
 
     /// Registers a host-driven mount anchored at the visible cell (`row`,
