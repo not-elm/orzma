@@ -47,8 +47,8 @@ See [Installation](https://not-elm.github.io/orzma/installation.html) for detail
 
 | Name | Description |
 | --- | --- |
-| [orzmd](https://not-elm.github.io/orzma/companion-apps.html#orzmd) | A rich Markdown viewer |
-| [orzbrowser](https://not-elm.github.io/orzma/companion-apps.html#orzbrowser) | A keyboard-driven browser |
+| [orzmd](https://not-elm.github.io/orzma/orzmd.html) | A rich Markdown viewer |
+| [orzbrowser](https://not-elm.github.io/orzma/orzbrowser.html) | A keyboard-driven browser |
 
 ## SDK
 

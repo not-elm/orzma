@@ -11,6 +11,8 @@
 - [Panes and Workspaces](panes-and-workspaces.md)
 - [Vi Mode](vi-mode.md)
 - [Companion Apps](companion-apps.md)
+  - [orzmd](orzmd.md)
+  - [orzbrowser](orzbrowser.md)
 
 # Reference
 

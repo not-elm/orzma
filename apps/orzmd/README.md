@@ -19,7 +19,7 @@ orzmd <markdown-file>
 ```
 
 Run it inside an orzma pane. See the
-[user guide](https://not-elm.github.io/orzma/companion-apps.html#orzmd) for its
+[user guide](https://not-elm.github.io/orzma/orzmd.html) for its
 features and keyboard shortcuts.
 
 ## License
