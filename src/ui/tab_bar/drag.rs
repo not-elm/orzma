@@ -1,7 +1,9 @@
 //! Dragging a tab along the strip to reorder workspaces.
 
 use crate::ui::tab_bar::rename::WorkspaceRename;
-use crate::ui::tab_bar::{TabBarSystems, TabStrip, WorkspaceTab};
+use crate::ui::tab_bar::{
+    TAB_GAP_PX, TAB_STRIP_LEFT_PADDING_PX, TabBarSystems, TabStrip, WorkspaceTab,
+};
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{
     CurrentWorkspaces, OrzmuxSystems, PendingWorkspaceMove, RequestWorkspaceAction,
@@ -74,15 +76,16 @@ impl TabDrag {
 
     /// The horizontal offset, in logical px, that keeps the pressed tab
     /// under the pointer: the travel `dx` plus the scrolling since the
-    /// press, minus the slots the preview already moved the tab by.
-    /// Returns `0.0` without a press.
-    pub fn visual_offset(&self, dx: f32, tab_width: f32, scroll_x: f32) -> f32 {
+    /// press, minus the slots of `slot_width`, a tab and the gap after it,
+    /// that the preview already moved the tab by. Returns `0.0` without a
+    /// press.
+    pub fn visual_offset(&self, dx: f32, slot_width: f32, scroll_x: f32) -> f32 {
         let Some(drag) = self.active else {
             return 0.0;
         };
         let shown = if drag.moved { drag.target } else { drag.origin };
         let slots = shown as f32 - drag.origin as f32;
-        dx + (scroll_x - drag.scroll_at_start) - slots * tab_width
+        dx + (scroll_x - drag.scroll_at_start) - slots * slot_width
     }
 
     /// Ends the press. Returns the move to send when the tab travelled past
@@ -109,20 +112,21 @@ impl TabDrag {
     }
 }
 
-/// The zero-based slot under `pointer_x` for `count` equal tabs of
-/// `tab_width` in a strip starting at `strip_left` scrolled by `scroll_x`;
-/// all values in logical px. Returns `0` without tabs or without a width.
+/// The zero-based slot under `pointer_x` for `count` equal slots of
+/// `slot_width`, each a tab and the gap after it, the first starting at
+/// `first_left` in a strip scrolled by `scroll_x`; all values in logical
+/// px. Returns `0` without tabs or without a width.
 pub(crate) fn drop_index(
     pointer_x: f32,
-    strip_left: f32,
+    first_left: f32,
     scroll_x: f32,
-    tab_width: f32,
+    slot_width: f32,
     count: usize,
 ) -> usize {
-    if count == 0 || tab_width <= 0.0 {
+    if count == 0 || slot_width <= 0.0 {
         return 0;
     }
-    let slot = ((pointer_x - strip_left + scroll_x) / tab_width).floor();
+    let slot = ((pointer_x - first_left + scroll_x) / slot_width).floor();
     slot.clamp(0.0, (count - 1) as f32) as usize
 }
 
@@ -227,17 +231,18 @@ fn on_drag(
     let Ok((strip_node, strip_transform, mut scroll)) = strips.single_mut() else {
         return;
     };
-    let tab_width = tab_node.size().x * tab_node.inverse_scale_factor;
+    let slot_width = tab_node.size().x * tab_node.inverse_scale_factor + TAB_GAP_PX;
     let strip_width = strip_node.size().x * strip_node.inverse_scale_factor;
     let strip_left =
         strip_transform.translation.x * strip_node.inverse_scale_factor - strip_width / 2.0;
+    let first_left = strip_left + TAB_STRIP_LEFT_PADDING_PX;
     let pointer_x = ev.pointer_location.position.x;
     let dx = ev.distance.x;
     let target = drop_index(
         pointer_x,
-        strip_left,
+        first_left,
         scroll.x,
-        tab_width,
+        slot_width,
         workspaces.entries.len(),
     );
     if drag.would_change(dx, target) {
@@ -253,7 +258,7 @@ fn on_drag(
         }
     }
     if let Ok((mut transform, mut z_index)) = placements.get_mut(ev.entity) {
-        let offset = Val::Px(drag.visual_offset(dx, tab_width, scroll.x));
+        let offset = Val::Px(drag.visual_offset(dx, slot_width, scroll.x));
         if transform.translation.x != offset {
             transform.translation.x = offset;
         }
