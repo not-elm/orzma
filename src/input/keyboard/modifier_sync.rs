@@ -13,14 +13,12 @@ pub(super) struct ModifierSyncPlugin;
 
 impl Plugin for ModifierSyncPlugin {
     fn build(&self, app: &mut App) {
-        if cfg!(target_os = "macos") {
-            app.add_message::<RawWinitWindowEvent>().add_systems(
-                PreUpdate,
-                release_stale_modifiers
-                    .after(InputSystems)
-                    .run_if(on_message::<RawWinitWindowEvent>),
-            );
-        }
+        app.add_message::<RawWinitWindowEvent>().add_systems(
+            PreUpdate,
+            release_stale_modifiers
+                .after(InputSystems)
+                .run_if(on_message::<RawWinitWindowEvent>),
+        );
     }
 }
 
@@ -82,6 +80,12 @@ fn stale_modifier_keys(reported: ModifiersState, held: &ButtonInput<KeyCode>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::current_modifiers;
+    use bevy::input::ButtonState;
+    use bevy::input::InputPlugin;
+    use bevy::input::keyboard::{Key, KeyboardInput};
+    use orzma_configs::shortcuts::Modifiers;
+    use winit::window::WindowId;
 
     fn modifiers_changed(state: ModifiersState) -> WindowEvent {
         WindowEvent::ModifiersChanged(state.into())
@@ -213,128 +217,117 @@ mod tests {
         assert_eq!(reported_modifiers(&events), None);
     }
 
-    #[cfg(target_os = "macos")]
-    mod app {
-        use super::*;
-        use crate::input::current_modifiers;
-        use bevy::input::ButtonState;
-        use bevy::input::InputPlugin;
-        use bevy::input::keyboard::{Key, KeyboardInput};
-        use orzma_configs::shortcuts::Modifiers;
-        use winit::window::WindowId;
+    /// The modifiers `current_modifiers` returned in `Update` for each
+    /// `KeyA` press.
+    #[derive(Resource, Default)]
+    struct Observed(Vec<Modifiers>);
 
-        /// The modifiers `current_modifiers` returned in `Update` for each
-        /// `KeyA` press.
-        #[derive(Resource, Default)]
-        struct Observed(Vec<Modifiers>);
-
-        fn observe_key_a(
-            mut observed: ResMut<Observed>,
-            mut presses: MessageReader<KeyboardInput>,
-            keys: Res<ButtonInput<KeyCode>>,
-        ) {
-            for press in presses.read() {
-                if press.key_code == KeyCode::KeyA {
-                    observed.0.push(current_modifiers(&keys));
-                }
+    fn observe_key_a(
+        mut observed: ResMut<Observed>,
+        mut presses: MessageReader<KeyboardInput>,
+        keys: Res<ButtonInput<KeyCode>>,
+    ) {
+        for press in presses.read() {
+            if press.key_code == KeyCode::KeyA {
+                observed.0.push(current_modifiers(&keys));
             }
         }
+    }
 
-        fn sync_app() -> App {
-            let mut app = App::new();
-            app.add_plugins((MinimalPlugins, InputPlugin, ModifierSyncPlugin))
-                .init_resource::<Observed>()
-                .add_systems(Update, observe_key_a);
-            app
-        }
+    fn sync_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, InputPlugin, ModifierSyncPlugin))
+            .init_resource::<Observed>()
+            .add_systems(Update, observe_key_a);
+        app
+    }
 
-        fn press(app: &mut App, key_code: KeyCode, logical_key: Key) {
-            app.world_mut().write_message(KeyboardInput {
-                key_code,
-                logical_key,
-                state: ButtonState::Pressed,
-                text: None,
-                repeat: false,
-                window: Entity::PLACEHOLDER,
-            });
-        }
+    fn press(app: &mut App, key_code: KeyCode, logical_key: Key) {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+    }
 
-        fn raw(app: &mut App, event: WindowEvent) {
-            app.world_mut().write_message(RawWinitWindowEvent {
-                window_id: WindowId::dummy(),
-                event,
-            });
-        }
+    fn raw(app: &mut App, event: WindowEvent) {
+        app.world_mut().write_message(RawWinitWindowEvent {
+            window_id: WindowId::dummy(),
+            event,
+        });
+    }
 
-        fn hold_cmd_and_shift(app: &mut App) {
-            press(app, KeyCode::SuperLeft, Key::Super);
-            press(app, KeyCode::ShiftLeft, Key::Shift);
-            app.update();
-        }
+    fn hold_cmd_and_shift(app: &mut App) {
+        press(app, KeyCode::SuperLeft, Key::Super);
+        press(app, KeyCode::ShiftLeft, Key::Shift);
+        app.update();
+    }
 
-        /// Asserts that a key typed in the frame that reports Cmd and Shift
-        /// up already reads no modifier in `Update`.
-        ///
-        /// Case: the user starts a recording from the Cmd+Shift+5 toolbar and
-        /// types `a` into orzma.
-        #[test]
-        fn a_key_after_an_empty_report_reads_no_modifier() {
-            let mut app = sync_app();
-            hold_cmd_and_shift(&mut app);
-            raw(&mut app, modifiers_changed(ModifiersState::empty()));
-            press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
-            app.update();
-            assert_eq!(
-                app.world().resource::<Observed>().0,
-                vec![Modifiers::default()]
-            );
-        }
+    /// Asserts that a key typed in the frame that reports Cmd and Shift
+    /// up already reads no modifier in `Update`.
+    ///
+    /// Case: the user starts a recording from the Cmd+Shift+5 toolbar and
+    /// types `a` into orzma.
+    #[test]
+    fn a_key_after_an_empty_report_reads_no_modifier() {
+        let mut app = sync_app();
+        hold_cmd_and_shift(&mut app);
+        raw(&mut app, modifiers_changed(ModifiersState::empty()));
+        press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Observed>().0,
+            vec![Modifiers::default()]
+        );
+    }
 
-        /// Asserts that a held Cmd stays pressed when an empty report precedes
-        /// a focus loss and return in the same frame.
-        ///
-        /// Case: the user holds Cmd while the window resigns key and becomes
-        /// key again before the next update.
-        #[test]
-        fn a_focus_round_trip_keeps_a_held_cmd() {
-            let mut app = sync_app();
-            hold_cmd_and_shift(&mut app);
-            raw(&mut app, modifiers_changed(ModifiersState::empty()));
-            raw(&mut app, WindowEvent::Focused(false));
-            raw(&mut app, WindowEvent::Focused(true));
-            app.update();
-            assert!(
-                app.world()
-                    .resource::<ButtonInput<KeyCode>>()
-                    .pressed(KeyCode::SuperLeft)
-            );
-        }
+    /// Asserts that a held Cmd stays pressed when an empty report precedes
+    /// a focus loss and return in the same frame.
+    ///
+    /// Case: the user holds Cmd while the window resigns key and becomes
+    /// key again before the next update.
+    #[test]
+    fn a_focus_round_trip_keeps_a_held_cmd() {
+        let mut app = sync_app();
+        hold_cmd_and_shift(&mut app);
+        raw(&mut app, modifiers_changed(ModifiersState::empty()));
+        raw(&mut app, WindowEvent::Focused(false));
+        raw(&mut app, WindowEvent::Focused(true));
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::SuperLeft)
+        );
+    }
 
-        /// Asserts that a report matching the held modifiers leaves
-        /// `ButtonInput<KeyCode>` unwritten.
-        ///
-        /// Case: the window resigns key and becomes key again while the user
-        /// holds Cmd and Shift, and the pointer then moves, so winit reports
-        /// both modifiers again.
-        #[test]
-        fn a_matching_report_leaves_the_keys_unwritten() {
-            let mut app = sync_app();
-            hold_cmd_and_shift(&mut app);
-            let before = app
-                .world()
+    /// Asserts that a report matching the held modifiers leaves
+    /// `ButtonInput<KeyCode>` unwritten.
+    ///
+    /// Case: the window resigns key and becomes key again while the user
+    /// holds Cmd and Shift, and the pointer then moves, so winit reports
+    /// both modifiers again.
+    #[test]
+    fn a_matching_report_leaves_the_keys_unwritten() {
+        let mut app = sync_app();
+        hold_cmd_and_shift(&mut app);
+        let before = app
+            .world()
+            .resource_ref::<ButtonInput<KeyCode>>()
+            .last_changed();
+        raw(
+            &mut app,
+            modifiers_changed(ModifiersState::SHIFT | ModifiersState::SUPER),
+        );
+        app.update();
+        assert_eq!(
+            app.world()
                 .resource_ref::<ButtonInput<KeyCode>>()
-                .last_changed();
-            raw(
-                &mut app,
-                modifiers_changed(ModifiersState::SHIFT | ModifiersState::SUPER),
-            );
-            app.update();
-            assert_eq!(
-                app.world()
-                    .resource_ref::<ButtonInput<KeyCode>>()
-                    .last_changed(),
-                before
-            );
-        }
+                .last_changed(),
+            before
+        );
     }
 }
