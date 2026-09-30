@@ -27,7 +27,7 @@ Change these keys in the `[vi-mode]` table of the configuration file; see
 {{#include default-key-bindings.md:vi-mode-actions}}
 
 The semantic word motions (`w`, `b`, `e`) stop at whitespace and at the
-characters in [`[selection] semantic_escape_chars`](configuration.md#selection).
+characters in [`[selection] semantic_escape_chars`](configuration.md#selection-semantic_escape_chars).
 
 ## Escape and unbound keys
 

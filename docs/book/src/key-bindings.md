@@ -103,7 +103,7 @@ its key back to the shell. `Alt` chords that orzma does not bind, such as
 
 - **macOS:** the Option key that `option_as_alt` makes Alt runs the `Alt`
   chords — the right Option key by default (see
-  [Configuration](configuration.md#keyboard)). The other Option key types
+  [`option_as_alt`](configuration.md#keyboard-option_as_alt)). The other Option key types
   special characters, so left `Option+i` starts an accent instead of splitting
   the pane; it still counts as `Alt` with an arrow or another key that types
   no character, and together with `Ctrl` or `Cmd`. A MacBook with a Japanese
@@ -148,8 +148,9 @@ still come first:
 
 - `<Leader>` bindings and `release-webview-focus` always run.
 - Other direct chords, such as `Cmd+Plus` or the stock `Alt` pane and
-  workspace chords, run while the `[shortcuts]` key
-  `direct-chords-over-webview` is `true`, the default. Set it to `false` to let
+  workspace chords, run while
+  [`direct-chords-over-webview`](configuration.md#shortcuts-direct-chords-over-webview)
+  is `true`, the default. Set it to `false` to let
   the page have them; `release-webview-focus` (`<Leader>u`) still takes the
   keyboard back.
 - `copy` and `paste` bound to direct chords never run while a webview has

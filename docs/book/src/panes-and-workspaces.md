@@ -69,7 +69,7 @@ from:
   directory the pane started in.
 - On Windows, the directory the shell last reported comes first. orzma makes
   PowerShell (`pwsh` and `powershell`) and `cmd` report it automatically; set
-  `shell_integration = false` in the [`[orzma]`](configuration.md#orzma) table
+  `shell_integration = false` in the [`[orzma]`](configuration.md#orzma-shell_integration) table
   to turn this off.
 
 orzma uses the directory only if it still exists; otherwise, and for the first

@@ -132,7 +132,7 @@ workspace actions of 0.3.0 replace the window actions.
 ### Fonts are named, not loaded from files
 
 Each face of `[font]` was a path to a font file; now it is a table that names
-an installed font family and a style (see [`[font]`](configuration.md#font)).
+an installed font family and a style (see [Font faces](configuration.md#font-faces)).
 A path makes orzma ignore the whole file, and so does an unknown key in
 `[font]`.
 

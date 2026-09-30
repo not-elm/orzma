@@ -13,7 +13,7 @@ same defaults, and only the [general shortcuts](#general) differ on macOS.
 | `copy` | `Cmd+C` | `Ctrl+C` | Copy the focused terminal's selection to the system clipboard, then dismiss the selection. |
 | `increase-font-size` | `r:Cmd+Plus` | `r:Ctrl+Plus` | Step the terminal font size up. |
 | `decrease-font-size` | `r:Cmd+-` | `r:Ctrl+-` | Step the terminal font size down. |
-| `reset-font-size` | `Cmd+0` | `Ctrl+0` | Return the terminal font size to `[font] size`. |
+| `reset-font-size` | `Cmd+0` | `Ctrl+0` | Return the terminal font size to [`[font] size`](configuration.md#font-size). |
 | `release-webview-focus` | `<Leader>u` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `enter-vi-mode` | `Alt+s` | `Alt+s` | Enter [vi mode](vi-mode.md). |
 | `quit` | `Cmd+Q` | unbound | Quit orzma. |
