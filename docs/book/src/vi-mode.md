@@ -24,7 +24,7 @@ and less run, the wheel sends arrow keys to the program.
 Change these keys in the `[vi-mode]` table of the configuration file; see
 [Vi mode keys](key-bindings.md#vi-mode-keys-vi-mode).
 
-{{#include key-bindings.md:vi-mode-actions}}
+{{#include default-key-bindings.md:vi-mode-actions}}
 
 The semantic word motions (`w`, `b`, `e`) stop at whitespace and at the
 characters in [`[selection] semantic_escape_chars`](configuration.md#selection).
@@ -38,7 +38,7 @@ selection and `V` a line-wise one. The other key switches the selection to its
 own kind instead of clearing it.
 
 Keys not bound to any `[vi-mode]` action are swallowed while vi mode is
-active (they never reach the pane) — this includes stock `copy-mode-vi` keys
+active (they never reach the pane) — this includes keys from tmux's vi copy mode (`copy-mode-vi`)
 that orzma does not carry over by default, such as `:` (goto-line), digit
 repeat prefixes, `o` (other-end), `A` (append-and-cancel), `X` / `M-x`
 (mark), `;` / `,` (jump repeat), `z` (scroll-middle), and `D`

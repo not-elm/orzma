@@ -5,7 +5,7 @@ several such layouts as workspaces, listed as tabs across the top of the
 window. The panes are part of orzma itself, so there is no separate
 multiplexer to start.
 
-{{#include key-bindings.md:pane-actions}}
+{{#include default-key-bindings.md:pane-actions}}
 
 `Alt` is the right Option key on macOS by default, and either Alt key on
 Windows and Linux (the left one on a keyboard with AltGr). See
@@ -24,7 +24,7 @@ A workspace is one layout of panes. The tab bar across the top of the window
 lists every workspace; the highlighted tab is the one on screen. The shells in
 the other workspaces keep running, and pages shown in them keep their state.
 
-{{#include key-bindings.md:workspace-actions}}
+{{#include default-key-bindings.md:workspace-actions}}
 
 Click a tab to show its workspace, click its `×` to close it, and click `+` to
 open a new one. When the tabs do not fit in the window, turn the mouse wheel

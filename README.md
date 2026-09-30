@@ -15,8 +15,9 @@ The user guide is published at <https://not-elm.github.io/orzma/> with each
 release. Its sources are in [`docs/book/src`](docs/book/src).
 
 - [Installation](https://not-elm.github.io/orzma/installation.html) — install orzma.
-- [Configuration](https://not-elm.github.io/orzma/configuration.html) and
-  [Key Bindings](https://not-elm.github.io/orzma/key-bindings.html).
+- [Configuration](https://not-elm.github.io/orzma/configuration.html),
+  [Key Bindings](https://not-elm.github.io/orzma/key-bindings.html), and
+  [Default Key Bindings](https://not-elm.github.io/orzma/default-key-bindings.html).
 - [Building Webview Apps](https://not-elm.github.io/orzma/building-webview-apps.html)
   and the [Webview Protocol](https://not-elm.github.io/orzma/protocol-reference.html).
 

@@ -51,6 +51,11 @@ no-section-label = true
 "/introduction.html#first-launch" = "installation.html#first-launch"
 "/introduction.html#windows" = "installation.html#windows"
 "/introduction.html#linux" = "installation.html#linux"
+"/key-bindings.html#platform-defaults" = "default-key-bindings.html#general"
+"/key-bindings.html#actions" = "default-key-bindings.html#general"
+"/key-bindings.html#pane-actions" = "default-key-bindings.html#panes"
+"/key-bindings.html#workspace-actions" = "default-key-bindings.html#workspaces"
+"/key-bindings.html#vi-mode-actions" = "default-key-bindings.html#vi-mode"
 
 [output.html.playground]
 runnable = false

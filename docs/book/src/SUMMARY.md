@@ -18,6 +18,7 @@
 
 - [Configuration](configuration.md)
   - [Key Bindings](key-bindings.md)
+  - [Default Key Bindings](default-key-bindings.md)
 
 # Developer Guide
 
