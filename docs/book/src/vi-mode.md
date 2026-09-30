@@ -68,6 +68,8 @@ binding still runs:
 
 ## Actions
 
+<!-- ANCHOR: vi-mode-actions -->
+
 | Action | Default | What it does |
 | --- | --- | --- |
 | `cursor-left` | `h`, `ArrowLeft` | Move the cursor one cell left. |
@@ -110,6 +112,8 @@ binding still runs:
 | `jump-backward` | `F` | Open the jump-to-char-backward prompt (not implemented yet). |
 | `jump-to-forward` | `t` | Open the jump-till-char-forward prompt (not implemented yet). |
 | `jump-to-backward` | `T` | Open the jump-till-char-backward prompt (not implemented yet). |
+
+<!-- ANCHOR_END: vi-mode-actions -->
 
 The semantic word motions (`w`, `b`, `e`) stop at whitespace and at the
 characters in [`[selection] semantic_escape_chars`](configuration.md#selection).

@@ -166,58 +166,8 @@ webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = f
 
 ### `[vi-mode]`
 
-```toml
-[vi-mode]
-# Vi-mode key bindings. The Vi Mode page describes the key syntax, the
-# duplicate-key rule, and what each action does.
+Bind each action to one key or an array of keys, such as
+`exit = ["q", "Escape"]`; [Vi Mode](vi-mode.md#keys) describes the key syntax.
+Every action and its default:
 
-# --- cursor motion ---
-cursor-left        = ["h", "ArrowLeft"]
-cursor-down        = ["j", "ArrowDown"]
-cursor-up          = ["k", "ArrowUp"]
-cursor-right       = ["l", "ArrowRight"]
-line-start         = ["0"]
-line-end           = ["$"]
-line-first-char    = ["^"]
-next-word          = ["w"]
-previous-word      = ["b"]
-next-word-end      = ["e"]
-next-space         = ["W"]
-previous-space     = ["B"]
-next-space-end     = ["E"]
-screen-top         = ["H"]
-screen-middle      = ["M"]
-screen-bottom      = ["L"]
-previous-paragraph = ["{"]
-next-paragraph     = ["}"]
-matching-bracket   = ["%"]
-
-# --- scrolling ---
-history-top        = ["g"]
-history-bottom     = ["G"]
-page-up            = ["Ctrl+B"]
-page-down          = ["Ctrl+F"]
-half-page-up       = ["Ctrl+U"]
-half-page-down     = ["Ctrl+D"]
-scroll-up          = ["Ctrl+Y"]
-scroll-down        = ["Ctrl+E"]
-
-# --- selection ---
-toggle-selection      = ["v", "Space"]
-toggle-line-selection = ["V"]
-toggle-rect-selection = ["Ctrl+V"]
-
-# --- copy / exit ---
-yank = ["y", "Enter"]
-exit = ["q", "Escape", "Ctrl+C"]
-
-# --- search / jump (not implemented yet) ---
-search-forward     = ["/"]
-search-backward    = ["?"]
-search-next        = ["n"]
-search-previous    = ["N"]
-jump-forward       = ["f"]
-jump-backward      = ["F"]
-jump-to-forward    = ["t"]
-jump-to-backward   = ["T"]
-```
+{{#include vi-mode.md:vi-mode-actions}}
