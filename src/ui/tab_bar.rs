@@ -81,8 +81,7 @@ impl Plugin for TabBarPlugin {
                         resource_exists_and_changed::<CurrentWorkspaces>
                             .or_else(any_match_filter::<Added<TabHovered>>)
                             .or_else(any_component_removed::<TabHovered>)
-                            .or_else(any_match_filter::<Added<WorkspaceTab>>)
-                            .or_else(resource_exists_and_changed::<TabDrag>),
+                            .or_else(any_match_filter::<Added<WorkspaceTab>>),
                     ),
                 ),
             )
@@ -128,34 +127,21 @@ pub(crate) fn tab_order(
 
 /// The tab bar's height in logical px before rounding to physical pixels.
 const TAB_BAR_HEIGHT_PX: f32 = 28.0;
-/// The bar's background.
-const BAR_BG: Color = Color::srgb_u8(0x14, 0x15, 0x18);
-/// The line under the bar and between inactive tabs.
-const BAR_LINE: Color = Color::srgb_u8(0x59, 0x59, 0x66);
-/// The narrowest a tab gets before the strip scrolls, in logical px.
-const TAB_MIN_WIDTH_PX: f32 = 80.0;
-/// The widest a tab gets, in logical px.
-const TAB_MAX_WIDTH_PX: f32 = 240.0;
-/// The width of the new-workspace button, in logical px.
-const NEW_BUTTON_WIDTH_PX: f32 = 36.0;
+/// The space between two tabs, in logical px.
+const TAB_GAP_PX: f32 = 4.0;
+/// The space before the first tab in the strip, in logical px.
+const TAB_STRIP_LEFT_PADDING_PX: f32 = 6.0;
 /// The font size of the tab bar's text, in logical px.
 const TAB_FONT_PX: f32 = 12.0;
 /// The displayed tab's background.
-const ACTIVE_BG: Color = Color::srgb_u8(0x00, 0x00, 0x00);
-/// The displayed tab's top edge.
-const ACTIVE_ACCENT: Color = Color::srgb_u8(0xf2, 0xd9, 0x33);
+const ACTIVE_BG: Color = Color::srgb_u8(0x49, 0x4c, 0x4e);
 /// The displayed tab's text.
 const ACTIVE_TEXT: Color = Color::srgb_u8(0xff, 0xff, 0xff);
-/// The text of the other tabs and of the new-workspace button.
-const INACTIVE_TEXT: Color = Color::srgb_u8(0xa0, 0xa0, 0xac);
+/// The text of the other tabs, of the close buttons, and of the
+/// new-workspace button.
+const INACTIVE_TEXT: Color = Color::srgb_u8(0x8c, 0x8c, 0x98);
 /// The background of a hovered tab that is not displayed.
-const HOVER_BG: Color = Color::srgb_u8(0x1c, 0x1d, 0x22);
-
-/// The 1 px line along the bar's bottom edge. It is the bar's first child,
-/// so the tabs paint over it and the displayed tab's opaque background
-/// hides it under that tab.
-#[derive(Component)]
-struct TabBarLine;
+const HOVER_BG: Color = Color::srgb_u8(0x34, 0x37, 0x3a);
 
 /// The text inside a tab's `TabLabel`.
 #[derive(Component)]
@@ -164,10 +150,6 @@ struct TabLabelText;
 /// A tab's close button.
 #[derive(Component)]
 struct TabClose;
-
-/// The divider after a tab, shown between two tabs that are not displayed.
-#[derive(Component)]
-struct TabDivider;
 
 /// The new-workspace button.
 #[derive(Component)]
@@ -193,13 +175,18 @@ fn tab_font(ui_font: Option<&TerminalUiFont>) -> TextFont {
 }
 
 /// Spawns the bar as the first child of `UiRoot`, above the shell surface,
-/// with the tab strip in it.
+/// with a 1 px line along its bottom edge and the tab strip in it.
 fn ensure_tab_bar(
     mut commands: Commands,
     ui_root: Query<Entity, With<UiRoot>>,
     window: Query<&Window, With<PrimaryWindow>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
+    /// The bar's background.
+    const BAR_BG: Color = Color::srgb_u8(0x24, 0x29, 0x2c);
+    /// The line along the bar's bottom edge.
+    const BAR_LINE: Color = Color::srgb_u8(0x14, 0x15, 0x18);
+
     let Ok(ui_root) = ui_root.single() else {
         return;
     };
@@ -212,24 +199,13 @@ fn ensure_tab_bar(
                 width: Val::Percent(100.0),
                 height: Val::Px(tab_bar_height_logical(scale)),
                 flex_shrink: 0.0,
+                border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
             BackgroundColor(BAR_BG),
+            BorderColor::all(BAR_LINE),
         ))
         .id();
-    commands.spawn((
-        TabBarLine,
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0),
-            right: Val::Px(0.0),
-            bottom: Val::Px(0.0),
-            height: Val::Px(1.0),
-            ..default()
-        },
-        BackgroundColor(BAR_LINE),
-        ChildOf(bar),
-    ));
     spawn_tab_strip(&mut commands, bar, &tab_font(ui_font.as_deref()));
     commands.entity(ui_root).insert_children(0, &[bar]);
 }
@@ -237,6 +213,9 @@ fn ensure_tab_bar(
 /// Spawns the horizontally scrolling strip under `bar`, holding only the
 /// new-workspace button.
 fn spawn_tab_strip(commands: &mut Commands, bar: Entity, font: &TextFont) {
+    /// The width of the new-workspace button, in logical px.
+    const NEW_BUTTON_WIDTH_PX: f32 = 36.0;
+
     let strip = commands
         .spawn((
             TabStrip,
@@ -245,6 +224,8 @@ fn spawn_tab_strip(commands: &mut Commands, bar: Entity, font: &TextFont) {
                 flex_grow: 1.0,
                 min_width: Val::Px(0.0),
                 height: Val::Percent(100.0),
+                padding: UiRect::left(Val::Px(TAB_STRIP_LEFT_PADDING_PX)),
+                column_gap: Val::Px(TAB_GAP_PX),
                 overflow: Overflow::scroll_x(),
                 ..default()
             },
@@ -340,8 +321,8 @@ fn reconcile_tabs(
     }
 }
 
-/// Spawns one tab with its label, close button, and divider under `strip`,
-/// and returns it.
+/// Spawns one rounded tab, shorter than the bar and centred in it, with
+/// its label and close button under `strip`, and returns it.
 fn spawn_tab(
     commands: &mut Commands,
     strip: Entity,
@@ -349,6 +330,11 @@ fn spawn_tab(
     label: String,
     font: &TextFont,
 ) -> Entity {
+    /// The narrowest a tab gets before the strip scrolls, in logical px.
+    const TAB_MIN_WIDTH_PX: f32 = 80.0;
+    /// The widest a tab gets, in logical px.
+    const TAB_MAX_WIDTH_PX: f32 = 240.0;
+
     let tab = commands
         .spawn((
             WorkspaceTab { workspace },
@@ -357,11 +343,12 @@ fn spawn_tab(
                 flex_basis: Val::Px(TAB_MAX_WIDTH_PX),
                 min_width: Val::Px(TAB_MIN_WIDTH_PX),
                 max_width: Val::Px(TAB_MAX_WIDTH_PX),
-                height: Val::Percent(100.0),
+                height: Val::Px(20.0),
+                align_self: AlignSelf::Center,
                 padding: UiRect::horizontal(Val::Px(12.0)),
                 column_gap: Val::Px(8.0),
                 align_items: AlignItems::Center,
-                border: UiRect::top(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
             ChildOf(strip),
@@ -401,20 +388,6 @@ fn spawn_tab(
             ChildOf(tab),
         ))
         .observe(on_close_click);
-    commands.spawn((
-        TabDivider,
-        BackgroundColor(BAR_LINE),
-        Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(0.0),
-            top: Val::Px(7.0),
-            width: Val::Px(1.0),
-            height: Val::Px(14.0),
-            display: Display::None,
-            ..default()
-        },
-        ChildOf(tab),
-    ));
     tab
 }
 
@@ -438,39 +411,27 @@ fn label_texts<'a>(
         .flat_map(|texts| texts.iter())
 }
 
-/// Colors each tab for whether it is displayed or hovered, shows the close
-/// button on the displayed tab and on a hovered one, and shows a tab's
-/// divider only when neither it nor the next tab in the previewed order is
-/// displayed.
+/// Fills the displayed tab, and a hovered one more faintly, colors each
+/// label for whether its tab is displayed, and shows the close button on
+/// the displayed tab and on a hovered one.
 fn style_tabs(
     mut tabs: Query<(
         &WorkspaceTab,
         &mut BackgroundColor,
-        &mut BorderColor,
         &Children,
         Has<TabHovered>,
     )>,
-    mut texts: Query<&mut TextColor, Or<(With<TabLabelText>, With<TabClose>)>>,
-    mut closes: Query<&mut Node, (With<TabClose>, Without<TabDivider>)>,
-    mut dividers: Query<&mut Node, (With<TabDivider>, Without<TabClose>)>,
+    mut labels: Query<&mut TextColor, With<TabLabelText>>,
+    mut closes: Query<&mut Node, With<TabClose>>,
     workspaces: Res<CurrentWorkspaces>,
-    drag: Res<TabDrag>,
     label_boxes: Query<&Children, With<TabLabel>>,
 ) {
-    let order = tab_order(&workspaces.entries, drag.preview());
-    for (tab, mut background, mut border, parts, hovered) in &mut tabs {
+    for (tab, mut background, parts, hovered) in &mut tabs {
         let displayed = workspaces.active == Some(tab.workspace);
-        let next = order.iter().skip_while(|id| **id != tab.workspace).nth(1);
-        let divided = !displayed && next.is_some_and(|id| workspaces.active != Some(*id));
         let fill = if displayed {
             ACTIVE_BG
         } else if hovered {
             HOVER_BG
-        } else {
-            Color::NONE
-        };
-        let accent = if displayed {
-            ACTIVE_ACCENT
         } else {
             Color::NONE
         };
@@ -484,29 +445,17 @@ fn style_tabs(
         } else {
             Display::None
         };
-        let divider = if divided {
-            Display::Flex
-        } else {
-            Display::None
-        };
         background.set_if_neq(BackgroundColor(fill));
-        border.set_if_neq(BorderColor {
-            top: accent,
-            ..BorderColor::DEFAULT
-        });
-        for part in parts.iter().chain(label_texts(parts, &label_boxes)) {
-            if let Ok(mut color) = texts.get_mut(part) {
+        for label in label_texts(parts, &label_boxes) {
+            if let Ok(mut color) = labels.get_mut(label) {
                 color.set_if_neq(text);
             }
-            if let Ok(mut node) = closes.get_mut(part)
+        }
+        for part in parts {
+            if let Ok(mut node) = closes.get_mut(*part)
                 && node.display != close
             {
                 node.display = close;
-            }
-            if let Ok(mut node) = dividers.get_mut(part)
-                && node.display != divider
-            {
-                node.display = divider;
             }
         }
     }
@@ -791,14 +740,17 @@ mod tests {
     }
 
     /// Lays out a 1000 px strip at the window's left edge with 100 px tabs
-    /// for `ids` side by side from its left edge.
+    /// for `ids` from `TAB_STRIP_LEFT_PADDING_PX`, `TAB_GAP_PX` apart.
     fn lay_out_strip(app: &mut App, ids: &[u32]) {
         let strip = strip_of(app);
         place(app, strip, Vec2::new(500.0, 14.0), Vec2::new(1000.0, 28.0));
         for (slot, id) in ids.iter().enumerate() {
             let tab = tab_of(app, *id);
-            let center = Vec2::new(50.0 + 100.0 * slot as f32, 14.0);
-            place(app, tab, center, Vec2::new(100.0, 28.0));
+            let center = Vec2::new(
+                TAB_STRIP_LEFT_PADDING_PX + 50.0 + (100.0 + TAB_GAP_PX) * slot as f32,
+                14.0,
+            );
+            place(app, tab, center, Vec2::new(100.0, 20.0));
         }
     }
 
@@ -943,6 +895,41 @@ mod tests {
                 Sent::Workspace(WorkspaceAction::Select(WorkspaceTarget::Id(WorkspaceId(2)))),
                 Sent::Workspace(WorkspaceAction::Close(CloseTarget::Id(WorkspaceId(1)))),
                 Sent::Spawn(NewPaneAt::Workspace),
+            ]
+        );
+    }
+
+    /// Asserts that the displayed tab is filled, a hovered tab is filled
+    /// more faintly, and the others are left unfilled, and that the × shows
+    /// in the dim text color on the displayed and the hovered tab only.
+    ///
+    /// Case: three workspaces are open with the first on screen, and the
+    /// pointer rests on the second tab.
+    #[test]
+    fn the_displayed_and_hovered_tabs_are_filled_with_a_dim_close() {
+        let mut app = app_with_tab_bar();
+        set_workspaces(&mut app, &[1, 2, 3], 1);
+        app.update();
+        app.update();
+        let tabs = [1, 2, 3].map(|id| tab_of(&mut app, id));
+        let closes = tabs.map(|tab| close_button_of(&mut app, tab));
+        app.world_mut().entity_mut(tabs[1]).insert(TabHovered);
+        app.update();
+
+        let world = app.world();
+        let fills = tabs.map(|tab| world.get::<BackgroundColor>(tab).map(|fill| fill.0));
+        assert_eq!(fills, [Some(ACTIVE_BG), Some(HOVER_BG), Some(Color::NONE)]);
+        let shown = closes.map(|close| {
+            let display = world.get::<Node>(close).map(|node| node.display);
+            let color = world.get::<TextColor>(close).map(|color| color.0);
+            display.zip(color)
+        });
+        assert_eq!(
+            shown,
+            [
+                Some((Display::Flex, INACTIVE_TEXT)),
+                Some((Display::Flex, INACTIVE_TEXT)),
+                Some((Display::None, INACTIVE_TEXT)),
             ]
         );
     }
@@ -1136,7 +1123,7 @@ mod tests {
                 .expect("a tab has a transform")
                 .translation
                 .x,
-            Val::Px(30.0)
+            Val::Px(230.0 - 2.0 * (100.0 + TAB_GAP_PX))
         );
 
         app.world_mut().trigger(click(first));
@@ -1164,6 +1151,35 @@ mod tests {
         assert_eq!(
             listed_tabs(&mut app),
             expected_tabs(&[(1, "Workspace 1"), (2, "Workspace 2"), (3, "Workspace 3")])
+        );
+    }
+
+    /// Asserts that a tab released over the gap after another tab lands in
+    /// that tab's slot, counting the strip's leading padding.
+    ///
+    /// Case: the user drags the first of three tabs and releases it just
+    /// past the right edge of the second one.
+    #[test]
+    fn a_drop_in_the_gap_after_a_tab_lands_in_its_slot() {
+        let mut app = app_with_tab_bar();
+        record_requests(&mut app);
+        set_workspaces(&mut app, &[1, 2, 3], 1);
+        app.update();
+        app.update();
+        lay_out_strip(&mut app, &[1, 2, 3]);
+        let first = tab_of(&mut app, 1);
+
+        app.world_mut().trigger(drag_start(first, 56.0));
+        app.world_mut().trigger(drag_to(first, 212.0, 156.0));
+        app.world_mut().trigger(drag_end(first, 212.0, 156.0));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SentRequests>().0,
+            vec![Sent::Workspace(WorkspaceAction::Move {
+                workspace: WorkspaceId(1),
+                index: 1,
+            })]
         );
     }
 
