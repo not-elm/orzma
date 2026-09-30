@@ -134,14 +134,14 @@ const TAB_STRIP_LEFT_PADDING_PX: f32 = 6.0;
 /// The font size of the tab bar's text, in logical px.
 const TAB_FONT_PX: f32 = 12.0;
 /// The displayed tab's background.
-const ACTIVE_BG: Color = Color::srgb_u8(0x2c, 0x2e, 0x35);
+const ACTIVE_BG: Color = Color::srgb_u8(0x49, 0x4c, 0x4e);
 /// The displayed tab's text.
 const ACTIVE_TEXT: Color = Color::srgb_u8(0xff, 0xff, 0xff);
 /// The text of the other tabs, of the close buttons, and of the
 /// new-workspace button.
 const INACTIVE_TEXT: Color = Color::srgb_u8(0x8c, 0x8c, 0x98);
 /// The background of a hovered tab that is not displayed.
-const HOVER_BG: Color = Color::srgb_u8(0x1f, 0x21, 0x26);
+const HOVER_BG: Color = Color::srgb_u8(0x34, 0x37, 0x3a);
 
 /// The text inside a tab's `TabLabel`.
 #[derive(Component)]
@@ -183,9 +183,9 @@ fn ensure_tab_bar(
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     /// The bar's background.
-    const BAR_BG: Color = Color::srgb_u8(0x14, 0x15, 0x18);
+    const BAR_BG: Color = Color::srgb_u8(0x24, 0x29, 0x2c);
     /// The line along the bar's bottom edge.
-    const BAR_LINE: Color = Color::srgb_u8(0x2e, 0x2f, 0x36);
+    const BAR_LINE: Color = Color::srgb_u8(0x14, 0x15, 0x18);
 
     let Ok(ui_root) = ui_root.single() else {
         return;
