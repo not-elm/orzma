@@ -38,6 +38,10 @@ against ratatui 0.29; with another version, the SDK's widget and backend types
 do not match yours. The examples use let chains, which need Rust 1.88 or later
 and the 2024 edition.
 
+`ratatui_orzma` and `@orzma/web` share orzma's version number. Use the release
+that matches the orzma your app runs in; see
+[Versions](protocol-reference.md#versions).
+
 The app has to run inside an orzma pane. orzma sets `ORZMA_SOCK` and
 `ORZMA_TOKEN` in every pane, and `Orzma::connect` returns an error when they
 are missing.

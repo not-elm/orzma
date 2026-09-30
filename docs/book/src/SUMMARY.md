@@ -22,6 +22,7 @@
   - [Key Bindings](key-bindings.md)
   - [Default Key Bindings](default-key-bindings.md)
 - [Terminal Compatibility](terminal-compatibility.md)
+- [Glossary](glossary.md)
 
 # Developer Guide
 
