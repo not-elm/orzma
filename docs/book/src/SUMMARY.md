@@ -6,6 +6,7 @@
 
 - [Installation](installation.md)
   - [Upgrading](upgrading.md)
+- [First Steps](first-steps.md)
 
 # User Guide
 

@@ -31,6 +31,7 @@ This guide describes orzma {{#include ../../../VERSION}}.
 
 - To install orzma, see [Installation](installation.md). If you are upgrading
   from an earlier release, see [Upgrading](upgrading.md).
+- To learn the everyday keys, follow [First Steps](first-steps.md).
 - To change settings or shortcuts, see [Configuration](configuration.md) and
   [Key Bindings](key-bindings.md).
 - To write a terminal app that shows a web page, see
