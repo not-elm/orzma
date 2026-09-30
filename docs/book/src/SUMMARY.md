@@ -12,7 +12,7 @@
 # Reference
 
 - [Configuration](configuration.md)
-- [Key Bindings](key-bindings.md)
+  - [Key Bindings](key-bindings.md)
 
 # Developer Guide
 

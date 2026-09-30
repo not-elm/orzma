@@ -40,9 +40,8 @@ below.
 ## Settings
 
 Every key below shows its default value. Keep only the lines you want to
-change; omitted keys fall back to these defaults. The `[shortcuts]` table is
-described in [Key Bindings](key-bindings.md), and the keys and actions of the
-`[vi-mode]` table in [Vi Mode](vi-mode.md).
+change; omitted keys fall back to these defaults. The two key-binding tables,
+`[shortcuts]` and `[vi-mode]`, are described in [Key Bindings](key-bindings.md).
 
 ### `[orzma]`
 
@@ -164,10 +163,12 @@ webview_dim = 0.55        # f32 0..=1. Brightness multiplier for inactive webvie
 webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = full color, 1 = grey).
 ```
 
+### `[shortcuts]`
+
+`[shortcuts]` binds orzma's own shortcuts; [Key Bindings](key-bindings.md)
+describes it.
+
 ### `[vi-mode]`
 
-Bind each action to one key or an array of keys, such as
-`exit = ["q", "Escape"]`; [Vi Mode](vi-mode.md#keys) describes the key syntax.
-Every action and its default:
-
-{{#include vi-mode.md:vi-mode-actions}}
+`[vi-mode]` binds the keys that work inside vi mode;
+[Vi mode keys](key-bindings.md#vi-mode-keys-vi-mode) describes it.
