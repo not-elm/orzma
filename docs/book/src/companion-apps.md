@@ -5,7 +5,7 @@ built with the `ratatui_orzma` SDK: **orzmd**, a Markdown viewer, and
 **orzbrowser**, a keyboard-driven browser. Homebrew links both into your `PATH`, and the
 Windows installer and the Linux `.deb` add them to it. The macOS dmg keeps them
 inside `orzma.app`, and the Linux tarball keeps them in `~/.local/share/orzma`;
-see [Getting Started](getting-started.md#install) to add them to your `PATH`.
+see [Installation](installation.md) to add them to your `PATH`.
 To build them from a clone of the repository instead, run `just install-apps`.
 
 Both run only inside an orzma pane. Anywhere else, they exit with an error

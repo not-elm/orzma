@@ -20,7 +20,7 @@ You need:
 - On Linux, the build packages the release build uses — on Ubuntu or Debian,
   `sudo apt install build-essential pkg-config libasound2-dev libudev-dev
   libwayland-dev libxkbcommon-dev libfontconfig1-dev` — and the runtime
-  libraries that [Getting Started](https://not-elm.github.io/orzma/getting-started.html#linux)
+  libraries that [Installation](https://not-elm.github.io/orzma/installation.html#linux)
   lists for the tarball.
 
 Then, from the repository root:

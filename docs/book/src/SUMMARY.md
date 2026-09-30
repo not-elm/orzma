@@ -1,6 +1,10 @@
 # Summary
 
-[Getting Started](getting-started.md)
+[Introduction](introduction.md)
+
+# Getting Started
+
+- [Installation](installation.md)
 
 # User Guide
 
