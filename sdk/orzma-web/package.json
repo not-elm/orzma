@@ -1,6 +1,6 @@
 {
   "name": "@orzma/web",
-  "version": "0.3.0-dev",
+  "version": "0.3.0",
   "description": "In-page TypeScript client for the orzma webview bridge (window.orzma).",
   "type": "module",
   "exports": {
