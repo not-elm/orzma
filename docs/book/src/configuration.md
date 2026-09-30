@@ -207,10 +207,10 @@ Default: `"right"` · `"none"`, `"left"`, `"right"`, or `"both"` · macOS only
 
 Which Option key acts as `Alt`: it sends Meta to the program in the terminal
 and runs `Alt` shortcuts. The other Option key types special characters, such
-as `©` for Option+g; for shortcuts it still counts as `Alt` with a key that
+as `©` for `Option+g`; for shortcuts it still counts as `Alt` with a key that
 types no character, such as an arrow, and together with `Ctrl` or `Cmd`. In vi
 mode, an accent key pressed with the character-typing Option key, such as left
-Option+e under the default, runs as its plain key.
+`Option+e` under the default, runs as its plain key.
 
 A MacBook with a Japanese (JIS) keyboard has no right Option key; set
 `"left"` or `"both"` there. On Windows and Linux every Alt key is `Alt` except
@@ -233,7 +233,7 @@ program ignore it.
 Default: `0.3333` · Cells
 
 How far the wheel or trackpad has to travel, in cells, to count as one notch.
-The default makes one line of wheel travel three notches, which scroll three
+The default makes one cell of wheel travel three notches, which scroll three
 lines. A smaller value scrolls faster. Mouse reports to a program ignore it:
 they send one report per whole cell of travel.
 

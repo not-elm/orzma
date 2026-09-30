@@ -42,7 +42,8 @@ orzma understands.
   reports a column or row past 223 as 223. The UTF-8 (1005) and urxvt (1015)
   encodings are not supported.
 - Hold `Shift` to keep the mouse from a program that tracks it, so you can
-  select text and scroll the scrollback.
+  select text; the wheel then acts as it does for a program that does not
+  track the mouse.
 - On the alternate screen, the wheel sends arrow keys to a program that does
   not track the mouse (alternate scroll, mode 1007, on by default).
 - Focus reporting (mode 1004) sends `CSI I` and `CSI O` when the pane becomes

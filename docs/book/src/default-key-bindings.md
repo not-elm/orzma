@@ -10,7 +10,7 @@ same defaults, and only the [general shortcuts](#general) differ on macOS.
 | --- | --- | --- | --- |
 | `leader` | `Cmd` (tap) | `Alt` (tap) | The key that starts a `<Leader>` binding (see [The leader key](key-bindings.md#the-leader-key)). |
 | `paste` | `Cmd+V` | `Ctrl+V` | Paste from the system clipboard. |
-| `copy` | `Cmd+C` | `Ctrl+C` | Copy the focused terminal's selection to the system clipboard, then dismiss the selection. |
+| `copy` | `Cmd+C` | `Ctrl+C` | Copy the active pane's selection to the system clipboard, then dismiss the selection. |
 | `increase-font-size` | `r:Cmd+Plus` | `r:Ctrl+Plus` | Step the terminal font size up. |
 | `decrease-font-size` | `r:Cmd+-` | `r:Ctrl+-` | Step the terminal font size down. |
 | `reset-font-size` | `Cmd+0` | `Ctrl+0` | Return the terminal font size to [`[font] size`](configuration.md#font-size). |

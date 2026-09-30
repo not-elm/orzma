@@ -123,3 +123,5 @@ them as well.
 
 Every install includes the [companion apps](companion-apps.md) `orzmd` and
 `orzbrowser`. To build orzma from source, see [Contributing](contributing.md).
+
+Next, [First Steps](first-steps.md) walks through the keys you use every day.

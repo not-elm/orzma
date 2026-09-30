@@ -2,7 +2,8 @@
 
 This page lists, release by release, the changes that need you to edit your
 configuration file and the changes in behavior you are likely to notice. When
-you skip releases, apply each section from the oldest to the newest. The
+you skip releases, start at the section for the release after yours and read
+up the page to the newest. The
 [releases page](https://github.com/not-elm/orzma/releases) lists every change.
 
 If orzma starts with the default settings after an upgrade, your configuration
@@ -81,7 +82,7 @@ page, set `direct-chords-over-webview = false` in `[shortcuts]` (see
 
 The `[mouse]` defaults changed: `lines_per_notch` from 3 to 1,
 `cells_per_notch` from 0.5 to 0.3333, and `max_protocol_events_per_frame`
-from 8 to 24. One line of wheel travel now scrolls about three lines instead
+from 8 to 24. One cell of wheel travel now scrolls about three lines instead
 of six. To scroll the scrollback about as fast as before:
 
 ```toml
@@ -106,8 +107,8 @@ last workspace quits orzma.
 
 ### Companion apps
 
-- orzmd: the page takes keyboard focus once it has loaded, and `Ctrl+c` no
-  longer quits while it has focus; quit with `q`.
+- orzmd: the page takes keyboard focus once it has loaded, so `Ctrl+c` no
+  longer quits once the page has loaded; quit with `q`.
 - orzbrowser: `Ctrl+c` no longer quits in Normal mode or in the address bar;
   quit with `q`. Text with a space, or a single word without a dot, is
   searched for instead of opened as an address, and `localhost`, an IP

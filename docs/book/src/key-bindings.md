@@ -98,7 +98,7 @@ does not keep firing. A second press or an auto-repeat is read as a
 ## `Alt` chords, the shell, and the Option key
 
 The stock pane, workspace, and vi-mode shortcuts are `Alt` chords, so those
-keys no longer reach the program in the terminal as meta-prefixed keys:
+keys do not reach the program in the terminal as meta-prefixed keys:
 readline's `Alt+c` (capitalize word), `Alt+r` (revert line), and `Alt+1` …
 `Alt+9` (numeric argument), for example. Unbind or rebind a shortcut to give
 its key back to the shell. `Alt` chords that orzma does not bind, such as
@@ -120,20 +120,17 @@ its key back to the shell. `Alt` chords that orzma does not bind, such as
 
 Things to know when you rebind:
 
-- **Rebinding a chord that a stock default already uses** (e.g.
-  `split-vertical-pane = "Alt+h"`, which collides with the default
+- **Binding a chord that a stock default already uses to another action**
+  (e.g. `split-vertical-pane = "Alt+h"`, which collides with the default
   `select-left-pane = "Alt+h"`) is a startup validation error naming both
-  actions. Unbind the stock default explicitly (`select-left-pane = ""`) or
-  pick a free chord.
-- **The stock pane, workspace, and vi-mode shortcuts are `Alt` chords** (see
-  [Default Key Bindings](default-key-bindings.md)). If your configuration
-  binds one of those chords to another action, or uses one of them as a chord
-  `leader`, orzma does not start (see
-  [Validation](configuration.md#validation)). Rebind that action to a free
-  chord, or unbind the stock action that takes the chord, e.g.
-  `rename-workspace = ""`. Binding a chord to the action that already has it by
-  default is not a conflict. A direct chord and a `<Leader>` binding never
-  collide, even on the same key, such as `s` and `<Leader>s`.
+  actions, and so is using such a chord as the chord `leader`; see
+  [Validation](configuration.md#validation). The stock pane, workspace, and
+  vi-mode shortcuts are all `Alt` chords (see
+  [Default Key Bindings](default-key-bindings.md)). Unbind the stock default
+  explicitly (`select-left-pane = ""`, `rename-workspace = ""`) or pick a free
+  chord. Binding a chord to the action that already has it by default is not a
+  conflict. A direct chord and a `<Leader>` binding never collide, even on the
+  same key, such as `s` and `<Leader>s`.
 - **Two spellings of one key are not caught at startup.** `Cmd+Plus` and
   `Cmd+=` press the same key: orzma starts, logs a warning, and runs only one
   of the two actions. Bind each key once.
