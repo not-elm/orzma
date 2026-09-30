@@ -134,14 +134,16 @@ const TAB_STRIP_LEFT_PADDING_PX: f32 = 6.0;
 /// The font size of the tab bar's text, in logical px.
 const TAB_FONT_PX: f32 = 12.0;
 /// The displayed tab's background.
-const ACTIVE_BG: Color = Color::srgb_u8(0x49, 0x4c, 0x4e);
+const ACTIVE_BG: Color = Color::srgb_u8(0x7c, 0x3a, 0xed);
 /// The displayed tab's text.
 const ACTIVE_TEXT: Color = Color::srgb_u8(0xff, 0xff, 0xff);
-/// The text of the other tabs, of the close buttons, and of the
+/// The text of the other tabs, of their close buttons, and of the
 /// new-workspace button.
 const INACTIVE_TEXT: Color = Color::srgb_u8(0x8c, 0x8c, 0x98);
 /// The background of a hovered tab that is not displayed.
-const HOVER_BG: Color = Color::srgb_u8(0x34, 0x37, 0x3a);
+const HOVER_BG: Color = Color::srgb_u8(0x3e, 0x2e, 0x66);
+/// The text of the displayed tab's close button.
+const ACTIVE_CLOSE: Color = Color::srgb_u8(0xc4, 0xb5, 0xfd);
 
 /// The text inside a tab's `TabLabel`.
 #[derive(Component)]
@@ -412,8 +414,8 @@ fn label_texts<'a>(
 }
 
 /// Fills the displayed tab, and a hovered one more faintly, colors each
-/// label for whether its tab is displayed, and shows the close button on
-/// the displayed tab and on a hovered one.
+/// label and close button for whether its tab is displayed, and shows the
+/// close button on the displayed tab and on a hovered one.
 fn style_tabs(
     mut tabs: Query<(
         &WorkspaceTab,
@@ -422,24 +424,19 @@ fn style_tabs(
         Has<TabHovered>,
     )>,
     mut labels: Query<&mut TextColor, With<TabLabelText>>,
-    mut closes: Query<&mut Node, With<TabClose>>,
+    mut closes: Query<(&mut Node, &mut TextColor), (With<TabClose>, Without<TabLabelText>)>,
     workspaces: Res<CurrentWorkspaces>,
     label_boxes: Query<&Children, With<TabLabel>>,
 ) {
     for (tab, mut background, parts, hovered) in &mut tabs {
         let displayed = workspaces.active == Some(tab.workspace);
-        let fill = if displayed {
-            ACTIVE_BG
+        let (fill, text, close_text) = if displayed {
+            (ACTIVE_BG, ACTIVE_TEXT, ACTIVE_CLOSE)
         } else if hovered {
-            HOVER_BG
+            (HOVER_BG, INACTIVE_TEXT, INACTIVE_TEXT)
         } else {
-            Color::NONE
+            (Color::NONE, INACTIVE_TEXT, INACTIVE_TEXT)
         };
-        let text = TextColor(if displayed {
-            ACTIVE_TEXT
-        } else {
-            INACTIVE_TEXT
-        });
         let close = if displayed || hovered {
             Display::Flex
         } else {
@@ -448,15 +445,17 @@ fn style_tabs(
         background.set_if_neq(BackgroundColor(fill));
         for label in label_texts(parts, &label_boxes) {
             if let Ok(mut color) = labels.get_mut(label) {
-                color.set_if_neq(text);
+                color.set_if_neq(TextColor(text));
             }
         }
         for part in parts {
-            if let Ok(mut node) = closes.get_mut(*part)
-                && node.display != close
-            {
+            let Ok((mut node, mut color)) = closes.get_mut(*part) else {
+                continue;
+            };
+            if node.display != close {
                 node.display = close;
             }
+            color.set_if_neq(TextColor(close_text));
         }
     }
 }
@@ -901,12 +900,13 @@ mod tests {
 
     /// Asserts that the displayed tab is filled, a hovered tab is filled
     /// more faintly, and the others are left unfilled, and that the × shows
-    /// in the dim text color on the displayed and the hovered tab only.
+    /// on the displayed and the hovered tab only, lighter on the displayed
+    /// one.
     ///
     /// Case: three workspaces are open with the first on screen, and the
     /// pointer rests on the second tab.
     #[test]
-    fn the_displayed_and_hovered_tabs_are_filled_with_a_dim_close() {
+    fn the_displayed_and_hovered_tabs_are_filled_with_a_close() {
         let mut app = app_with_tab_bar();
         set_workspaces(&mut app, &[1, 2, 3], 1);
         app.update();
@@ -927,11 +927,34 @@ mod tests {
         assert_eq!(
             shown,
             [
-                Some((Display::Flex, INACTIVE_TEXT)),
+                Some((Display::Flex, ACTIVE_CLOSE)),
                 Some((Display::Flex, INACTIVE_TEXT)),
                 Some((Display::None, INACTIVE_TEXT)),
             ]
         );
+    }
+
+    /// Asserts that a tab's × turns back to the dim text color once the tab
+    /// is no longer displayed, and that the newly displayed tab's × turns
+    /// light.
+    ///
+    /// Case: the pointer rests on the first tab while the user switches to
+    /// the second workspace with a key binding.
+    #[test]
+    fn the_close_follows_the_displayed_tab() {
+        let mut app = app_with_tab_bar();
+        set_workspaces(&mut app, &[1, 2], 1);
+        app.update();
+        app.update();
+        let tabs = [1, 2].map(|id| tab_of(&mut app, id));
+        let closes = tabs.map(|tab| close_button_of(&mut app, tab));
+        app.world_mut().entity_mut(tabs[0]).insert(TabHovered);
+        set_workspaces(&mut app, &[1, 2], 2);
+        app.update();
+
+        let world = app.world();
+        let colors = closes.map(|close| world.get::<TextColor>(close).map(|color| color.0));
+        assert_eq!(colors, [Some(INACTIVE_TEXT), Some(ACTIVE_CLOSE)]);
     }
 
     /// Asserts that a double-click on a tab replaces its label with a

@@ -207,7 +207,7 @@ impl Plugin for TabRenamePlugin {
 /// A blink period long enough that the caret stays drawn.
 const STEADY_CARET: Duration = Duration::from_secs(3600);
 /// The background of the rename field's selected text.
-const SELECTION_BG: Color = Color::srgb_u8(0x3f, 0x63, 0x8b);
+const SELECTION_BG: Color = Color::srgb_u8(0x4c, 0x1d, 0x95);
 
 /// One rename: the workspace, its field, the label the field replaces, the
 /// name and automatic label the workspace had, and how the rename ends.
