@@ -1,3 +1,9 @@
-<!-- This page shows the repository's CONTRIBUTING.md. To change it, edit CONTRIBUTING.md at the repository root, not this file. -->
+# Contributing to orzma
 
-{{#include ../../../CONTRIBUTING.md}}
+This page shows the repository's
+[CONTRIBUTING.md](https://github.com/not-elm/orzma/blob/main/CONTRIBUTING.md)
+without its release steps. To change it, edit that file.
+
+{{#include ../../../CONTRIBUTING.md:guide}}
+
+{{#include ../../../CONTRIBUTING.md:documentation}}
