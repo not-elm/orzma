@@ -1,15 +1,7 @@
-# Getting Started
+# Installation
 
-> [!WARNING]
-> orzma is in early development and may introduce breaking changes.
-
-orzma is a terminal emulator that can render web pages inside the terminal. A
-program running in an orzma pane can place a live web page among its own text
-and exchange messages with it, so a terminal app can show rendered Markdown,
-diagrams, or a website without leaving the terminal. orzma also splits its
-window into panes, so you do not need a separate terminal multiplexer.
-
-![orzma with a Markdown viewer and a browser in split panes](images/thumbnail.png)
+If you are upgrading from an earlier release, read [Upgrading](upgrading.md)
+for the changes that need you to edit your configuration.
 
 ## Supported platforms
 
@@ -18,9 +10,7 @@ window into panes, so you do not need a separate terminal multiplexer.
 - Linux (x86_64) with glibc 2.35 or later. The `.deb` is tested on Ubuntu
   22.04 and 24.04.
 
-## Install
-
-### macOS
+## macOS
 
 Install orzma with Homebrew:
 
@@ -42,7 +32,7 @@ drag `orzma.app` onto the `Applications` folder next to it. This does not put
 `/Applications/orzma.app/Contents/Resources` to your `PATH`. To upgrade, download
 the new dmg and replace `orzma.app` the same way.
 
-#### First launch
+### First launch
 
 orzma is not notarized by Apple, so macOS blocks its first launch, however you
 installed it, and again after each upgrade, with a warning that orzma could not
@@ -57,15 +47,16 @@ Alternatively, after macOS blocks orzma, open
 **System Preferences > Security & Privacy > General**) and click
 **Open Anyway** next to the message about orzma.
 
-### Windows
+## Windows
 
 Download `orzma-<version>-x64.msi` from the
 [latest release](https://github.com/not-elm/orzma/releases/latest) and run it.
 The installer is per-user: it needs no administrator prompt, installs into
 `%LocalAppData%\Programs\orzma`, and puts `orzma`, `orzmd`, and `orzbrowser` on
-your `PATH`.
+your `PATH`. To upgrade, run the installer of the new release; it replaces the
+installed version.
 
-### Linux
+## Linux
 
 Use either the `.deb` or the tarball, not both: with both installed,
 `~/.local/bin/orzma` usually shadows `/usr/bin/orzma`.
@@ -79,8 +70,7 @@ it with apt, which also installs the system libraries orzma needs:
 sudo apt install ./orzma_<version>_amd64.deb
 ```
 
-The package puts `orzma`, `orzmd`, and `orzbrowser` in `/usr/bin`. To uninstall,
-run `sudo apt remove orzma`; your settings in `~/.config/orzma` are kept.
+The package puts `orzma`, `orzmd`, and `orzbrowser` in `/usr/bin`.
 
 On other distributions, first install the system libraries that orzma and its
 embedded Chromium need. The package names below are Ubuntu's and Debian's, so
@@ -108,11 +98,30 @@ cd orzma-<version>-x86_64-linux
 The installer is per-user and needs no root. It copies orzma into
 `~/.local/share/orzma` (`$XDG_DATA_HOME/orzma` when `XDG_DATA_HOME` is set),
 links `~/.local/bin/orzma`, and adds orzma to your desktop's application list.
+If `~/.local/bin` is not on your `PATH`, the installer says so; add it, or log
+out and back in, to run `orzma` from a shell.
 It does not put `orzmd` and `orzbrowser` on your `PATH`; add
-`~/.local/share/orzma` to your `PATH` to run them by name. You can also run `./orzma` straight from the
-extracted directory without installing. To uninstall, run
-`~/.local/share/orzma/uninstall.sh`; your settings in `~/.config/orzma` are
-kept.
+`~/.local/share/orzma` to your `PATH` to run them by name. You can also run
+`./orzma` straight from the extracted directory without installing.
+
+## Uninstall
+
+Remove orzma the way you installed it:
+
+- **Homebrew:** run `brew uninstall --cask orzma`.
+- **dmg:** move `/Applications/orzma.app` to the Trash.
+- **Windows:** open **Settings > Apps** (**Installed apps** on Windows 11),
+  select **orzma**, and choose **Uninstall**. This also removes orzma from
+  your `PATH` and the Start menu.
+- **.deb:** run `sudo apt remove orzma`.
+- **Tarball:** run `~/.local/share/orzma/uninstall.sh`
+  (`$XDG_DATA_HOME/orzma/uninstall.sh` when `XDG_DATA_HOME` is set).
+
+None of these removes your settings in `~/.config/orzma`
+(`%USERPROFILE%\.config\orzma` on Windows); delete that directory to remove
+them as well.
 
 Every install includes the [companion apps](companion-apps.md) `orzmd` and
 `orzbrowser`. To build orzma from source, see [Contributing](contributing.md).
+
+Next, [First Steps](first-steps.md) walks through the keys you use every day.

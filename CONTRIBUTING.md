@@ -1,5 +1,6 @@
 # Contributing to orzma
 
+<!-- ANCHOR: guide -->
 Thanks for helping! This guide covers the development setup, how the code is
 organized, the conventions the code follows, how to send a change, and how to
 work on the documentation.
@@ -20,7 +21,7 @@ You need:
 - On Linux, the build packages the release build uses — on Ubuntu or Debian,
   `sudo apt install build-essential pkg-config libasound2-dev libudev-dev
   libwayland-dev libxkbcommon-dev libfontconfig1-dev` — and the runtime
-  libraries that [Getting Started](https://not-elm.github.io/orzma/getting-started.html#linux)
+  libraries that [Installation](https://not-elm.github.io/orzma/installation.html#linux)
   lists for the tarball.
 
 Then, from the repository root:
@@ -124,6 +125,8 @@ grouped by label, so add one of `breaking-change`, `enhancement`,
 `performance`, `bug`, `documentation`, or `dependencies` — or `skip-changelog`
 to leave the change out of the notes.
 
+<!-- ANCHOR_END: guide -->
+
 ## Releasing
 
 Maintainers cut a release from `main`:
@@ -155,6 +158,8 @@ Maintainers cut a release from `main`:
 Once a release is published, fix problems with a new version; never move its
 tag.
 
+<!-- ANCHOR: documentation -->
+
 ## Documentation
 
 The user guide lives in `docs/book` and is built with
@@ -183,3 +188,5 @@ just book         # build into target/book
 - When the SDK moves to a new ratatui version, update the version in the Setup
   section of `docs/book/src/building-webview-apps.md` and in
   `sdk/ratatui_orzma/README.md`.
+
+<!-- ANCHOR_END: documentation -->

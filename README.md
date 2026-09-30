@@ -14,9 +14,10 @@ and exchange messages with it.
 The user guide is published at <https://not-elm.github.io/orzma/> with each
 release. Its sources are in [`docs/book/src`](docs/book/src).
 
-- [Getting Started](https://not-elm.github.io/orzma/) — install orzma.
-- [Configuration](https://not-elm.github.io/orzma/configuration.html) and
-  [Key Bindings](https://not-elm.github.io/orzma/key-bindings.html).
+- [Installation](https://not-elm.github.io/orzma/installation.html) — install orzma.
+- [Configuration](https://not-elm.github.io/orzma/configuration.html),
+  [Key Bindings](https://not-elm.github.io/orzma/key-bindings.html), and
+  [Default Key Bindings](https://not-elm.github.io/orzma/default-key-bindings.html).
 - [Building Webview Apps](https://not-elm.github.io/orzma/building-webview-apps.html)
   and the [Webview Protocol](https://not-elm.github.io/orzma/protocol-reference.html).
 
@@ -31,7 +32,7 @@ brew install --cask not-elm/orzma/orzma
 Or download `orzma-<version>-arm64.dmg` from the
 [latest release](https://github.com/not-elm/orzma/releases/latest), open it, and drag
 `orzma.app` into `Applications`. orzma is not notarized, so see
-[First launch](https://not-elm.github.io/orzma/getting-started.html#first-launch)
+[First launch](https://not-elm.github.io/orzma/installation.html#first-launch)
 before opening it.
 
 Windows 10 1809 or later, and Windows 11 (x64): download `orzma-<version>-x64.msi` from the
@@ -41,14 +42,14 @@ Linux (x86_64) with glibc 2.35 or later: download the `.deb` for Ubuntu or
 Debian, or the tarball for other distributions, from the
 [latest release](https://github.com/not-elm/orzma/releases/latest).
 
-See [Getting Started](https://not-elm.github.io/orzma/) for details.
+See [Installation](https://not-elm.github.io/orzma/installation.html) for details.
 
 ## Companion apps
 
 | Name | Description |
 | --- | --- |
-| [orzmd](https://not-elm.github.io/orzma/companion-apps.html#orzmd) | A rich Markdown viewer |
-| [orzbrowser](https://not-elm.github.io/orzma/companion-apps.html#orzbrowser) | A keyboard-driven browser |
+| [orzmd](https://not-elm.github.io/orzma/orzmd.html) | A rich Markdown viewer |
+| [orzbrowser](https://not-elm.github.io/orzma/orzbrowser.html) | A keyboard-driven browser |
 
 ## SDK
 

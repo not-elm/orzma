@@ -21,7 +21,7 @@ orzbrowser [address or search terms]
 Run it inside an orzma pane. `orzbrowser github.com` opens a site,
 `orzbrowser rust async` searches for the words, and `orzbrowser` alone opens
 the search engine with the address bar ready. See the
-[user guide](https://not-elm.github.io/orzma/companion-apps.html#orzbrowser)
+[user guide](https://not-elm.github.io/orzma/orzbrowser.html)
 for its features, the address bar, and keyboard shortcuts.
 
 ## Acknowledgements

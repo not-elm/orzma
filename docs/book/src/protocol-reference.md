@@ -18,8 +18,8 @@ page. It spans three surfaces:
    call, subscribe to, and emit events to the registering program.
 
 Three actors participate: the **registering program** (running in a pane), the
-**orzma host**, and the **webview page**. A registration is a _Tier 1_ (dynamic,
-runtime-registered) webview — the only kind this protocol describes.
+**orzma host**, and the **webview page**. The [Glossary](glossary.md#webview-apps)
+defines the terms this page uses.
 
 End to end: a program connects to the control socket, registers content and
 receives an opaque **handle** together with its first placement **instance**,
@@ -53,6 +53,23 @@ sequenceDiagram
 ```
 
 The control socket carries every message between the program and the host, the APC verbs carry the mount and unmount, and the page bridge carries the `window.orzma` messages between the host and the page.
+
+## Example exchange
+
+A short session, from the handshake to a second instance. Program-to-host
+lines are marked `C→S`, host-to-program lines `S→C`; the sections below
+describe each message.
+
+```json
+C→S {"op":"hello","token":"orzma:mzxw6ytboi3tmnrqgq2tgmzvgm"}
+C→S {"op":"register","kind":"inline","html":"<!doctype html><body>hi</body>"}
+S→C {"ok":true,"handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","instance":"3f5a9c02d1e84b7690ab3cde12f45678"}
+S→C {"op":"call","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","instance":"3f5a9c02d1e84b7690ab3cde12f45678","reqId":"0","method":"save","params":{"text":"hi"}}
+C→S {"op":"reply","reqId":"0","ok":true,"value":{"saved":true}}
+C→S {"op":"emit","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","event":"tick","payload":{"n":1}}
+C→S {"op":"new_instance","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh"}
+S→C {"ok":true,"instance":"a1b2c3d4e5f60718293a4b5c6d7e8f90"}
+```
 
 ## The control socket
 
@@ -142,9 +159,9 @@ Every program line carries an `op`:
 | `hello`            | `token`                                  | Handshake; first line only.                                                                                                                                                                                 |
 | `register`         | `kind` + per-kind fields                 | Register content; mints a handle and its first instance.                                                                                                                                                    |
 | `new_instance`     | `handle`                                 | Mint an additional instance on a handle this connection owns.                                                                                                                                               |
-| `unregister`       | `handle`                                 | Release a handle owned by this connection; removes its mounted views.                                                                                                                                       |
+| `unregister`       | `handle`                                 | Release a handle owned by this connection; removes its mounted placements.                                                                                                                                       |
 | `reply`            | `reqId`, `ok`, `value?`, `error?`        | Answer a host `call` (use the `call`'s `reqId`).                                                                                                                                                            |
-| `emit`             | `handle`, `event`, `payload`             | Push an event to every page mounted from the handle (delivered to `window.orzma.on`). Ignored for a `url` view without the bridge.                                                                          |
+| `emit`             | `handle`, `event`, `payload`             | Push an event to every page mounted from the handle (delivered to `window.orzma.on`). Ignored for a `url` registration without the bridge.                                                                          |
 | `focus`            | `instance` (string or `null`)            | Set app-owned focus to a mounted, interactive placement, or `null` to blur. Focusing a placement also makes its pane the active pane; a blur leaves the active pane unchanged.                              |
 | `navigate`         | `instance`, `action`                     | Navigate one mounted placement in place.                                                                                                                                                                    |
 | `mount`            | `instance`, `row`, `col`, `rows`, `cols` | Mount one placement at a 0-based cell of the pane's active screen, the socket form of the APC `mount` (see below).                                                                                          |
@@ -156,7 +173,7 @@ other op it refuses, such as one naming a handle or instance this connection
 does not own.
 
 `navigate.action` is one of the strings `"back"`, `"forward"`, `"reload"`, or
-the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
+the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` registration).
 
 ### Register kinds
 
@@ -168,30 +185,31 @@ the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
 | `inline` | `html` (full document, ≤ 4 MiB)                                             | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`)                     | `orzma://<handle>/index.html`                  |
 | `url`    | `url` (`http`/`https` only)                                                 | `interactive` (`true`), `bridge` (`false`), `forward_keys` (`[]`), `preload` (`[]`) | the remote URL directly (no `orzma://` origin) |
 
-- `interactive` — whether the mounted view accepts pointer/keyboard input.
+- `interactive` — whether a mounted placement accepts pointer and keyboard input.
 - `forward_keys` — the initial [forward keys](#forward-keys); replace them
   later with `set_forward_keys`.
 - `bridge` (`url` only) — opt into the `window.orzma` back-channel. `dir` and
-  `inline` are always bridged; a `url` view is bridged only with `bridge:true`.
+  `inline` are always bridged; a `url` registration is bridged only with `bridge:true`.
 - `preload` — an array of JavaScript source strings injected before the page's
-  own scripts, after the host bridge when the view is bridged. It is honored
-  for every kind, including a `url` view without the bridge.
+  own scripts, after the host bridge when the page is bridged. It is honored
+  for every kind, including a `url` registration without the bridge.
 
 ### Focus
 
-Outside vi mode, a pointer press inside a mounted interactive view's rect
-gives that view keyboard focus and makes its pane the active pane, and a press
-on the terminal outside every view's rect gives the keyboard back to the
-terminal. While a view holds focus, the host delivers keys to the page, with
-two exceptions. orzma's own shortcuts run first: its `<Leader>` shortcuts and
-release-focus shortcut always, and its other direct-chord shortcuts except
-copy and paste while the user's `direct-chords-over-webview` setting is on,
-which it is by default. Then the view's [forward keys](#forward-keys) go to
-the pane's PTY instead.
+Outside vi mode, a pointer press inside a mounted interactive placement gives
+it keyboard focus and makes its pane the active pane, and a press on the
+terminal outside every placement gives the keyboard back to the terminal.
+While a placement holds focus, the host delivers keys to its page, except for
+orzma's own shortcuts, which run first:
+
+{{#include key-bindings.md:webview-focus}}
+
+After those, the placement's [forward keys](#forward-keys) go to the pane's
+PTY instead of the page.
 
 A `focus` op moves focus to a mounted, interactive placement this connection
-owns, or, with `null`, takes it back from whichever view in this connection's
-pane holds it. A `focus` naming an unmounted or non-interactive placement is
+owns and makes its pane the active pane, or, with `null`, takes it back from
+whichever placement in this connection's pane holds it. A `focus` naming an unmounted or non-interactive placement is
 ignored. The active pane does not change on a blur.
 
 Every change is reported to the program that registered the placement with a
@@ -243,7 +261,7 @@ Every host push carries an `op`:
 | --------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `call`          | `handle`, `instance`, `reqId`, `method`, `params` | A page `window.orzma.call(method, params)`. Respond with a `reply` carrying the same `reqId`.                                                          |
 | `event`         | `handle`, `event`, `payload`                      | A page `window.orzma.emit(event, payload)`. Fire-and-forget; no response.                                                                              |
-| `compositing`   | `handle`, `instance`, `active` (bool)             | The placement first appeared on screen (`true`), or was unmounted after that (`false`). Only a view with the bridge gets this push.                    |
+| `compositing`   | `handle`, `instance`, `active` (bool)             | The placement first appeared on screen (`true`), or was unmounted after that (`false`). Only a bridged placement gets this push.                    |
 | `focus_changed` | `handle`, `instance`, `focused` (bool)            | The placement gained (`true`) or lost (`false`) keyboard focus. A move between placements sends `false` for the old one before `true` for the new one. |
 
 `call` names the instance whose page called; `event` does not, because a
@@ -257,7 +275,7 @@ Two directional details that are easy to get wrong:
   program as `op:"event"`. A program's own `emit` message (`op:"emit"`) is
   delivered to pages' `window.orzma.on(name, …)`. Same idea ("named event"), two
   `op` values depending on direction.
-- **`urlChanged`.** For a `url` view registered with `bridge:true`, the host
+- **`urlChanged`.** For a `url` registration with `bridge:true`, the host
   reports top-level address changes as an `op:"call"` with
   `method:"urlChanged"` and `params:{"url":"<new>"}`.
   Despite the `call` shape it is fire-and-forget — any `reply` is discarded. Use
@@ -308,21 +326,6 @@ resizes its rectangle to the new mount and leaves the page untouched; mounting
 one after it was unmounted builds the page again from scratch. Every instance
 of a handle serves that handle's registered content, and each one mounts
 independently.
-
-### Example exchange
-
-Program-to-host lines are marked `C→S`, host-to-program lines `S→C`:
-
-```json
-C→S {"op":"hello","token":"orzma:mzxw6ytboi3tmnrqgq2tgmzvgm"}
-C→S {"op":"register","kind":"inline","html":"<!doctype html><body>hi</body>"}
-S→C {"ok":true,"handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","instance":"3f5a9c02d1e84b7690ab3cde12f45678"}
-S→C {"op":"call","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","instance":"3f5a9c02d1e84b7690ab3cde12f45678","reqId":"0","method":"save","params":{"text":"hi"}}
-C→S {"op":"reply","reqId":"0","ok":true,"value":{"saved":true}}
-C→S {"op":"emit","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh","event":"tick","payload":{"n":1}}
-C→S {"op":"new_instance","handle":"nf2k7q5w3x3m5a6b2c4d6e7fgh"}
-S→C {"ok":true,"instance":"a1b2c3d4e5f60718293a4b5c6d7e8f90"}
-```
 
 ## APC webview verbs — mount / unmount
 
@@ -443,8 +446,7 @@ handle's origin. Each handle is its own isolated origin.
 ## The `window.orzma` bridge
 
 Bridged webviews expose a frozen `window.orzma` object to page scripts.
-`dir` and `inline` views are always bridged; a `url` view is bridged only when
-registered with `bridge:true`. A page should feature-detect before using it.
+`dir` and `inline` registrations are always bridged; a `url` registration is bridged only with `bridge:true`. A page should feature-detect before using it.
 
 ### API
 
@@ -499,14 +501,14 @@ if (isOrzmaAvailable()) {
 ## Lifecycle & teardown
 
 - `unregister{handle}` releases a handle, invalidates every instance minted
-  from it, and removes its mounted views.
+  from it, and removes its mounted placements.
 - Closing the control connection purges all of that program's handles, removes
-  their views, and rejects every in-flight `call` with `owner_disconnected`.
+  their placements, and rejects every in-flight `call` with `owner_disconnected`.
   The host treats the end of the program's sending side as a close, so a
   program must not shut down its write half while it wants its registrations
   to live.
 - When the pane a program runs in closes, the host releases every registration
-  made from that pane and removes its views, although the program's connection
+  made from that pane and removes its placements, although the program's connection
   stays open. The program gets `compositing` `false` and `focus_changed`
   `false` for the placements that had them. Afterwards a `register` fails with
   `owner_gone`, and requests naming the released handles or instances are
@@ -516,8 +518,8 @@ if (isOrzmaAvailable()) {
   reset, or a resize drops it), and when the program leaves the alternate
   screen the placement was mounted on. The instance stays valid and can be
   mounted again. The program learns of this only through `compositing` `false`
-  (for a bridged view) and `focus_changed` `false` (if the view held focus).
-- For a view with the bridge, the `compositing` push reports the first time
+  (for a bridged placement) and `focus_changed` `false` (if the placement held focus).
+- For a bridged placement, the `compositing` push reports the first time
   one placement appears on screen (`active:true`), which can be before the
   page has painted, and its unmount after that (`active:false`). It names both
   the `handle` and the `instance`.
@@ -537,6 +539,15 @@ if (isOrzmaAvailable()) {
   and therefore guessable, so the host authorizes a `reply` by its originating
   connection: a program replaying another connection's `reqId` can neither
   settle nor drop that call.
+
+## Versions
+
+orzma, `ratatui_orzma`, and `@orzma/web` are released together under one
+version number. The protocol has no version handshake, so use the SDK release
+that matches the orzma your app runs in. A host that does not know an op
+skips the line without replying (see [Request ordering](#request-ordering)),
+and `ratatui_orzma` then fails a request that expects a reply with
+`OrzmaError::Disconnected` after five seconds.
 
 ## SDKs
 
