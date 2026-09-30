@@ -171,10 +171,10 @@ elsewhere.
 | `select-up-pane` | `Alt+k` | Make the pane above active. |
 | `select-right-pane` | `Alt+l` | Make the pane to the right active. |
 | `kill-pane` | `Alt+p` | Close the active pane and end its shell. |
-| `resize-left-pane` | `r:Alt+Shift+H` | Move a divider of the active pane 5 cells left, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
-| `resize-down-pane` | `r:Alt+Shift+J` | Move a divider of the active pane 5 cells down, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
-| `resize-up-pane` | `r:Alt+Shift+K` | Move a divider of the active pane 5 cells up, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
-| `resize-right-pane` | `r:Alt+Shift+L` | Move a divider of the active pane 5 cells right, repeatable (see [Resizing panes](multiplexer.md#resizing-panes)). |
+| `resize-left-pane` | `r:Alt+Shift+H` | Move a divider of the active pane 5 cells left, repeatable (see [Resizing panes](panes-and-workspaces.md#resizing-panes)). |
+| `resize-down-pane` | `r:Alt+Shift+J` | Move a divider of the active pane 5 cells down, repeatable (see [Resizing panes](panes-and-workspaces.md#resizing-panes)). |
+| `resize-up-pane` | `r:Alt+Shift+K` | Move a divider of the active pane 5 cells up, repeatable (see [Resizing panes](panes-and-workspaces.md#resizing-panes)). |
+| `resize-right-pane` | `r:Alt+Shift+L` | Move a divider of the active pane 5 cells right, repeatable (see [Resizing panes](panes-and-workspaces.md#resizing-panes)). |
 
 <!-- ANCHOR_END: pane-actions -->
 
@@ -196,7 +196,7 @@ elsewhere.
 The window actions orzma 0.1.0 accepted (`new-window`, `next-window`,
 `select-window-0` and the rest, `rename-window`) and `zoom-pane` have been
 removed; workspaces replace the window actions under new names (see
-[Workspaces](multiplexer.md#workspaces)). A configuration that still sets one
+[Workspaces](panes-and-workspaces.md#workspaces)). A configuration that still sets one
 of the old keys is ignored as a whole (see
 [Validation](configuration.md#validation)), so delete those lines when you
 upgrade.

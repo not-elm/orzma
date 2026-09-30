@@ -8,7 +8,7 @@
 
 # User Guide
 
-- [Multiplexer](multiplexer.md)
+- [Panes and Workspaces](panes-and-workspaces.md)
 - [Vi Mode](vi-mode.md)
 - [Companion Apps](companion-apps.md)
 

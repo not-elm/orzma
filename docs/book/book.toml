@@ -21,6 +21,7 @@ no-section-label = true
 # Old URLs and anchors of the published guide, sent to where their content
 # lives now. Keys are site paths; a key with #fragment redirects one anchor.
 [output.html.redirect]
+"/multiplexer.html" = "panes-and-workspaces.html"
 "/companion-apps.html#outline-panel" = "companion-apps.html#outline-sidebar"
 "/key-bindings.html#repeatable-bindings-leaderr" = "key-bindings.html#repeatable-bindings-r"
 "/vi-mode.html#keys" = "key-bindings.html#vi-mode-keys-vi-mode"

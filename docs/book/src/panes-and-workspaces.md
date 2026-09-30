@@ -1,4 +1,4 @@
-# Multiplexer
+# Panes and Workspaces
 
 orzma can split its window into panes, each running its own shell, and keep
 several such layouts as workspaces, listed as tabs across the top of the
@@ -33,14 +33,15 @@ called `Workspace n`, where `n` is its position in the tab bar. A new workspace
 starts in the working directory of the active pane, like a split.
 
 Double-click a tab, or press the `rename-workspace` key, to rename its
-workspace in place. Enter or a click anywhere else keeps the new name, and Esc keeps the
-old one. Leave the field empty to go back to `Workspace n`. Drag a tab to move
-its workspace; the numbers of unnamed workspaces follow their new positions.
+workspace in place. `Enter` or a click anywhere else keeps the new name, and
+`Escape` keeps the old one. Leave the field empty to go back to `Workspace n`.
+Drag a tab to move its workspace; the numbers of unnamed workspaces follow
+their new positions.
 
 ## Resizing panes
 
 The resize keys move one divider of the active pane 5 cells in the key's
-direction, picking it the way tmux's `resize-pane` does. They are repeatable: hold the key to keep moving the divider (see
+direction. They are repeatable: hold the key to keep moving the divider (see
 [Repeatable bindings](key-bindings.md#repeatable-bindings-r)).
 
 Left and right look at the row of side-by-side panes the active pane belongs
@@ -76,5 +77,5 @@ pane, the new pane starts in your home directory.
 
 ## Inactive panes
 
-Panes that do not have focus are drawn with a tint. Change or turn off the
+Panes other than the active pane are drawn with a tint. Change or turn off the
 effect in the [`[inactive_pane]`](configuration.md#inactive_pane) table.
