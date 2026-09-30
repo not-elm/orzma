@@ -13,6 +13,10 @@ orzma resolves the config path in this order:
    not empty.
 3. `~/.config/orzma/config.toml` — the default.
 
+On macOS, orzma opened from the Dock or Finder does not see variables set in
+your shell's startup files. Set them with `launchctl setenv`, or keep the file
+at `~/.config/orzma/config.toml`.
+
 `~` is your home directory on every platform, so on Windows the default is
 `%USERPROFILE%\.config\orzma\config.toml`.
 
@@ -33,8 +37,8 @@ orzma checks the file when it starts. A problem has one of two effects:
 
 In both cases orzma writes the reason to standard error. To read it, start
 orzma from a terminal: on macOS, run `/Applications/orzma.app/Contents/MacOS/orzma`;
-on Linux, run `orzma`; on Windows, run `orzma 2> orzma-error.txt` and open the
-file.
+on Linux, run `orzma`; on Windows, open Command Prompt (`cmd.exe`), run
+`orzma 2> orzma-error.txt`, and open the file.
 
 Unknown keys in `[mouse]` and `[inactive_pane]` are ignored. A few values are
 clamped or replaced with their default instead of being rejected; the keys

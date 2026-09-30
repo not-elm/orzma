@@ -15,14 +15,20 @@ orzma understands.
   orzma sets `LC_CTYPE=en_US.UTF-8`.
 - Every pane gets `ORZMA_SOCK` and `ORZMA_TOKEN`, which webview apps use to
   reach orzma (see [Discovery](protocol-reference.md#discovery)).
-- orzma does not set `TERM_PROGRAM`.
+- orzma does not set `TERM_PROGRAM`. Panes of an orzma started from another
+  terminal inherit that terminal's `TERM_PROGRAM` and similar variables, so
+  programs may treat orzma as that terminal.
 
 ## Keyboard
 
 - With a key that types a character, `Alt`, including the Option key that
   [`option_as_alt`](configuration.md#keyboard-option_as_alt) makes `Alt` on
   macOS, sends `ESC` before the character.
-- `Ctrl` with a letter sends that letter's control character.
+- `Ctrl` with a letter sends that letter's control character. `Ctrl` with any
+  other key, such as `Space`, `[`, `\`, or `/`, sends the plain character, and
+  `Ctrl+Alt` with a letter sends only the control character.
+- `Alt` and `Ctrl` do not change `Backspace`, `Enter`, `Escape`, or `Tab`;
+  `Shift+Tab` sends `CSI Z`.
 - The arrow keys, `Home`, and `End` follow the application cursor keys mode
   (DECCKM).
 - Modifiers are not encoded for the arrow, navigation, and editing keys:
@@ -39,8 +45,9 @@ orzma understands.
   select text and scroll the scrollback.
 - On the alternate screen, the wheel sends arrow keys to a program that does
   not track the mouse (alternate scroll, mode 1007, on by default).
-- Focus reporting (mode 1004) sends `CSI I` and `CSI O` when the pane gains and
-  loses keyboard focus.
+- Focus reporting (mode 1004) sends `CSI I` and `CSI O` when the pane becomes
+  or stops being the active pane, and when the orzma window gains or loses
+  focus. A web page in the pane taking the keyboard sends no report.
 
 ## OSC sequences
 

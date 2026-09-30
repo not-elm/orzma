@@ -35,8 +35,9 @@ cargo add serde --features derive
 
 Your app must use the same ratatui version as `ratatui_orzma`, which is built
 against ratatui 0.29; with another version, the SDK's widget and backend types
-do not match yours. The examples use let chains, which need Rust 1.88 or later
-and the 2024 edition.
+do not match yours. `ratatui_orzma` needs Rust 1.88 or later. The examples
+also use let chains, so code you copy from them needs the 2024 edition as
+well.
 
 `ratatui_orzma` and `@orzma/web` share orzma's version number. Use the release
 that matches the orzma your app runs in; see

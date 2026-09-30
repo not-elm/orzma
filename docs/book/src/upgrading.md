@@ -90,10 +90,12 @@ lines_per_notch = 3
 cells_per_notch = 0.5
 ```
 
-Two other changes cannot be undone by these settings. A program that tracks
-the mouse now gets one wheel report per cell of travel. And at the new
-defaults, `fine_lines` equals `lines_per_notch`, so holding `fine_modifier`
-no longer slows scrolling until you raise `lines_per_notch`.
+One other change cannot be undone by these settings: a program that tracks
+the mouse now gets one wheel report per cell of travel, whatever
+`cells_per_notch` says. At the new defaults, `fine_lines` equals
+`lines_per_notch`, so holding `fine_modifier` changes nothing; the settings
+above bring fine scrolling back, since `lines_per_notch = 3` is again larger
+than `fine_lines`.
 
 ### Workspaces
 

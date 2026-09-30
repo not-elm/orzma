@@ -208,8 +208,8 @@ After those, the placement's [forward keys](#forward-keys) go to the pane's
 PTY instead of the page.
 
 A `focus` op moves focus to a mounted, interactive placement this connection
-owns, or, with `null`, takes it back from whichever placement in this connection's
-pane holds it. A `focus` naming an unmounted or non-interactive placement is
+owns and makes its pane the active pane, or, with `null`, takes it back from
+whichever placement in this connection's pane holds it. A `focus` naming an unmounted or non-interactive placement is
 ignored. The active pane does not change on a blur.
 
 Every change is reported to the program that registered the placement with a

@@ -98,6 +98,8 @@ cd orzma-<version>-x86_64-linux
 The installer is per-user and needs no root. It copies orzma into
 `~/.local/share/orzma` (`$XDG_DATA_HOME/orzma` when `XDG_DATA_HOME` is set),
 links `~/.local/bin/orzma`, and adds orzma to your desktop's application list.
+If `~/.local/bin` is not on your `PATH`, the installer says so; add it, or log
+out and back in, to run `orzma` from a shell.
 It does not put `orzmd` and `orzbrowser` on your `PATH`; add
 `~/.local/share/orzma` to your `PATH` to run them by name. You can also run
 `./orzma` straight from the extracted directory without installing.

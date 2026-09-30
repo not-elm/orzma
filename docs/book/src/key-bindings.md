@@ -21,13 +21,16 @@ A chord is zero or more modifiers followed by exactly one key, joined with `+`.
 
 - **Modifiers** (case-insensitive): `Cmd` (also `Command` / `Meta` / `Super`),
   `Ctrl`, `Shift`, `Alt` (also `Opt` / `Option`).
-- **Keys**: a letter or a digit (letters are case-insensitive), `[`, `]`, `-`,
-  `=`, or a named key: `Escape` `Space` `Enter` `Tab` `Backspace` `ArrowUp`
+- **Keys**: an ASCII letter `a` to `z` or a digit (letters are
+  case-insensitive), `[`, `]`, `-`, `=`, or a named key: `Escape` `Space` `Enter` `Tab` `Backspace` `ArrowUp`
   `ArrowDown` `ArrowLeft` `ArrowRight` `Plus`. Named keys are case-sensitive,
-  so `escape` is not one. Any other single character is accepted for an
-  action but never fires, and orzma logs a warning; as a chord `leader`, it
+  so `escape` is not one. Any other single character, including a
+  non-ASCII letter such as `ö`, is accepted for an action but never fires,
+  and orzma logs a warning; as a chord `leader`, it
   stops orzma from starting.
 - For the `+` key itself, use the token `Plus` (e.g. `Cmd+Plus`).
+- Keys are matched by their position on a US keyboard: on another layout,
+  `Alt+h` is the key where `H` sits on a US keyboard, whatever its label.
 
 Examples: `Cmd+Shift+Q`, `Ctrl+Alt+ArrowLeft`, `Cmd+Plus`.
 
@@ -48,8 +51,8 @@ other key or mouse button in between, then press the action's key.
 After a tap, the next keystroke runs a `<Leader>` action when one matches.
 Otherwise it is handled as if no leader had been tapped when it has a direct
 chord, and is swallowed when it has none. The leader does not time out while
-it waits, even if you switch to another window and back. Switching windows
-before you release the modifier cancels the tap.
+it waits. Switching to another window with the keyboard, such as `Cmd+Tab` or
+`Alt+Tab`, cancels it; switching with the mouse does not.
 
 - `leader` sets the leader: a modifier to tap (`"Cmd"`, `"Ctrl"`, or
   `"Alt"`, or one of their aliases above), a chord such as `"Ctrl+A"` (press
