@@ -90,14 +90,14 @@ Default: `"block"` · `"block"`, `"underline"`, or `"bar"`
 
 The caret shape. Case does not matter. An unknown word keeps the default
 instead of making orzma ignore the whole file. Programs can change the shape
-while they run.
+while they run (see [Cursor and text attributes](terminal-compatibility.md#cursor-and-text-attributes)).
 
 #### `blink_interval` {#cursor-blink_interval}
 
 Default: `750` · Milliseconds
 
 How long the caret stays lit, and then dark, while it blinks. The caret blinks
-from the start, and programs can turn blinking off and on. `0` keeps the caret
+from the start, and programs can turn blinking off and on (see [Modes](terminal-compatibility.md#modes)). `0` keeps the caret
 steady whatever a program asks for. A value from 1 to 9 is raised to 10.
 
 #### `blink_timeout` {#cursor-blink_timeout}

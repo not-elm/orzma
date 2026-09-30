@@ -20,6 +20,7 @@
 - [Configuration](configuration.md)
   - [Key Bindings](key-bindings.md)
   - [Default Key Bindings](default-key-bindings.md)
+- [Terminal Compatibility](terminal-compatibility.md)
 
 # Developer Guide
 
