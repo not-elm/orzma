@@ -1,5 +1,8 @@
 # Installation
 
+If you are upgrading from an earlier release, read [Upgrading](upgrading.md)
+for the changes that need you to edit your configuration.
+
 ## Supported platforms
 
 - macOS 11 or later on Apple Silicon.

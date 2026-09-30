@@ -5,6 +5,7 @@
 # Getting Started
 
 - [Installation](installation.md)
+  - [Upgrading](upgrading.md)
 
 # User Guide
 
