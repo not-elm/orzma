@@ -7,13 +7,6 @@ use crate::screen::grid::run::Style;
 use std::ops::ControlFlow;
 use vtparse::CsiParam;
 
-/// The most subparameters any form this terminal answers carries.
-///
-/// The longest is the direct colour with the tolerance tail ITU T.416
-/// permits: `2 : Pi : r : g : b : unused : tolerance : colour-space` is
-/// nine counting the selector.
-const MAX_SUBPARAMS: usize = 9;
-
 impl Pen {
     /// The pen this one becomes after `params`, applied left to right.
     ///
@@ -156,22 +149,29 @@ enum ColorRead {
 
 /// One `;`-separated group, decoded once.
 struct Group {
-    subs: [Option<u16>; MAX_SUBPARAMS],
+    subs: [Option<u16>; Group::MAX_SUBPARAMS],
     len: usize,
 }
 
 impl Group {
+    /// The most subparameters any form this terminal answers carries.
+    ///
+    /// The longest is the direct colour with the tolerance tail ITU T.416
+    /// permits: `2 : Pi : r : g : b : unused : tolerance : colour-space` is
+    /// nine counting the selector.
+    const MAX_SUBPARAMS: usize = 9;
+
     /// The group `tokens` spell; `None` for a group carrying a token
     /// that is neither an integer nor a subparameter separator, or more
     /// subparameters than any answered form.
     ///
-    /// A group longer than [`MAX_SUBPARAMS`] is discarded whole rather
+    /// A group longer than [`Self::MAX_SUBPARAMS`] is discarded whole rather
     /// than truncated.
     fn decode(tokens: &[CsiParam]) -> Option<Self> {
-        let mut subs = [None; MAX_SUBPARAMS];
+        let mut subs = [None; Self::MAX_SUBPARAMS];
         let mut len = 0;
         for sub in tokens.split(|token| matches!(token, CsiParam::P(b':'))) {
-            if len == MAX_SUBPARAMS {
+            if len == Self::MAX_SUBPARAMS {
                 return None;
             }
             subs[len] = match sub {

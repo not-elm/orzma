@@ -55,7 +55,7 @@ impl TryFrom<RegisterKind> for ValidatedRegistration {
                 forward_keys,
                 preload,
             } => {
-                if html.len() > MAX_INLINE_HTML {
+                if html.len() > Self::MAX_INLINE_HTML {
                     return Err(RegisterError::HtmlTooLarge);
                 }
                 Ok(Self {
@@ -87,6 +87,9 @@ impl TryFrom<RegisterKind> for ValidatedRegistration {
 }
 
 impl ValidatedRegistration {
+    /// Upper bound on a single inline HTML document (4 MiB).
+    const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
+
     /// The spec a mount of this content under `handle`, over a rect of
     /// `size` cells, needs.
     pub(crate) fn mount_spec(&self, handle: &HandleId, size: PlacementSize) -> MountSpec {
@@ -153,9 +156,6 @@ pub(crate) fn validate_url(url: &str) -> Result<String, RegisterError> {
     }
     Ok(parsed.into())
 }
-
-/// Upper bound on a single inline HTML document (4 MiB).
-const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
 
 /// Where a registration's content lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,9 +250,11 @@ mod tests {
             forward_keys: vec![],
             preload: vec![],
         };
-        assert!(ValidatedRegistration::try_from(inline(MAX_INLINE_HTML)).is_ok());
+        assert!(
+            ValidatedRegistration::try_from(inline(ValidatedRegistration::MAX_INLINE_HTML)).is_ok()
+        );
         assert_eq!(
-            ValidatedRegistration::try_from(inline(MAX_INLINE_HTML + 1)),
+            ValidatedRegistration::try_from(inline(ValidatedRegistration::MAX_INLINE_HTML + 1)),
             Err(RegisterError::HtmlTooLarge)
         );
     }

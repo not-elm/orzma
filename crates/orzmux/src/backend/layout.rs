@@ -3,18 +3,14 @@
 
 use crate::backend::{PaneDirection, PaneId, PaneRect, Separator, SplitId, SplitOrientation};
 use crate::error::{OrzmuxError, OrzmuxResult};
-use orzma_vt::prelude::{GridSize, MIN_COLUMNS};
+use orzma_vt::prelude::GridSize;
 use std::cmp::Reverse;
 
 /// The smallest rectangle a leaf is laid out in.
 const LEAF_MIN: GridSize = GridSize {
-    cols: MIN_COLUMNS,
+    cols: GridSize::MIN_COLS,
     rows: 1,
 };
-
-// TODO: make the drag minimum configurable.
-const MIN_DRAG_COLS: u16 = 4;
-const MIN_DRAG_ROWS: u16 = 2;
 
 /// The geometry of every pane and separator of a tiled tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,10 +445,17 @@ impl Node {
         }
     }
 
-    /// Minimum size a drag may not shrink this subtree past: a leaf is
-    /// `MIN_DRAG_COLS` × `MIN_DRAG_ROWS`; a split needs both children
-    /// plus one separator along its axis and the larger child across it.
+    /// Minimum size a drag may not shrink this subtree past: a leaf has a
+    /// fixed minimum; a split needs both children plus one separator along
+    /// its axis and the larger child across it.
     fn min_size_for_drag(&self) -> GridSize {
+        /// The fewest columns a drag leaves a leaf.
+        ///
+        /// TODO: make the drag minimum configurable.
+        const MIN_DRAG_COLS: u16 = 4;
+        /// The fewest rows a drag leaves a leaf.
+        const MIN_DRAG_ROWS: u16 = 2;
+
         match self {
             Node::Leaf(_) => GridSize {
                 cols: MIN_DRAG_COLS,

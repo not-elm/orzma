@@ -3,8 +3,8 @@
 use crate::error::{OrzmaError, OrzmaResult};
 
 /// Max webview rows accepted by the VT layer (`1..=MAX_ROWS`). Kept equal
-/// to `orzma_vt::placement::MAX_ROWS` by hand: this crate is published on
-/// its own and cannot import it.
+/// to `orzma_vt`'s `PlacementSize::MAX_ROWS` by hand: this crate is
+/// published on its own and cannot import it.
 pub(crate) const MAX_ROWS: u16 = 200;
 /// Max webview cols accepted by the VT layer (`1..=MAX_COLS`); see
 /// `MAX_ROWS` for the sync rule.

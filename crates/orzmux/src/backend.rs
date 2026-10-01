@@ -361,10 +361,14 @@ impl Backend {
         }
     }
 
-    /// Pumps one pane and forwards its output, pumping again up to
-    /// `PUMP_ROUNDS` times while chunks remain queued; closes the pane on
+    /// Pumps one pane and forwards its output, pumping again a bounded
+    /// number of times while chunks remain queued; closes the pane on
     /// `ChildExit`.
     pub fn pump_pane(&mut self, id: PaneId) {
+        /// How many times one wake pumps the same pane while its chunks stay
+        /// queued, before other panes and the command channel get a turn.
+        const PUMP_ROUNDS: usize = 4;
+
         for _ in 0..PUMP_ROUNDS {
             let Some(pane) = self.panes.get_mut(&id) else {
                 return;
@@ -1312,10 +1316,6 @@ struct Placement {
     /// The pane whose working directory the new one inherits.
     inherit_from: Option<PaneId>,
 }
-
-/// How many times one wake pumps the same pane while its chunks stay
-/// queued, before other panes and the command channel get a turn.
-const PUMP_ROUNDS: usize = 4;
 
 #[cfg(test)]
 mod tests {

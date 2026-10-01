@@ -149,18 +149,6 @@ impl Plugin for TabDragPlugin {
     }
 }
 
-/// How far a press must travel along the strip before it is a drag, in
-/// logical px.
-const DRAG_THRESHOLD_PX: f32 = 4.0;
-/// How close to the strip's edge the pointer must be to scroll it, in
-/// logical px.
-const EDGE_SCROLL_ZONE_PX: f32 = 24.0;
-/// How far the strip scrolls per pointer move near its edge, in logical px.
-const EDGE_SCROLL_STEP_PX: f32 = 12.0;
-/// The stacking of a tab dragged past the threshold among the strip's
-/// children, above the other tabs and the new-tab button.
-const DRAGGED_TAB_Z: ZIndex = ZIndex(1);
-
 /// A press on a tab, followed from its first movement until its release.
 #[derive(Debug, Clone, Copy)]
 struct ActiveDrag {
@@ -178,6 +166,10 @@ struct ActiveDrag {
 
 /// Whether a horizontal travel of `dx` logical px makes a press a drag.
 fn passes_threshold(dx: f32) -> bool {
+    /// How far a press must travel along the strip before it is a drag, in
+    /// logical px.
+    const DRAG_THRESHOLD_PX: f32 = 4.0;
+
     dx.abs() >= DRAG_THRESHOLD_PX
 }
 
@@ -218,6 +210,10 @@ fn on_drag(
     buttons: Query<(&TabButton, &ComputedNode)>,
     tabs: Res<CurrentTabs>,
 ) {
+    /// The stacking of a tab dragged past the threshold among the strip's
+    /// children, above the other tabs and the new-tab button.
+    const DRAGGED_TAB_Z: ZIndex = ZIndex(1);
+
     if ev.button != PointerButton::Primary {
         return;
     }
@@ -317,6 +313,12 @@ fn edge_scroll(
     scroll_x: f32,
     max_scroll: f32,
 ) -> f32 {
+    /// How close to the strip's edge the pointer must be to scroll it, in
+    /// logical px.
+    const EDGE_SCROLL_ZONE_PX: f32 = 24.0;
+    /// How far the strip scrolls per pointer move near its edge, in logical px.
+    const EDGE_SCROLL_STEP_PX: f32 = 12.0;
+
     if pointer_x < strip_left + EDGE_SCROLL_ZONE_PX {
         (scroll_x - EDGE_SCROLL_STEP_PX).max(0.0)
     } else if pointer_x > strip_left + strip_width - EDGE_SCROLL_ZONE_PX {

@@ -36,6 +36,9 @@ pub struct TerminalFontSize(pub f32);
 
 impl Default for TerminalFontSize {
     fn default() -> Self {
+        /// The default font size, in logical pixels.
+        const FONT_SIZE_PX: f32 = 12.0;
+
         Self(FONT_SIZE_PX)
     }
 }
@@ -87,8 +90,6 @@ impl Plugin for TerminalFontPlugin {
             );
     }
 }
-
-const FONT_SIZE_PX: f32 = 12.0;
 
 /// Inserts `TerminalCellMetricsResource` from the PrimaryWindow's
 /// scale_factor and `TerminalFontSize`. The very first metrics already
@@ -226,7 +227,7 @@ mod tests {
         // (a) phys_font_size reflects scale_factor.
         assert_eq!(
             res.phys_font_size, 24,
-            "phys_font_size should be FONT_SIZE_PX * scale_factor (12 * 2.0 = 24)"
+            "phys_font_size should be the default size * scale_factor (12 * 2.0 = 24)"
         );
 
         // (b) Derived metrics are ALSO scaled to DPR=2 — catches a bug

@@ -110,6 +110,9 @@ impl Plugin for TabBarPlugin {
 
 /// The tab bar's height in whole physical pixels at `scale_factor`.
 pub(crate) fn tab_bar_height_phys(scale_factor: f32) -> u32 {
+    /// The tab bar's height in logical px before rounding to physical pixels.
+    const TAB_BAR_HEIGHT_PX: f32 = 28.0;
+
     (TAB_BAR_HEIGHT_PX * scale_factor).round().max(0.0) as u32
 }
 
@@ -136,14 +139,10 @@ pub(crate) fn tab_order(entries: &[TabEntry], preview: Option<(TabId, usize)>) -
     order
 }
 
-/// The tab bar's height in logical px before rounding to physical pixels.
-const TAB_BAR_HEIGHT_PX: f32 = 28.0;
 /// The space between two tabs, in logical px.
 const TAB_GAP_PX: f32 = 4.0;
 /// The space before the first tab in the strip, in logical px.
 const TAB_STRIP_LEFT_PADDING_PX: f32 = 6.0;
-/// The font size of the tab bar's text, in logical px.
-const TAB_FONT_PX: f32 = 12.0;
 /// The displayed tab's background.
 const ACTIVE_BG: Color = Color::srgb_u8(0x7c, 0x3a, 0xed);
 /// The displayed tab's text.
@@ -180,6 +179,9 @@ fn tab_bar_height_logical(scale_factor: f32) -> f32 {
 /// The tab bar's text face: the UI font, or the default face when none is
 /// loaded, at the tab font size.
 fn tab_font(ui_font: Option<&TerminalUiFont>) -> TextFont {
+    /// The font size of the tab bar's text, in logical px.
+    const TAB_FONT_PX: f32 = 12.0;
+
     let size = FontSize::Px(TAB_FONT_PX);
     ui_font.map_or_else(
         || TerminalUiFont::default().text_font(size),

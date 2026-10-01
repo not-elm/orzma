@@ -39,10 +39,10 @@ use session::SessionPlugin;
 use std::fmt::Display;
 use ui::OrzmaUiPlugin;
 
-/// Scrollback rows every pane retains on its primary screen.
-const SCROLLBACK_ROWS: usize = 10_000;
-
 fn main() {
+    /// Scrollback rows every pane retains on its primary screen.
+    const SCROLLBACK_ROWS: usize = 10_000;
+
     // NOTE: CEF re-launches this executable for its subprocesses when the
     // dedicated render process binary is absent; those instances must exit
     // here, before any window or thread exists.

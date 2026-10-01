@@ -60,6 +60,9 @@ impl WebviewAssetRegistry {
 /// Builds the `orzma` scheme registration to pass to `CefPlugin`, dispatching
 /// every `orzma://<handle>/…` URL through the shared `WebviewAssetRegistry`.
 pub(crate) fn custom_orzma_scheme(registry: WebviewAssetRegistry) -> CefCustomScheme {
+    /// The custom scheme name registered with CEF for dynamic Tier 1 webviews.
+    const SCHEME_NAME: &str = "orzma";
+
     CefCustomScheme {
         name: SCHEME_NAME.to_string(),
         options: CefSchemeOptions::STANDARD
@@ -71,9 +74,6 @@ pub(crate) fn custom_orzma_scheme(registry: WebviewAssetRegistry) -> CefCustomSc
         handler: Arc::new(OrzmaScheme::new(registry)),
     }
 }
-
-/// The custom scheme name registered with CEF for dynamic Tier 1 webviews.
-const SCHEME_NAME: &str = "orzma";
 
 /// Parses `orzma://<handle>/<path>[?query]` into `(handle, path)`; strips
 /// the query/fragment and defaults an empty path to `"index.html"`. Returns

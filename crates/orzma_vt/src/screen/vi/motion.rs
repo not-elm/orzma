@@ -327,6 +327,9 @@ impl<'a> MotionGrid<'a> {
     }
 
     fn bracket_search(&self, point: GridPoint) -> Option<GridPoint> {
+        /// The pairs `Bracket` matches, opening bracket first.
+        const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
+
         let start = self.cell(point)?.c;
         let (forward, end) = BRACKET_PAIRS.iter().find_map(|&(open, close)| {
             if open == start {
@@ -524,9 +527,6 @@ impl<'a> MotionGrid<'a> {
         self.grid.size().cols.saturating_sub(1)
     }
 }
-
-/// The pairs `Bracket` matches, opening bracket first.
-const BRACKET_PAIRS: [(char, char); 4] = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
 
 /// A direction along the grid in reading order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

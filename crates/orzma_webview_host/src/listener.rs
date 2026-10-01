@@ -27,11 +27,6 @@ const MAX_HELLO_LINE: u64 = 4 * 1024;
 /// The longest request line a connection may send, newline included.
 const MAX_REQUEST_LINE: u64 = 32 * 1024 * 1024;
 
-/// How long a connection's reader waits on a silent peer before it reads
-/// again, which bounds how late it notices the peer closing.
-#[cfg(windows)]
-const EOF_RECHECK: Duration = Duration::from_millis(500);
-
 /// Binds `sock_path` (replacing a stale socket file there), spawns the
 /// accept loop, and returns the receiver of the events its connections
 /// produce. The listener threads are detached and live as long as the
@@ -94,6 +89,11 @@ fn accept_loop(listener: UnixListener, events: Sender<ControlEvent>) {
 /// first line) or [`MAX_REQUEST_LINE`] (any later line) is closed at that
 /// line.
 fn serve_connection(stream: UnixStream, connection: ConnectionId, events: Sender<ControlEvent>) {
+    /// How long a connection's reader waits on a silent peer before it reads
+    /// again, which bounds how late it notices the peer closing.
+    #[cfg(windows)]
+    const EOF_RECHECK: Duration = Duration::from_millis(500);
+
     let Ok(read_half) = stream.try_clone() else {
         return;
     };

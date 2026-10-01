@@ -15,9 +15,7 @@ use crate::host::tokens::Tokens;
 use crate::host::validation::validate_url;
 use crate::protocol::{NavAction, PushMsg, ServerMsg};
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
-use orzma_vt::prelude::{
-    GridColumn, InstanceId, MAX_COLS, MAX_ROWS, PlacementSize, ScreenLine, VtSignal,
-};
+use orzma_vt::prelude::{GridColumn, InstanceId, PlacementSize, ScreenLine, VtSignal};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -569,7 +567,11 @@ impl<P: PaneKey> WebviewHost<P> {
         size: PlacementSize,
     ) -> WebviewHostResult<HostOutput<P>> {
         let (instance, pane) = self.owned_instance(connection, instance)?;
-        if size.rows == 0 || MAX_ROWS < size.rows || size.cols == 0 || MAX_COLS < size.cols {
+        if size.rows == 0
+            || PlacementSize::MAX_ROWS < size.rows
+            || size.cols == 0
+            || PlacementSize::MAX_COLS < size.cols
+        {
             return Err(Refusal::SizeOutOfRange.into());
         }
         let mut output = HostOutput::default();

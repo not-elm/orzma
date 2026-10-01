@@ -7,11 +7,15 @@ use vtparse::CsiParam;
 pub(crate) struct CsiParams<'a> {
     private: Option<u8>,
     values: &'a [CsiParam],
-    intermediates: [u8; MAX_INTERMEDIATES],
+    intermediates: [u8; CsiParams::MAX_INTERMEDIATES],
     intermediate_len: usize,
 }
 
 impl<'a> CsiParams<'a> {
+    /// How many intermediate bytes the view holds, matching the cap the
+    /// parser collects to.
+    const MAX_INTERMEDIATES: usize = 2;
+
     /// Splits one `csi_dispatch` slice into its marker, values, and
     /// intermediates.
     pub fn parse(params: &'a [CsiParam]) -> Self {
@@ -27,7 +31,7 @@ impl<'a> CsiParams<'a> {
             CsiParam::P(byte) => Some(*byte),
             CsiParam::Integer(_) => None,
         });
-        let mut intermediates = [0; MAX_INTERMEDIATES];
+        let mut intermediates = [0; Self::MAX_INTERMEDIATES];
         let mut intermediate_len = 0;
         for (slot, byte) in intermediates.iter_mut().zip(tail) {
             *slot = byte;
@@ -98,10 +102,6 @@ impl<'a> CsiParams<'a> {
         })
     }
 }
-
-/// How many intermediate bytes [`CsiParams`] holds, matching the cap
-/// the parser collects to.
-const MAX_INTERMEDIATES: usize = 2;
 
 #[cfg(test)]
 mod tests {

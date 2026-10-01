@@ -96,16 +96,17 @@ pub struct PlacementSize {
     pub cols: u16,
 }
 
+impl PlacementSize {
+    /// Upper bound on a mount's reserved rows.
+    pub const MAX_ROWS: u16 = 200;
+    /// Upper bound on a mount's reserved cols.
+    pub const MAX_COLS: u16 = 400;
+}
+
 /// Upper bound on live placements per terminal, across both screens.
 ///
 /// A mount the VT accepts is always one the host can place.
 pub const MAX_PLACEMENTS: usize = 12;
-
-/// Upper bound on a mount's reserved rows.
-pub const MAX_ROWS: u16 = 200;
-
-/// Upper bound on a mount's reserved cols.
-pub const MAX_COLS: u16 = 400;
 
 #[cfg(test)]
 mod tests {

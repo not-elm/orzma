@@ -13,15 +13,6 @@ use bevy::prelude::*;
 use bevy_orzma_tty_renderer::prelude::TerminalView;
 use bevy_orzmux::prelude::OrzmuxPane;
 
-/// Background color of the vi-mode indicator chip: bright yellow.
-const VI_MODE_INDICATOR_BG: Color = Color::srgb(0.95, 0.85, 0.20);
-/// Foreground (text) color of the vi-mode indicator chip: near-black.
-const VI_MODE_INDICATOR_FG: Color = Color::srgb(0.10, 0.10, 0.10);
-/// Font size of the vi-mode indicator chip's text, in pixels.
-const VI_MODE_INDICATOR_FONT_SIZE_PX: f32 = 11.0;
-/// Horizontal padding inside the vi-mode indicator chip.
-const VI_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
-
 /// Adds the vi-mode indicator.
 pub(super) struct ViModeIndicatorPlugin;
 
@@ -67,6 +58,15 @@ fn attach_indicator_to_surface_host(
     hosts: Query<Entity, Added<OrzmuxPane>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
+    /// Background color of the vi-mode indicator chip: bright yellow.
+    const VI_MODE_INDICATOR_BG: Color = Color::srgb(0.95, 0.85, 0.20);
+    /// Foreground (text) color of the vi-mode indicator chip: near-black.
+    const VI_MODE_INDICATOR_FG: Color = Color::srgb(0.10, 0.10, 0.10);
+    /// Font size of the vi-mode indicator chip's text, in pixels.
+    const VI_MODE_INDICATOR_FONT_SIZE_PX: f32 = 11.0;
+    /// Horizontal padding inside the vi-mode indicator chip.
+    const VI_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
+
     for host in hosts.iter() {
         commands.entity(host).with_children(|parent| {
             parent.spawn((

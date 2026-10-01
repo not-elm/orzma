@@ -16,9 +16,9 @@ use crate::hyperlink::{HyperlinkId, HyperlinkInterner, HyperlinkUri};
 use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
 use crate::screen::cell::ClassifiedGlyph;
 use crate::screen::cursor::Cursor;
+use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::grid::reflow::ScrollbackOnGrow;
-use crate::screen::grid::{GridSize, MIN_COLUMNS};
 use crate::screen::margins::OriginMode;
 use crate::screen::selection::SelectionKind;
 use crate::screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion, ViewChange};
@@ -77,7 +77,7 @@ impl DeviceState {
 
     /// Resizes the screens to `size`; `None` when the dimensions of the
     /// screen on show already matched or either axis of `size` is zero.
-    /// A column count below [`MIN_COLUMNS`] is raised to it, as
+    /// A column count below [`GridSize::MIN_COLS`] is raised to it, as
     /// [`GridSize::new`] does.
     ///
     /// While the primary screen is shown it is reflowed with
@@ -102,7 +102,7 @@ impl DeviceState {
             return None;
         }
         let size = GridSize {
-            cols: size.cols.max(MIN_COLUMNS),
+            cols: size.cols.max(GridSize::MIN_COLS),
             ..size
         };
         match self.modes.active_screen {
@@ -379,7 +379,7 @@ impl DeviceState {
     ///   direct slot number xterm accepts after it are both ignored, so
     ///   a slot store arrives here as an ordinary push.
     pub fn push_title(&mut self) {
-        if self.title.stack.len() == MAX_TITLE_DEPTH {
+        if self.title.stack.len() == TitleState::MAX_STACK_DEPTH {
             self.title.stack.pop_front();
         }
         self.title.stack.push_back(self.title.current.clone());
@@ -842,11 +842,13 @@ struct TitleState {
     stack: VecDeque<Option<String>>,
 }
 
-/// Titles `CSI 22 t` may stack before the oldest is dropped.
-///
-/// xterm documents direct stack access over slots 1 through 10, which
-/// this bound covers.
-const MAX_TITLE_DEPTH: usize = 16;
+impl TitleState {
+    /// Titles `CSI 22 t` may stack before the oldest is dropped.
+    ///
+    /// xterm documents direct stack access over slots 1 through 10, which
+    /// this bound covers.
+    const MAX_STACK_DEPTH: usize = 16;
+}
 
 #[cfg(test)]
 mod tests {
@@ -1109,7 +1111,7 @@ mod tests {
         assert_eq!(
             device.active_screen().grid_size(),
             GridSize {
-                cols: MIN_COLUMNS,
+                cols: GridSize::MIN_COLS,
                 rows: 3
             }
         );
@@ -1444,12 +1446,12 @@ mod tests {
     #[test]
     fn a_full_stack_drops_its_oldest_entry() {
         let mut device = device();
-        for n in 0..=MAX_TITLE_DEPTH {
+        for n in 0..=TitleState::MAX_STACK_DEPTH {
             device.set_title(Some(n.to_string()));
             device.push_title();
         }
         let popped: Vec<Option<String>> = from_fn(|| device.pop_title()).collect();
-        let expected: Vec<Option<String>> = (1..=MAX_TITLE_DEPTH)
+        let expected: Vec<Option<String>> = (1..=TitleState::MAX_STACK_DEPTH)
             .rev()
             .map(|n| Some(n.to_string()))
             .collect();

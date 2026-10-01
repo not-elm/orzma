@@ -746,7 +746,12 @@ fn a_socket_mount_outside_the_size_range_is_refused() {
     let mut fixture = Fixture::default();
     fixture.connect_pane(1, 1);
     let (_, instance) = fixture.registered(1, inline());
-    for (rows, cols) in [(0, 10), (MAX_ROWS + 1, 10), (10, 0), (10, MAX_COLS + 1)] {
+    for (rows, cols) in [
+        (0, 10),
+        (PlacementSize::MAX_ROWS + 1, 10),
+        (10, 0),
+        (10, PlacementSize::MAX_COLS + 1),
+    ] {
         let result = fixture.control(ControlEvent::Mount {
             connection: connection(1),
             instance: instance.to_string(),

@@ -12,17 +12,14 @@ pub(super) struct UpdatePolicyPlugin;
 
 impl Plugin for UpdatePolicyPlugin {
     fn build(&self, app: &mut App) {
+        /// The interval between the begin frames CEF is sent.
+        const BEGIN_FRAME_INTERVAL: Duration = Duration::from_millis(30);
+
         app.insert_resource(UpdatePolicy::OnDemand.winit_settings())
             .insert_resource(BeginFrameInterval(BEGIN_FRAME_INTERVAL))
             .add_systems(Last, apply_update_policy);
     }
 }
-
-const ON_DEMAND_FOCUSED_WAIT: Duration = Duration::from_secs(5);
-const ON_DEMAND_UNFOCUSED_WAIT: Duration = Duration::from_secs(60);
-const WEBVIEW_TICK: Duration = Duration::from_millis(1000 / 30);
-const WEBVIEW_GRACE: Duration = Duration::from_secs(2);
-const BEGIN_FRAME_INTERVAL: Duration = Duration::from_millis(30);
 
 /// How often the app updates without outside input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,9 +32,15 @@ enum UpdatePolicy {
 }
 
 impl UpdatePolicy {
-    /// `WebviewTick` while a webview exists and for `WEBVIEW_GRACE` after
+    /// The interval between two updates under [`Self::WebviewTick`].
+    const WEBVIEW_TICK: Duration = Duration::from_millis(1000 / 30);
+
+    /// `WebviewTick` while a webview exists and for a grace period after
     /// the last one went away; otherwise `OnDemand`.
     fn decide(webviews_present: bool, since_last_webview: Option<Duration>) -> Self {
+        /// How long the tick continues after the last webview went away.
+        const WEBVIEW_GRACE: Duration = Duration::from_secs(2);
+
         let recent = since_last_webview.is_some_and(|since| since < WEBVIEW_GRACE);
         if webviews_present || recent {
             Self::WebviewTick
@@ -48,9 +51,14 @@ impl UpdatePolicy {
 
     /// The winit settings this policy runs the app with.
     fn winit_settings(self) -> WinitSettings {
+        /// The safety tick of an on-demand app whose window is focused.
+        const ON_DEMAND_FOCUSED_WAIT: Duration = Duration::from_secs(5);
+        /// The safety tick of an on-demand app whose window is unfocused.
+        const ON_DEMAND_UNFOCUSED_WAIT: Duration = Duration::from_secs(60);
+
         let (focused, unfocused) = match self {
             Self::OnDemand => (ON_DEMAND_FOCUSED_WAIT, ON_DEMAND_UNFOCUSED_WAIT),
-            Self::WebviewTick => (WEBVIEW_TICK, WEBVIEW_TICK),
+            Self::WebviewTick => (Self::WEBVIEW_TICK, Self::WEBVIEW_TICK),
         };
         WinitSettings {
             focused_mode: UpdateMode::reactive_low_power(focused),
@@ -211,6 +219,6 @@ mod tests {
     #[test]
     fn the_begin_frame_interval_is_below_the_tick() {
         let app = app();
-        assert!(app.world().resource::<BeginFrameInterval>().0 < WEBVIEW_TICK);
+        assert!(app.world().resource::<BeginFrameInterval>().0 < UpdatePolicy::WEBVIEW_TICK);
     }
 }

@@ -14,6 +14,9 @@ pub(crate) struct StaticAsset {
 }
 
 impl StaticAsset {
+    /// Upper bound on a single static asset (64 MiB).
+    const MAX_LEN: u64 = 64 * 1024 * 1024;
+
     /// Resolves `raw_path` (a percent-encoded, slash-separated relative URL
     /// path) under `root` and reads the file.
     ///
@@ -59,11 +62,8 @@ impl StaticAsset {
     }
 }
 
-/// Upper bound on a single static asset (64 MiB).
-const MAX_ASSET_LEN: u64 = 64 * 1024 * 1024;
-
 fn exceeds_limit(len: u64) -> bool {
-    len > MAX_ASSET_LEN
+    len > StaticAsset::MAX_LEN
 }
 
 /// Decodes `%XX` escapes once. Returns `None` on a truncated/invalid escape or
@@ -168,8 +168,8 @@ mod tests {
     /// Case: a page loads a bundle that sits right at the cap.
     #[test]
     fn the_size_cap_admits_exactly_64_mib() {
-        assert!(!exceeds_limit(MAX_ASSET_LEN));
-        assert!(exceeds_limit(MAX_ASSET_LEN + 1));
+        assert!(!exceeds_limit(StaticAsset::MAX_LEN));
+        assert!(exceeds_limit(StaticAsset::MAX_LEN + 1));
     }
 
     /// Asserts that a file under the root is read with the MIME type its

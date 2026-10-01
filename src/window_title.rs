@@ -17,10 +17,6 @@ impl Plugin for WindowTitlePlugin {
     }
 }
 
-const APP_NAME: &str = "orzma";
-
-const SUFFIX: &str = " — orzma";
-
 fn update_window_title(
     mut window: Query<&mut Window, With<PrimaryWindow>>,
     focused: Query<&TtyTitle, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
@@ -42,6 +38,11 @@ fn update_window_title(
 }
 
 fn format_title(title: Option<&str>) -> String {
+    /// The title of a window whose terminal has none.
+    const APP_NAME: &str = "orzma";
+    /// The text appended to a terminal's title.
+    const SUFFIX: &str = " — orzma";
+
     match title.map(str::trim) {
         Some(t) if !t.is_empty() => format!("{t}{SUFFIX}"),
         _ => APP_NAME.to_string(),

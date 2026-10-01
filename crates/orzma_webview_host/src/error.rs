@@ -134,7 +134,8 @@ pub enum Refusal {
     /// The registration does not accept pointer or keyboard input.
     #[error("the placement does not accept input")]
     NotInteractive,
-    /// A mount size outside `1..=MAX_ROWS` rows or `1..=MAX_COLS` columns.
+    /// A mount size outside `1..=PlacementSize::MAX_ROWS` rows or
+    /// `1..=PlacementSize::MAX_COLS` columns.
     #[error("the mount size is out of range")]
     SizeOutOfRange,
     /// The registration has no `window.orzma` bridge.

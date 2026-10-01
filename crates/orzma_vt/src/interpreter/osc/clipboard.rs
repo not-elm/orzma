@@ -60,14 +60,14 @@ impl ClipboardRequest {
     }
 }
 
-/// The selection characters an `OSC 52` may name: the clipboard, the
-/// primary and secondary selections, the configurable select target,
-/// and cut buffers 0 through 7 (xterm-ctlseqs.pdf p.40).
-const SELECTIONS: &[u8] = b"cpqs01234567";
-
 /// Whether an `OSC 52` naming `selections` acts on the one system
 /// clipboard this terminal has.
 fn targets_clipboard(selections: &[u8]) -> bool {
+    /// The selection characters an `OSC 52` may name: the clipboard, the
+    /// primary and secondary selections, the configurable select target,
+    /// and cut buffers 0 through 7 (xterm-ctlseqs.pdf p.40).
+    const SELECTIONS: &[u8] = b"cpqs01234567";
+
     if selections.is_empty() {
         return true;
     }

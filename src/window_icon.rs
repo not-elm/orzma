@@ -27,16 +27,16 @@ mod windows {
     use winit::platform::windows::{IconExtWindows, WindowExtWindows};
     use winit::window::Icon;
 
-    /// Resource ordinal `build/windows/orzma.rc` assigns to the icon.
-    const ICON_ORDINAL: u16 = 1;
-    /// Largest frame in `orzma.ico`, loaded for the taskbar's `ICON_BIG`.
-    const TASKBAR_ICON_SIZE: u32 = 256;
-
     pub(super) fn apply_window_icon(
         mut done: Local<bool>,
         primary: Query<Entity, With<PrimaryWindow>>,
         _non_send_marker: NonSendMarker,
     ) {
+        /// Resource ordinal `build/windows/orzma.rc` assigns to the icon.
+        const ICON_ORDINAL: u16 = 1;
+        /// Largest frame in `orzma.ico`, loaded for the taskbar's `ICON_BIG`.
+        const TASKBAR_ICON_SIZE: u32 = 256;
+
         if *done {
             return;
         }

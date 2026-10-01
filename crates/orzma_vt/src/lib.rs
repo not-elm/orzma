@@ -37,16 +37,14 @@ pub mod prelude {
     pub use crate::frame::{DirtyRow, Frame};
     pub use crate::hyperlink::detected_url::DetectedUrl;
     pub use crate::hyperlink::{Hyperlink, HyperlinkId, HyperlinkUri, is_allowed};
-    pub use crate::placement::{
-        AnchoredPlacement, InstanceId, MAX_COLS, MAX_PLACEMENTS, MAX_ROWS, PlacementSize,
-    };
+    pub use crate::placement::{AnchoredPlacement, InstanceId, MAX_PLACEMENTS, PlacementSize};
     pub use crate::screen::cell::{Cell, CellExtra, CellWidth, GlyphClass, MAX_COMBINING};
     pub use crate::screen::cursor::Cursor;
+    pub use crate::screen::grid::GridSize;
     pub use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
     pub use crate::screen::grid::reflow::ScrollbackOnGrow;
     pub use crate::screen::grid::row::Row;
     pub use crate::screen::grid::run::{Run, Style};
-    pub use crate::screen::grid::{GridSize, MIN_COLUMNS};
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
@@ -176,8 +174,7 @@ pub trait Vt {
     /// damage.
     ///
     /// A size with a zero axis is ignored and changes nothing. A column
-    /// count below [`MIN_COLUMNS`](crate::prelude::MIN_COLUMNS) is raised
-    /// to it.
+    /// count below [`GridSize::MIN_COLS`] is raised to it.
     ///
     /// The primary screen's rows, history included, are rewrapped at the
     /// new width, and the positions pointing into them follow their text;
@@ -571,7 +568,6 @@ mod tests {
     use crate::device::modes::{CursorBlink, CursorShape};
     use crate::error::{GridSizeError, VtError};
     use crate::placement::{InstanceId, MAX_PLACEMENTS, PlacementSize};
-    use crate::screen::grid::MIN_COLUMNS;
     use crate::screen::grid::coords::{GridColumn, GridLine, ScreenLine};
     use crate::screen::grid::reflow::ScrollbackOnGrow;
     use crate::screen::selection::{SelectionGeometry, SelectionRange};
@@ -1728,7 +1724,7 @@ mod tests {
     fn a_single_column_terminal_is_widened_to_two() {
         let size = GridSize::new(1, 3).expect("a valid size");
         let vt = OrzmaVt::new(size, 10);
-        assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
+        assert_eq!(vt.grid_size().cols, GridSize::MIN_COLS);
     }
 
     /// Asserts that a resize to a one-column size widens the grid the
@@ -1740,7 +1736,7 @@ mod tests {
     fn a_resize_to_one_column_is_widened_to_two() {
         let mut vt = OrzmaVt::new(GridSize::new(4, 3).expect("a valid size"), 10);
         let _ = vt.resize(GridSize::new(1, 3).expect("a valid size"));
-        assert_eq!(vt.grid_size().cols, MIN_COLUMNS);
+        assert_eq!(vt.grid_size().cols, GridSize::MIN_COLS);
     }
 
     /// Asserts that a size already wide enough is built unchanged.

@@ -232,6 +232,9 @@ impl VTActor for Executor<'_> {
     }
 
     fn csi_dispatch(&mut self, params: &[CsiParam], parameters_truncated: bool, byte: u8) {
+        /// The DSR 5 response: the terminal is operating normally.
+        const DEVICE_OK: &[u8] = b"\x1b[0n";
+
         // NOTE: A truncated sequence must not reach the match. vtparse raises
         // this flag both when it discards an intermediate past its own cap and
         // when a full parameter buffer keeps a trailing intermediate from
@@ -952,9 +955,6 @@ fn repeat_count(value: Option<u16>) -> u16 {
 /// The DA1 response: a VT102 with no extensions. This terminal does not
 /// implement Sixel, DRCS, or selective erase.
 const PRIMARY_ATTRIBUTES: &[u8] = b"\x1b[?6c";
-
-/// The DSR 5 response: the terminal is operating normally.
-const DEVICE_OK: &[u8] = b"\x1b[0n";
 
 /// Builds the DA2 response.
 ///
