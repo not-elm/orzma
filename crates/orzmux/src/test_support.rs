@@ -3,7 +3,9 @@
 //! event loop.
 
 use crate::backend::pane::PaneFactory;
-use crate::backend::{Backend, CommandSeq, NewPaneAt, OrzmuxEvent, PaneId, RequestId};
+use crate::backend::{
+    Backend, CommandSeq, NewPaneAt, OrzmuxEvent, PaneId, PaneTarget, RequestId, SplitOrientation,
+};
 use crate::error::OrzmuxResult;
 use crate::event_loop::{EventLoop, GuiLink, OrzmuxCommand};
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -227,11 +229,6 @@ impl Harness {
         &mut self.event_loop
     }
 
-    /// The next pane the factory spawned, or `None` when none is waiting.
-    pub fn spawned_pane(&self) -> Option<FakePane> {
-        self.panes.try_recv().ok()
-    }
-
     /// Makes the next spawn request fail.
     pub fn fail_next_spawn(&self) {
         self.log.fail_next.store(true, Ordering::Release);
@@ -338,17 +335,19 @@ impl Harness {
     /// Opens a new tab whose first pane answers `request`, and
     /// returns the pane with its test ends. The events are drained.
     pub fn open_tab(&mut self, request: RequestId) -> (PaneId, FakePane) {
-        self.send(OrzmuxCommand::NewPane {
+        self.open_pane(request, NewPaneAt::Tab)
+    }
+
+    /// Splits `target` vertically with a pane that answers `request`, and
+    /// returns the new pane with its test ends. The events are drained.
+    pub fn open_split(&mut self, target: PaneTarget, request: RequestId) -> (PaneId, FakePane) {
+        self.open_pane(
             request,
-            at: NewPaneAt::Tab,
-            cwd: None,
-            env: vec![],
-        });
-        let events = self.drain();
-        let Some(OrzmuxEvent::PaneOpened { pane, .. }) = events.front() else {
-            panic!("expected PaneOpened, got {events:?}");
-        };
-        (*pane, self.panes.try_recv().expect("one spawned pane"))
+            NewPaneAt::Split {
+                pane: target,
+                orientation: SplitOrientation::Vertical,
+            },
+        )
     }
 
     /// Like [`drain`](Self::drain), without the `Tabs` snapshots,
@@ -358,6 +357,24 @@ impl Harness {
             .into_iter()
             .filter(|event| !matches!(event, OrzmuxEvent::Tabs { .. }))
             .collect()
+    }
+
+    fn open_pane(&mut self, request: RequestId, at: NewPaneAt) -> (PaneId, FakePane) {
+        self.send(OrzmuxCommand::NewPane {
+            request,
+            at,
+            cwd: None,
+            env: vec![],
+        });
+        let events = self.drain();
+        let opened = events.iter().find_map(|event| match event {
+            OrzmuxEvent::PaneOpened { pane, .. } => Some(*pane),
+            _ => None,
+        });
+        let Some(pane) = opened else {
+            panic!("expected PaneOpened, got {events:?}");
+        };
+        (pane, self.panes.try_recv().expect("one spawned pane"))
     }
 
     fn build(wheel: WheelConfig, webview: WebviewHost<PaneId>) -> Self {

@@ -117,7 +117,7 @@ impl Tabs {
             TabTarget::Next => (displayed? + 1) % len,
             TabTarget::Previous => (displayed? + len - 1) % len,
         };
-        self.order.get(index).map(|w| w.id)
+        self.order.get(index).map(|tab| tab.id)
     }
 
     /// The tab `target` names, or `None` when it names none.
@@ -184,7 +184,7 @@ impl Tabs {
         let tab = self
             .order
             .iter_mut()
-            .find(|w| w.id == active)
+            .find(|tab| tab.id == active)
             .ok_or(OrzmuxError::UnresolvedTarget)?;
         if !tab.tree.contains(target) {
             return Err(OrzmuxError::UnresolvedTarget);
@@ -211,12 +211,12 @@ impl Tabs {
 
     /// The tab `id` names.
     pub fn get(&self, id: TabId) -> Option<&Tab> {
-        self.order.iter().find(|w| w.id == id)
+        self.order.iter().find(|tab| tab.id == id)
     }
 
     /// The tab `id` names, for a change.
     pub fn get_mut(&mut self, id: TabId) -> Option<&mut Tab> {
-        self.order.iter_mut().find(|w| w.id == id)
+        self.order.iter_mut().find(|tab| tab.id == id)
     }
 
     /// The tab whose tree holds `pane`.
@@ -224,8 +224,8 @@ impl Tabs {
     pub fn tab_of(&self, pane: PaneId) -> Option<TabId> {
         self.order
             .iter()
-            .find(|w| w.tree.contains(pane))
-            .map(|w| w.id)
+            .find(|tab| tab.tree.contains(pane))
+            .map(|tab| tab.id)
     }
 
     /// Every tab in display order.
@@ -237,10 +237,10 @@ impl Tabs {
     pub fn entries(&self) -> Vec<TabEntry> {
         self.order
             .iter()
-            .map(|w| TabEntry {
-                id: w.id,
-                name: w.name.clone(),
-                active_pane: w.tree.active(),
+            .map(|tab| TabEntry {
+                id: tab.id,
+                name: tab.name.clone(),
+                active_pane: tab.tree.active(),
             })
             .collect()
     }
@@ -252,14 +252,17 @@ impl Tabs {
         self.active == active
             && self.order.len() == entries.len()
             && self.order.iter().zip(entries).all(|(tab, entry)| {
-                tab.id == entry.id
-                    && tab.name == entry.name
-                    && tab.tree.active() == entry.active_pane
+                let TabEntry {
+                    id,
+                    name,
+                    active_pane,
+                } = entry;
+                tab.id == *id && tab.name == *name && tab.tree.active() == *active_pane
             })
     }
 
     fn index_of(&self, id: TabId) -> Option<usize> {
-        self.order.iter().position(|w| w.id == id)
+        self.order.iter().position(|tab| tab.id == id)
     }
 }
 
@@ -391,18 +394,21 @@ mod tests {
     fn a_rename_is_sanitized_and_reports_a_change() {
         let (mut set, [a, ..]) = three();
         assert_eq!(set.rename(a, Some("  lo\tgs\n ".into())).ok(), Some(true));
-        assert_eq!(set.get(a).and_then(|w| w.name.clone()), Some("logs".into()));
+        assert_eq!(
+            set.get(a).and_then(|tab| tab.name.clone()),
+            Some("logs".into())
+        );
         assert_eq!(set.rename(a, Some("logs".into())).ok(), Some(false));
         let long: String = "あ".repeat(70);
         set.rename(a, Some(long)).expect("a known tab");
         assert_eq!(
             set.get(a)
-                .and_then(|w| w.name.clone())
+                .and_then(|tab| tab.name.clone())
                 .map(|n| n.chars().count()),
             Some(Tab::MAX_NAME_CHARS)
         );
         assert_eq!(set.rename(a, Some("   ".into())).ok(), Some(true));
-        assert_eq!(set.get(a).and_then(|w| w.name.clone()), None);
+        assert_eq!(set.get(a).and_then(|tab| tab.name.clone()), None);
     }
 
     /// Asserts that a split must target the displayed tab and that
@@ -424,7 +430,7 @@ mod tests {
             .expect("the displayed root splits");
         let split_of = |id| {
             set.get(id)
-                .map(|w| w.tree.solve(W).separators[0].split)
+                .map(|tab| tab.tree.solve(W).separators[0].split)
                 .expect("a split tab")
         };
         assert_ne!(split_of(a), split_of(b));

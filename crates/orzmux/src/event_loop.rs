@@ -182,7 +182,8 @@ pub enum OrzmuxCommand {
     },
     /// Name a tab, or restore its automatic name with `None`. The
     /// name loses its control characters and surrounding whitespace and is
-    /// cut to 64 characters. Always answered with exactly one `Tabs`, even when the name is unchanged or the tab is gone.
+    /// cut to 64 characters. Always answered with exactly one `Tabs`, even
+    /// when the name is unchanged or the tab is gone.
     RenameTab {
         /// The tab to name.
         tab: TabId,
@@ -1030,7 +1031,9 @@ mod tests {
             .collect()
     }
 
-    /// Asserts that the frame a closed synchronized update yields reaches the GUI between the bell raised before the close and the title set after it.
+    /// Asserts that the frame a closed synchronized update yields reaches
+    /// the GUI between the bell raised before the close and the title set
+    /// after it.
     ///
     /// Case: a program rings the bell inside a synchronized update,
     /// closes it, and sets the window title right behind it in the same
@@ -1118,20 +1121,7 @@ mod tests {
     /// Splits the active pane and returns the new pane's id and its
     /// spawned fake terminal.
     fn split_active(h: &mut Harness, request: u64) -> (PaneId, FakePane) {
-        h.send(OrzmuxCommand::NewPane {
-            request: RequestId(request),
-            at: NewPaneAt::Split {
-                pane: PaneTarget::Active,
-                orientation: SplitOrientation::Vertical,
-            },
-            cwd: None,
-            env: vec![],
-        });
-        let events = h.drain();
-        let Some(OrzmuxEvent::PaneOpened { pane, .. }) = events.front() else {
-            panic!("expected PaneOpened, got {events:?}");
-        };
-        (*pane, h.spawned_pane().expect("one spawned pane"))
+        h.open_split(PaneTarget::Active, RequestId(request))
     }
 
     /// Feeds `CSI ? 1004 h` through `pane`'s output stream and pumps it, so

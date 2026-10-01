@@ -3,7 +3,9 @@
 
 use crate::font::TerminalUiFont;
 use crate::input::bindings::OrzmaMouseConfig;
-use crate::ui::tab_bar::{ACTIVE_TEXT, TabButton, TabLabel, TabLabelText, tab_font, tab_label};
+use crate::ui::tab_bar::{
+    ACTIVE_TEXT, TabButton, TabLabel, TabLabelText, label_texts, tab_font, tab_label,
+};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input_focus::{AutoFocus, FocusedInput, InputFocus};
@@ -14,7 +16,9 @@ use bevy::ui::widget::measure_text_system;
 use bevy::ui_widgets::SelectAllOnFocus;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_webview::RequestWebviewFocus;
-use bevy_orzmux::prelude::{CurrentTabs, OrzmuxSystems, RequestTabAction, TabAction, TabId};
+use bevy_orzmux::prelude::{
+    CurrentTabs, OrzmuxSystems, PendingTabRename, RequestTabAction, TabAction, TabId,
+};
 use orzmux::prelude::Tab;
 use std::time::Duration;
 
@@ -203,14 +207,14 @@ const STEADY_CARET: Duration = Duration::from_secs(3600);
 const SELECTION_BG: Color = Color::srgb_u8(0x4c, 0x1d, 0x95);
 
 /// One rename: the tab, its field, the label the field replaces, the
-/// name the tab had, the text the field started with, and how the rename ends.
+/// name the tab had, the text the field started with, and how the rename
+/// ends.
 #[derive(Debug, Clone)]
 struct RenameSession {
     tab: TabId,
     field: Entity,
     label: Entity,
     name: Option<String>,
-    /// The text the field started with.
     initial: String,
     /// `Some(true)` to commit and `Some(false)` to discard at the next
     /// [`RenameSystems::Finish`]; `None` while editing.
@@ -225,9 +229,11 @@ fn start_rename(
     ev: On<StartTabRename>,
     mut commands: Commands,
     mut rename: ResMut<TabRename>,
-    mut labels: Query<(&mut Node, Option<&Children>), With<TabLabel>>,
+    mut labels: Query<&mut Node, With<TabLabel>>,
+    label_boxes: Query<&Children, With<TabLabel>>,
     texts: Query<&Text, With<TabLabelText>>,
     tabs: Res<CurrentTabs>,
+    pending: Res<PendingTabRename>,
     buttons: Query<(Entity, &TabButton, &Children)>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
@@ -240,10 +246,10 @@ fn start_rename(
     let Some(position) = tabs.position_of(tab) else {
         return;
     };
-    let name = tabs
-        .entries
-        .get(position)
-        .and_then(|entry| entry.name.clone());
+    let Some(entry) = tabs.entries.get(position) else {
+        return;
+    };
+    let name = pending.name_of(entry);
     let Some((button, _, parts)) = buttons.iter().find(|(_, button, _)| button.id == tab) else {
         return;
     };
@@ -254,18 +260,13 @@ fn start_rename(
     else {
         return;
     };
-    let shown = labels
-        .get(label)
-        .ok()
-        .and_then(|(_, children)| children)
-        .and_then(|children| children.iter().find_map(|text| texts.get(text).ok()))
-        .map(|text| text.0.clone())
+    let shown = label_texts(parts, &label_boxes)
+        .find_map(|text| texts.get(text).ok())
+        .map(|text| text.0.as_str())
         .filter(|text| !text.is_empty());
-    let initial = name
-        .clone()
-        .or(shown)
-        .unwrap_or_else(|| tab_label(position, None, None));
-    if let Ok((mut node, _)) = labels.get_mut(label)
+    let initial = tab_label(position, name, shown);
+    let name = name.map(str::to_owned);
+    if let Ok(mut node) = labels.get_mut(label)
         && node.display != Display::None
     {
         node.display = Display::None;
@@ -737,6 +738,7 @@ mod tests {
         let mut app = finish_app();
         app.init_resource::<TabRename>()
             .init_resource::<CurrentTabs>()
+            .init_resource::<PendingTabRename>()
             .init_resource::<FocusedWebview>()
             .add_observer(start_rename)
             .add_observer(

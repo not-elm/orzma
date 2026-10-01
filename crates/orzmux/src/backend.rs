@@ -254,7 +254,9 @@ pub enum OrzmuxEvent {
         /// The pane's new frame.
         frame: Frame,
     },
-    /// A pane's VT emitted a signal the GUI must act on. Webview placement signals go to the webview host, and title signals become `PaneTitle`.
+    /// A pane's VT emitted a signal the GUI must act on. Webview placement
+    /// signals go to the webview host, and title signals become
+    /// `PaneTitle`.
     Signal {
         /// The pane the signal came from.
         pane: PaneId,
@@ -297,7 +299,9 @@ pub enum OrzmuxEvent {
         /// The last processed GUI command.
         seq: CommandSeq,
     },
-    /// The tab list changed: a tab opened, closed, moved, was renamed, or was displayed, or a tab's active pane changed. Also the answer to every `MoveTab` and `RenameTab`.
+    /// The tab list changed: a tab opened, closed, moved, was renamed, or
+    /// was displayed, or a tab's active pane changed. Also the answer to
+    /// every `MoveTab` and `RenameTab`.
     Tabs {
         /// The last command the backend processed before building this.
         seq: CommandSeq,
@@ -515,7 +519,7 @@ impl Backend {
         let panes = self
             .tabs
             .get(id)
-            .map(|w| w.tree.panes())
+            .map(|tab| tab.tree.panes())
             .unwrap_or_default();
         for pane in panes {
             self.retire_pane(pane, CloseReason::Killed);
@@ -596,7 +600,7 @@ impl Backend {
         let moved = self.geometry.is_some_and(|g| {
             self.tabs
                 .active_mut()
-                .is_some_and(|w| w.tree.resize_split(split, position, g.size))
+                .is_some_and(|tab| tab.tree.resize_split(split, position, g.size))
         });
         if moved {
             self.publish_layout();
@@ -609,7 +613,7 @@ impl Backend {
         let moved = self.geometry.is_some_and(|g| {
             self.tabs
                 .active_mut()
-                .is_some_and(|w| w.tree.resize_direction(direction, cells, g.size))
+                .is_some_and(|tab| tab.tree.resize_direction(direction, cells, g.size))
         });
         if moved {
             self.publish_layout();
@@ -968,7 +972,9 @@ impl Backend {
     /// so the release of a webview focus held in another pane follows the
     /// `Layout`. Without geometry, only the first and last steps run. A
     /// pane whose resize is refused keeps its old size while the remaining
-    /// panes are still resized and the `Layout` still publishes. Last of all, it sends `Tabs` when the tab list or a tab's active pane changed.
+    /// panes are still resized and the `Layout` still publishes. Last of
+    /// all, it sends `Tabs` when the tab list or a tab's active pane
+    /// changed.
     fn publish_layout(&mut self) {
         self.refresh_focus();
         let Some(geometry) = self.geometry else {
@@ -979,7 +985,7 @@ impl Backend {
         let solved: Vec<(TabId, Solved)> = self
             .tabs
             .iter()
-            .map(|w| (w.id, w.tree.solve(geometry.size)))
+            .map(|tab| (tab.id, tab.tree.solve(geometry.size)))
             .collect();
         let mut frames: Vec<(PaneId, Frame)> = Vec::new();
         for rect in solved.iter().flat_map(|(_, s)| &s.panes) {
@@ -1050,7 +1056,8 @@ impl Backend {
     }
 
     /// Forwards a pump's items in order: each placement signal to the
-    /// webview host, each title signal into the pane's title, every other signal as a `Signal` event, each frame as
+    /// webview host, each title signal into the pane's title, every other
+    /// signal as a `Signal` event, each frame as
     /// a `Frame` event, or into `layout_frames` when the caller publishes
     /// the frames itself. Returns `Some(code)` when the items carried
     /// `ChildExit`.
@@ -1164,7 +1171,7 @@ impl Backend {
         let visible = self
             .tabs
             .active()
-            .map(|w| w.tree.panes())
+            .map(|tab| tab.tree.panes())
             .unwrap_or_default();
         self.webview.visible_panes_changed(visible);
         let output = self.webview.active_pane_changed(self.visible_active());

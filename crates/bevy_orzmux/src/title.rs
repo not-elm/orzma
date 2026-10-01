@@ -4,7 +4,9 @@
 use crate::signals::TtyTitleSignal;
 use bevy::prelude::*;
 
-/// The window title a terminal's application last set through OSC 0 / OSC 2, trimmed; `None` until it sets one, after it sets a blank one, and after the terminal resets it.
+/// The window title a terminal's application last set through OSC 0 /
+/// OSC 2, trimmed; `None` until it sets one, after it sets a blank one,
+/// and after the terminal resets it.
 ///
 /// The string arrives already sanitized, so hosts can show it as is. A
 /// signal that repeats the state already held leaves the component

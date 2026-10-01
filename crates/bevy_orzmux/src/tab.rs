@@ -1,4 +1,5 @@
-//! The tab list the backend last reported, and the move and rename the tab bar waits on.
+//! The tab list the backend last reported, and the move and rename the
+//! tab bar waits on.
 
 use bevy::prelude::*;
 use orzmux::prelude::{CommandSeq, TabEntry, TabId};
@@ -41,20 +42,33 @@ pub struct RenameInFlight {
 pub struct PendingTabRename(pub HashMap<TabId, RenameInFlight>);
 
 impl PendingTabRename {
-    /// The name a rename in flight gives `tab`: `Some(name)` while one is in
-    /// flight for it, where `name` is `None` when the rename restores the
-    /// automatic label, and `None` otherwise.
-    pub fn name_for(&self, tab: TabId) -> Option<Option<&str>> {
-        self.0.get(&tab).map(|rename| rename.name.as_deref())
+    /// The name `entry`'s tab shows: the one its rename in flight sets, or
+    /// the one the backend reported when none is in flight. `None` stands
+    /// for the automatic label.
+    pub fn name_of<'a>(&'a self, entry: &'a TabEntry) -> Option<&'a str> {
+        match self.0.get(&entry.id) {
+            Some(rename) => rename.name.as_deref(),
+            None => entry.name.as_deref(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orzmux::prelude::PaneId;
 
-    /// Asserts that each rename in flight names only its own tab, and that
-    /// a rename restoring the automatic label reads as `Some(None)`.
+    fn entry(id: u32, name: Option<&str>) -> TabEntry {
+        TabEntry {
+            id: TabId(id),
+            name: name.map(str::to_owned),
+            active_pane: PaneId(id),
+        }
+    }
+
+    /// Asserts that a rename in flight replaces only its own tab's
+    /// reported name, and that one restoring the automatic label hides the
+    /// reported name.
     ///
     /// Case: the user renames the second tab, then clears the name of the
     /// first, while both answers are on their way.
@@ -75,8 +89,8 @@ mod tests {
                 name: None,
             },
         );
-        assert_eq!(pending.name_for(TabId(2)), Some(Some("logs")));
-        assert_eq!(pending.name_for(TabId(1)), Some(None));
-        assert_eq!(pending.name_for(TabId(3)), None);
+        assert_eq!(pending.name_of(&entry(2, None)), Some("logs"));
+        assert_eq!(pending.name_of(&entry(1, Some("old"))), None);
+        assert_eq!(pending.name_of(&entry(3, Some("kept"))), Some("kept"));
     }
 }

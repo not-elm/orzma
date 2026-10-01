@@ -49,24 +49,6 @@ fn active_panes_of(events: &VecDeque<OrzmuxEvent>) -> Vec<Vec<PaneId>> {
         .collect()
 }
 
-/// Splits `pane` vertically and returns the new pane, draining the events.
-fn split(h: &mut Harness, pane: PaneId, request: u64) -> (PaneId, VecDeque<OrzmuxEvent>) {
-    h.send(OrzmuxCommand::NewPane {
-        request: RequestId(request),
-        at: NewPaneAt::Split {
-            pane: PaneTarget::Id(pane),
-            orientation: SplitOrientation::Vertical,
-        },
-        cwd: None,
-        env: vec![],
-    });
-    let events = h.drain();
-    let Some(OrzmuxEvent::PaneOpened { pane: new, .. }) = events.front() else {
-        panic!("expected PaneOpened, got {events:?}");
-    };
-    (*new, events)
-}
-
 /// Asserts that the first pane opens the first tab and announces it
 /// between `PaneOpened` and `Layout`.
 ///
@@ -469,7 +451,20 @@ fn closing_a_tab_kills_its_panes_and_shows_the_neighbour() {
 fn a_change_of_active_pane_is_announced_after_the_layout() {
     let mut h = Harness::new();
     let (root, _p) = h.open_root();
-    let (new, events) = split(&mut h, root, 2);
+    h.send(OrzmuxCommand::NewPane {
+        request: RequestId(2),
+        at: NewPaneAt::Split {
+            pane: PaneTarget::Id(root),
+            orientation: SplitOrientation::Vertical,
+        },
+        cwd: None,
+        env: vec![],
+    });
+    let events = h.drain();
+    let Some(OrzmuxEvent::PaneOpened { pane: new, .. }) = events.front() else {
+        panic!("expected PaneOpened, got {events:?}");
+    };
+    let new = *new;
     let layout = events
         .iter()
         .position(|e| matches!(e, OrzmuxEvent::Layout { .. }));
@@ -498,8 +493,7 @@ fn a_change_of_active_pane_is_announced_after_the_layout() {
 fn a_hidden_tabs_active_pane_change_is_announced() {
     let mut h = Harness::new();
     let (root, _pr) = h.open_root();
-    let (new, _) = split(&mut h, root, 2);
-    let new_pane = h.spawned_pane().expect("the split's pane");
+    let (new, new_pane) = h.open_split(PaneTarget::Id(root), RequestId(2));
     let (shown, _ps) = h.open_tab(RequestId(3));
     new_pane.exit(Some(0));
     h.pump_pane(new);

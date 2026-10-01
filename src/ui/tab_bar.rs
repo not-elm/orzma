@@ -280,8 +280,8 @@ fn size_tab_bar(
 
 /// Spawns a button for each new tab, despawns the buttons of closed ones,
 /// and orders the strip's children as `tab_order` says with the drag's
-/// preview, keeping the new-tab button last. Labels are left to
-/// `label_tabs`.
+/// preview, keeping the new-tab button last. A new button's label starts
+/// empty.
 fn reconcile_tabs(
     mut commands: Commands,
     tabs: Res<CurrentTabs>,
@@ -460,7 +460,7 @@ fn label_tabs(
         let Some(entry) = tabs.entries.iter().find(|entry| entry.id == button.id) else {
             continue;
         };
-        let name = pending.name_for(button.id).unwrap_or(entry.name.as_deref());
+        let name = pending.name_of(entry);
         let title = registry
             .entity_of(entry.active_pane)
             .and_then(|pane| titles.get(pane).ok())
@@ -703,6 +703,17 @@ mod tests {
             .iter()
             .find(|part| world.get::<TabLabel>(*part).is_some())
             .expect("the label box is a direct child of the tab")
+    }
+
+    /// The tab's first part, where a rename field takes the label's place.
+    fn rename_field_in(world: &World, tab: Entity) -> Entity {
+        world.get::<Children>(tab).expect("the tab has parts")[0]
+    }
+
+    fn field_text(world: &World, field: Entity) -> Option<String> {
+        world
+            .get::<EditableText>(field)
+            .map(|text| text.value().to_string())
     }
 
     fn only_child(app: &App, parent: Entity) -> Entity {
@@ -1142,22 +1153,14 @@ mod tests {
 
         app.world_mut().trigger(clicks(second, 2));
         app.update();
-        let field = app
-            .world()
-            .get::<Children>(second)
-            .expect("the tab has parts")[0];
+        let field = rename_field_in(app.world(), second);
         app.world_mut().trigger(clicks(field, 3));
         app.update();
 
         let world = app.world();
         let parts = world.get::<Children>(second).expect("the tab has parts");
         assert_eq!(parts[0], field);
-        assert_eq!(
-            world
-                .get::<EditableText>(field)
-                .map(|text| text.value().to_string()),
-            Some("Tab 2".to_string())
-        );
+        assert_eq!(field_text(world, field), Some("Tab 2".to_string()));
         assert_eq!(parts[1], label_box);
         assert_eq!(
             world.get::<Node>(label_box).map(|node| node.display),
@@ -1187,16 +1190,8 @@ mod tests {
         let first = tab_of(&mut app, 1);
         app.world_mut().trigger(clicks(first, 2));
         app.update();
-        let field = app
-            .world()
-            .get::<Children>(first)
-            .expect("the tab has parts")[0];
-        assert_eq!(
-            app.world()
-                .get::<EditableText>(field)
-                .map(|text| text.value().to_string()),
-            Some("vim".to_string())
-        );
+        let field = rename_field_in(app.world(), first);
+        assert_eq!(field_text(app.world(), field), Some("vim".to_string()));
     }
 
     /// Asserts that the rename field holds a shown title longer than a
@@ -1216,15 +1211,8 @@ mod tests {
         let first = tab_of(&mut app, 1);
         app.world_mut().trigger(clicks(first, 2));
         app.update();
-        let field = app
-            .world()
-            .get::<Children>(first)
-            .expect("the tab has parts")[0];
-        let value = app
-            .world()
-            .get::<EditableText>(field)
-            .map(|text| text.value().to_string())
-            .expect("the rename field holds text");
+        let field = rename_field_in(app.world(), first);
+        let value = field_text(app.world(), field).expect("the rename field holds text");
         assert_eq!(value, title);
         assert_eq!(
             rename::RenameOutcome::decide(&value, None, &title),
@@ -1246,10 +1234,7 @@ mod tests {
         let second = tab_of(&mut app, 2);
         app.world_mut().trigger(clicks(second, 2));
         app.update();
-        let field = app
-            .world()
-            .get::<Children>(second)
-            .expect("the tab has parts")[0];
+        let field = rename_field_in(app.world(), second);
 
         app.world_mut().trigger(drag_start(field, 130.0));
         app.world_mut().trigger(drag_to(field, 190.0, 60.0));
