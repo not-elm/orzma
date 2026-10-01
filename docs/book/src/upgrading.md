@@ -15,7 +15,7 @@ file still uses something the new release rejects;
 ### The stock shortcuts are `Alt` chords
 
 The pane and vi mode shortcuts moved from the leader to direct `Alt` chords,
-and the new workspace shortcuts use `Alt` as well
+and the new tab shortcuts use `Alt` as well
 ([Default Key Bindings](default-key-bindings.md) lists them all):
 
 | Action | 0.2 | 0.3 |
@@ -98,12 +98,11 @@ the mouse now gets one wheel report per cell of travel, whatever
 above bring fine scrolling back, since `lines_per_notch = 3` is again larger
 than `fine_lines`.
 
-### Workspaces
+### Tabs
 
-orzma now keeps several layouts of panes as workspaces, listed in a tab bar at
-the top of the window (see [Workspaces](panes-and-workspaces.md#workspaces)).
-Closing the last pane of a workspace closes the workspace, and closing the
-last workspace quits orzma.
+orzma now keeps several layouts of panes as tabs, listed in a tab bar at the
+top of the window (see [Tabs](panes-and-tabs.md#tabs)). Closing the last pane
+of a tab closes the tab, and closing the last tab quits orzma.
 
 ### Companion apps
 
@@ -124,13 +123,13 @@ The macOS download is a `.dmg` instead of a `.zip` (see
 ### tmux integration removed
 
 orzma no longer drives tmux: panes are orzma's own (see
-[Panes and Workspaces](panes-and-workspaces.md)). These `[shortcuts]` actions
+[Panes and Tabs](panes-and-tabs.md)). These `[shortcuts]` actions
 were removed: `detach-session`, `next-session`, `previous-session`,
 `rename-session`, `new-window`, `kill-window`, `next-window`,
 `previous-window`, `select-window-0` … `select-window-9`, `rename-window`, and
 `zoom-pane`. The `[scrollback]` table was removed as well. A configuration
 that still sets any of them is ignored as a whole, so delete those lines. The
-workspace actions of 0.3.0 replace the window actions.
+tab actions of 0.3.0 replace the window actions.
 
 ### Fonts are named, not loaded from files
 

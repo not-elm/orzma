@@ -97,7 +97,7 @@ does not keep firing. A second press or an auto-repeat is read as a
 
 ## `Alt` chords, the shell, and the Option key
 
-The stock pane, workspace, and vi-mode shortcuts are `Alt` chords, so those
+The stock pane, tab, and vi-mode shortcuts are `Alt` chords, so those
 keys do not reach the program in the terminal as meta-prefixed keys:
 readline's `Alt+c` (capitalize word), `Alt+r` (revert line), and `Alt+1` …
 `Alt+9` (numeric argument), for example. Unbind or rebind a shortcut to give
@@ -124,10 +124,10 @@ Things to know when you rebind:
   (e.g. `split-vertical-pane = "Alt+h"`, which collides with the default
   `select-left-pane = "Alt+h"`) is a startup validation error naming both
   actions, and so is using such a chord as the chord `leader`; see
-  [Validation](configuration.md#validation). The stock pane, workspace, and
+  [Validation](configuration.md#validation). The stock pane, tab, and
   vi-mode shortcuts are all `Alt` chords (see
   [Default Key Bindings](default-key-bindings.md)). Unbind the stock default
-  explicitly (`select-left-pane = ""`, `rename-workspace = ""`) or pick a free
+  explicitly (`select-left-pane = ""`, `rename-tab = ""`) or pick a free
   chord. Binding a chord to the action that already has it by default is not a
   conflict. A direct chord and a `<Leader>` binding never collide, even on the
   same key, such as `s` and `<Leader>s`.
@@ -148,7 +148,7 @@ still come first:
 
 - `<Leader>` bindings and `release-webview-focus` always run.
 - Other direct chords, such as `Cmd+Plus` or the stock `Alt` pane and
-  workspace chords, run while
+  tab chords, run while
   [`direct-chords-over-webview`](configuration.md#shortcuts-direct-chords-over-webview)
   is `true`, the default. Set it to `false` to let
   the page have them; `release-webview-focus` (`<Leader>u`) still takes the
@@ -186,7 +186,7 @@ leader = "Ctrl"
 split-vertical-pane   = "<Leader>i"
 split-horizontal-pane = "<Leader>o"
 # Give Alt+r back to the shell.
-rename-workspace      = ""
+rename-tab            = ""
 # Keep resizing while Shift+H is held or pressed again within repeat-time-ms.
 resize-left-pane      = "r:<Leader>Shift+H"
 ```

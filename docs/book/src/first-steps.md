@@ -29,17 +29,16 @@ layout that has it.
    mouse.
 4. Press `Alt+p` to close the active pane.
 
-[Panes and Workspaces](panes-and-workspaces.md) has the details.
+[Panes and Tabs](panes-and-tabs.md) has the details.
 
-## Open a workspace
+## Open a tab
 
-A workspace is a separate layout of panes, shown as a tab at the top of the
-window.
+A tab is a separate layout of panes, shown at the top of the window.
 
-1. Press `Alt+c` to open a new workspace.
+1. Press `Alt+c` to open a new tab.
 2. Press `Alt+1` to go back to the first one, or `Alt+]` and `Alt+[` to step
    through them. You can also click a tab.
-3. Press `Alt+r` to rename the workspace on screen.
+3. Press `Alt+r` to rename the tab on screen.
 
 ## Copy text in vi mode
 

@@ -48,27 +48,27 @@ macOS `Cmd+C`, always copies.
 | `select-up-pane` | `Alt+k` | Make the pane above active. |
 | `select-right-pane` | `Alt+l` | Make the pane to the right active. |
 | `kill-pane` | `Alt+p` | Close the active pane and end its shell. |
-| `resize-left-pane` | `r:Alt+Shift+H` | Move a divider of the active pane 5 cells left, repeatable (see [Resizing panes](panes-and-workspaces.md#resizing-panes)). |
-| `resize-down-pane` | `r:Alt+Shift+J` | Move a divider of the active pane 5 cells down, repeatable (see [Resizing panes](panes-and-workspaces.md#resizing-panes)). |
-| `resize-up-pane` | `r:Alt+Shift+K` | Move a divider of the active pane 5 cells up, repeatable (see [Resizing panes](panes-and-workspaces.md#resizing-panes)). |
-| `resize-right-pane` | `r:Alt+Shift+L` | Move a divider of the active pane 5 cells right, repeatable (see [Resizing panes](panes-and-workspaces.md#resizing-panes)). |
+| `resize-left-pane` | `r:Alt+Shift+H` | Move a divider of the active pane 5 cells left, repeatable (see [Resizing panes](panes-and-tabs.md#resizing-panes)). |
+| `resize-down-pane` | `r:Alt+Shift+J` | Move a divider of the active pane 5 cells down, repeatable (see [Resizing panes](panes-and-tabs.md#resizing-panes)). |
+| `resize-up-pane` | `r:Alt+Shift+K` | Move a divider of the active pane 5 cells up, repeatable (see [Resizing panes](panes-and-tabs.md#resizing-panes)). |
+| `resize-right-pane` | `r:Alt+Shift+L` | Move a divider of the active pane 5 cells right, repeatable (see [Resizing panes](panes-and-tabs.md#resizing-panes)). |
 
 <!-- ANCHOR_END: pane-actions -->
 
-## Workspaces
+## Tabs
 
-<!-- ANCHOR: workspace-actions -->
+<!-- ANCHOR: tab-actions -->
 
 | Action | Default | What it does |
 | --- | --- | --- |
-| `new-workspace` | `Alt+c` | Open a new workspace after the last one and show it. |
-| `close-workspace` | `Alt+Shift+X` | Close the workspace on screen and end every shell in it. |
-| `next-workspace` | `Alt+]` | Show the workspace to the right, wrapping around. |
-| `previous-workspace` | `Alt+[` | Show the workspace to the left, wrapping around. |
-| `select-workspace-1` … `select-workspace-9` | `Alt+1` … `Alt+9` | Show the first … ninth workspace. |
-| `rename-workspace` | `Alt+r` | Rename the workspace on screen. |
+| `new-tab` | `Alt+c` | Open a new tab after the last one and show it. |
+| `close-tab` | `Alt+Shift+X` | Close the tab on screen and end every shell in it. |
+| `next-tab` | `Alt+]` | Show the tab to the right, wrapping around. |
+| `previous-tab` | `Alt+[` | Show the tab to the left, wrapping around. |
+| `select-tab-1` … `select-tab-9` | `Alt+1` … `Alt+9` | Show the first … ninth tab. |
+| `rename-tab` | `Alt+r` | Rename the tab on screen. |
 
-<!-- ANCHOR_END: workspace-actions -->
+<!-- ANCHOR_END: tab-actions -->
 
 ## Vi mode
 

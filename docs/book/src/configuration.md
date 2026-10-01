@@ -83,7 +83,7 @@ Default: `true` · `true` or `false` · Windows only
 
 Whether orzma makes PowerShell (`pwsh`, `powershell`) and `cmd` report their
 working directory, so that a split pane starts in the same directory (see
-[Working directory of a new pane](panes-and-workspaces.md#working-directory-of-a-new-pane)).
+[Working directory of a new pane](panes-and-tabs.md#working-directory-of-a-new-pane)).
 It has no effect on macOS and Linux.
 
 ### `[cursor]`
@@ -189,7 +189,7 @@ style = "Italic"
 
 Default: `normal`'s family and style · A table of `family` and `style`
 
-The face of orzma's own interface: the workspace tab bar and its rename
+The face of orzma's own interface: the tab bar and its rename
 field, the input method's preedit text, and the vi mode indicator. `family`
 and `style` each default to those of `normal` and follow the same rules. With
 the bundled font, orzma uses the bundled face closest to `style`.

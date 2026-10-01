@@ -21,7 +21,7 @@ no-section-label = true
 # Old URLs and anchors of the published guide, sent to where their content
 # lives now. Keys are site paths; a key with #fragment redirects one anchor.
 [output.html.redirect]
-"/multiplexer.html" = "panes-and-workspaces.html"
+"/multiplexer.html" = "panes-and-tabs.html"
 "/companion-apps.html#outline-panel" = "orzmd.html#outline-sidebar"
 "/companion-apps.html#orzmd" = "orzmd.html"
 "/companion-apps.html#features" = "orzmd.html#features"
@@ -54,7 +54,6 @@ no-section-label = true
 "/key-bindings.html#platform-defaults" = "default-key-bindings.html#general"
 "/key-bindings.html#actions" = "default-key-bindings.html#general"
 "/key-bindings.html#pane-actions" = "default-key-bindings.html#panes"
-"/key-bindings.html#workspace-actions" = "default-key-bindings.html#workspaces"
 "/key-bindings.html#vi-mode-actions" = "default-key-bindings.html#vi-mode"
 "/contributing.html#releasing" = "https://github.com/not-elm/orzma/blob/main/CONTRIBUTING.md#releasing"
 

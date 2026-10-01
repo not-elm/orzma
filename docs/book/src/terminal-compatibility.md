@@ -56,7 +56,7 @@ orzma understands.
 | --- | --- | --- |
 | 0, 2 | Set the window title | The window shows the active pane's title. `CSI 22 t` and `CSI 23 t` save and restore the title. orzma does not report the title back, and ignores OSC 1 (icon name). |
 | 4, 104 | Set, query, and reset palette colors | Colors 0 to 255, written as `rgb:` or `#` values. |
-| 7 | Report the working directory | A `file://` URL. New panes use it (see [Working directory of a new pane](panes-and-workspaces.md#working-directory-of-a-new-pane)). |
+| 7 | Report the working directory | A `file://` URL. New panes use it (see [Working directory of a new pane](panes-and-tabs.md#working-directory-of-a-new-pane)). |
 | 8 | Hyperlinks | The `id=` parameter is supported. |
 | 9;9 | Report the working directory on Windows | A Windows path. Other OSC 9 forms are ignored. |
 | 10, 11, 12 | Set and query the default foreground, background, and cursor colors | |

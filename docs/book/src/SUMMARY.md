@@ -10,7 +10,7 @@
 
 # User Guide
 
-- [Panes and Workspaces](panes-and-workspaces.md)
+- [Panes and Tabs](panes-and-tabs.md)
 - [Vi Mode](vi-mode.md)
 - [Companion Apps](companion-apps.md)
   - [orzmd](orzmd.md)

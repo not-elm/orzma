@@ -6,7 +6,7 @@
 
 The pane that receives your keystrokes. A new pane and a pane you click
 become the active pane, and the other panes are tinted (see
-[Inactive panes](panes-and-workspaces.md#inactive-panes)).
+[Inactive panes](panes-and-tabs.md#inactive-panes)).
 
 ### Alternate screen
 
@@ -30,8 +30,8 @@ By default it is a tap of `Cmd` on macOS and of `Alt` on Windows and Linux
 ### Pane
 
 A part of the window that runs its own shell. The panes of a
-[workspace](#workspace) share the window below the tab bar (see
-[Panes and Workspaces](panes-and-workspaces.md)).
+[tab](#tab) share the window below the tab bar (see
+[Panes and Tabs](panes-and-tabs.md)).
 
 ### Primary screen
 
@@ -44,16 +44,16 @@ The lines that have scrolled off the top of the primary screen. orzma keeps
 the latest 10,000 lines of each pane. Scroll back with the mouse wheel or in
 [vi mode](#vi-mode).
 
+### Tab
+
+One layout of panes, shown in the tab bar at the top of the window. The shells
+in the tabs that are not on screen keep running (see
+[Tabs](panes-and-tabs.md#tabs)).
+
 ### Vi mode
 
 A mode that moves a cursor over the screen and the scrollback with vi keys, to
 select and copy text (see [Vi Mode](vi-mode.md)).
-
-### Workspace
-
-One layout of panes, shown as a tab in the tab bar at the top of the window.
-The shells in the workspaces that are not on screen keep running (see
-[Workspaces](panes-and-workspaces.md#workspaces)).
 
 ## Webview apps
 
