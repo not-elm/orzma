@@ -4,9 +4,9 @@
 use crate::layout::CurrentLayout;
 use crate::registry::PaneRegistry;
 use crate::signals::{
-    TtyChildExitSignal, TtyFrameSignal, TtySelectionTextSignal, trigger_vt_signal,
+    TtyChildExitSignal, TtyFrameSignal, TtySelectionTextSignal, TtyTitleSignal, trigger_vt_signal,
 };
-use crate::tab::{CurrentTabs, PendingTabMove};
+use crate::tab::{CurrentTabs, PendingTabMove, PendingTabRename};
 use crate::webview::trigger_webview_event;
 use crate::{OrzmuxConnection, OrzmuxPane, OrzmuxSystems};
 use bevy::prelude::*;
@@ -35,6 +35,7 @@ impl Plugin for DrainPlugin {
             .init_resource::<CurrentLayout>()
             .init_resource::<CurrentTabs>()
             .init_resource::<PendingTabMove>()
+            .init_resource::<PendingTabRename>()
             .add_systems(
                 Update,
                 drain_orzmux_events
@@ -55,6 +56,7 @@ fn drain_orzmux_events(
     mut current: ResMut<CurrentLayout>,
     mut tabs: ResMut<CurrentTabs>,
     mut pending_move: ResMut<PendingTabMove>,
+    mut pending_rename: ResMut<PendingTabRename>,
     connection: Res<OrzmuxConnection>,
 ) {
     for event in connection.0.try_iter() {
@@ -64,6 +66,7 @@ fn drain_orzmux_events(
             &mut current,
             &mut tabs,
             &mut pending_move,
+            &mut pending_rename,
             event,
         );
     }
@@ -81,6 +84,7 @@ fn apply_event(
     current: &mut ResMut<CurrentLayout>,
     tabs: &mut ResMut<CurrentTabs>,
     pending_move: &mut ResMut<PendingTabMove>,
+    pending_rename: &mut ResMut<PendingTabRename>,
     event: OrzmuxEvent,
 ) {
     match event {
@@ -105,6 +109,10 @@ fn apply_event(
         OrzmuxEvent::Signal { pane, signal } => match registry.entity_of(pane) {
             Some(terminal) => trigger_vt_signal(commands, terminal, signal),
             None => tracing::debug!(?pane, "signal for an unknown pane dropped"),
+        },
+        OrzmuxEvent::PaneTitle { pane, title } => match registry.entity_of(pane) {
+            Some(terminal) => commands.trigger(TtyTitleSignal { terminal, title }),
+            None => tracing::debug!(?pane, "title for an unknown pane dropped"),
         },
         OrzmuxEvent::SelectionText { text } => commands.trigger(TtySelectionTextSignal { text }),
         OrzmuxEvent::SelectionCopied { text } => {
@@ -135,6 +143,9 @@ fn apply_event(
             if pending_move.0.is_some_and(|sent| seq >= sent) {
                 pending_move.0 = None;
             }
+            if pending_rename.0.values().any(|rename| seq >= rename.seq) {
+                pending_rename.0.retain(|_, rename| rename.seq > seq);
+            }
         }
     }
 }
@@ -151,6 +162,8 @@ mod tests {
     use super::*;
     use crate::requests::test_support::app_with_channels;
     use crate::signals::TtyFrameSignal;
+    use crate::tab::{PendingTabRename, RenameInFlight};
+    use crate::title::{TtyTitle, TtyTitlePlugin};
     use crossbeam_channel::Sender;
     use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize};
     use orzmux::prelude::{CloseReason, CommandSeq, Layout, PaneRect, RequestId, TabEntry, TabId};
@@ -305,6 +318,7 @@ mod tests {
                 .map(|id| TabEntry {
                     id: TabId(*id),
                     name: None,
+                    active_pane: PaneId(*id),
                 })
                 .collect(),
             active: ids.first().map(|id| TabId(*id)),
@@ -360,6 +374,41 @@ mod tests {
         assert_eq!(app.world().resource::<PendingTabMove>().0, None);
     }
 
+    /// Asserts that a `Tabs` clears exactly the pending renames whose
+    /// sequence it reaches.
+    ///
+    /// Case: the user renames two tabs one after the other, and the answer
+    /// to the first arrives before the answer to the second.
+    #[test]
+    fn a_tabs_clears_the_pending_renames_it_answers() {
+        let (mut app, events) = app();
+        {
+            let mut pending = app.world_mut().resource_mut::<PendingTabRename>();
+            pending.0.insert(
+                TabId(1),
+                RenameInFlight {
+                    seq: CommandSeq(5),
+                    name: Some("logs".into()),
+                },
+            );
+            pending.0.insert(
+                TabId(2),
+                RenameInFlight {
+                    seq: CommandSeq(6),
+                    name: Some("build".into()),
+                },
+            );
+        }
+        events.send(tabs(4, &[1, 2])).unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<PendingTabRename>().0.len(), 2);
+        events.send(tabs(5, &[1, 2])).unwrap();
+        app.update();
+        let pending = &app.world().resource::<PendingTabRename>().0;
+        assert!(!pending.contains_key(&TabId(1)));
+        assert!(pending.contains_key(&TabId(2)));
+    }
+
     /// Asserts that `CurrentTabs` is marked changed only when its
     /// content actually differs between two `Tabs` events.
     ///
@@ -411,6 +460,46 @@ mod tests {
         assert!(app.world().get_entity(entity).is_err());
         assert!(app.world().get_entity(child).is_err());
         assert!(app.world().resource::<PaneRegistry>().panes.is_empty());
+    }
+
+    /// Asserts that a `PaneTitle` in the same drain as its pane's
+    /// `PaneOpened` reaches the new pane's `TtyTitle`, and that a title for
+    /// a pane with no entity is dropped.
+    ///
+    /// Case: the shell's startup file sets the title right as the backend
+    /// answers the spawn, while a title races the close of another pane.
+    #[test]
+    fn a_pane_title_in_the_opening_drain_reaches_the_new_pane() {
+        let (mut app, events) = app();
+        app.add_plugins(TtyTitlePlugin);
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<PaneRegistry>()
+            .pending_spawns
+            .insert(RequestId(1), entity);
+        events
+            .send(OrzmuxEvent::PaneOpened {
+                pane: PaneId(7),
+                request: RequestId(1),
+            })
+            .unwrap();
+        events
+            .send(OrzmuxEvent::PaneTitle {
+                pane: PaneId(7),
+                title: Some("zsh".into()),
+            })
+            .unwrap();
+        events
+            .send(OrzmuxEvent::PaneTitle {
+                pane: PaneId(9),
+                title: Some("gone".into()),
+            })
+            .unwrap();
+        app.update();
+        assert_eq!(
+            app.world().get::<TtyTitle>(entity),
+            Some(&TtyTitle(Some("zsh".into())))
+        );
     }
 
     /// Asserts that `SelectionText` is forwarded as

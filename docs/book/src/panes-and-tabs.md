@@ -26,14 +26,17 @@ tabs keep running, and pages shown in them keep their state.
 
 Click a tab to show it, click its `×` to close it, and click `+` to open a new
 one. When the tabs do not fit in the window, turn the mouse wheel over the tab
-bar to scroll through them. A tab you have not named is called `Tab n`, where
-`n` is its position in the tab bar. A new tab starts in the working directory
-of the active pane, like a split.
+bar to scroll through them. A tab you have not named shows the title of its
+active pane, as set by the program running there, and `Tab n` when that pane
+has no title, where `n` is the tab's position in the tab bar. A new tab starts
+in the working directory of the active pane, like a split.
 
 Double-click a tab, or press the `rename-tab` key, to rename it in place.
 `Enter` or a click anywhere else keeps the new name, and `Escape` keeps the old
-one. Leave the field empty to go back to `Tab n`. Drag a tab to move it; the
-numbers of unnamed tabs follow their new positions.
+one. A tab whose label you leave as it was stays unnamed and keeps following
+its pane's title. Leave the field empty to go back to the automatic label.
+Drag a tab to move it; the numbers of unnamed tabs without a title follow their
+new positions.
 
 ## Resizing panes
 

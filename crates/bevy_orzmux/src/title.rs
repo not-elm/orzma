@@ -1,12 +1,12 @@
 //! The window title a terminal's application last set, kept in step with
-//! the VT's title signals.
+//! a terminal's title signals.
 
-use crate::signals::{TtyTitleChangedSignal, TtyTitleResetSignal};
+use crate::signals::TtyTitleSignal;
 use bevy::prelude::*;
 
 /// The window title a terminal's application last set through OSC 0 /
-/// OSC 2; `None` until it sets one, and again after the VT reports the
-/// title's return to the host's default.
+/// OSC 2, trimmed; `None` until it sets one, after it sets a blank one,
+/// and after the terminal resets it.
 ///
 /// The string arrives already sanitized, so hosts can show it as is. A
 /// signal that repeats the state already held leaves the component
@@ -20,20 +20,13 @@ pub(crate) struct TtyTitlePlugin;
 
 impl Plugin for TtyTitlePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_title_changed)
-            .add_observer(on_title_reset);
+        app.add_observer(on_title);
     }
 }
 
-fn on_title_changed(event: On<TtyTitleChangedSignal>, mut titles: Query<&mut TtyTitle>) {
+fn on_title(event: On<TtyTitleSignal>, mut titles: Query<&mut TtyTitle>) {
     if let Ok(mut title) = titles.get_mut(event.terminal) {
-        title.set_if_neq(TtyTitle(Some(event.title.clone())));
-    }
-}
-
-fn on_title_reset(event: On<TtyTitleResetSignal>, mut titles: Query<&mut TtyTitle>) {
-    if let Ok(mut title) = titles.get_mut(event.terminal) {
-        title.set_if_neq(TtyTitle(None));
+        title.set_if_neq(TtyTitle(event.title.clone()));
     }
 }
 
@@ -63,23 +56,26 @@ mod tests {
         (app, terminal)
     }
 
-    /// Asserts that a title signal sets the component and a reset
-    /// signal clears it.
+    /// Asserts that a title signal sets the component and a `None` title
+    /// clears it.
     ///
     /// Case: vim sets the window title on start and, on exit, pops the
     /// empty title it had saved on the title stack.
     #[test]
-    fn the_title_signals_write_the_component() {
+    fn the_title_signal_writes_the_component() {
         let (mut app, terminal) = app_with_title();
-        app.world_mut().trigger(TtyTitleChangedSignal {
+        app.world_mut().trigger(TtyTitleSignal {
             terminal,
-            title: "vim".to_string(),
+            title: Some("vim".to_string()),
         });
         assert_eq!(
             app.world().get::<TtyTitle>(terminal),
             Some(&TtyTitle(Some("vim".to_string())))
         );
-        app.world_mut().trigger(TtyTitleResetSignal { terminal });
+        app.world_mut().trigger(TtyTitleSignal {
+            terminal,
+            title: None,
+        });
         assert_eq!(app.world().get::<TtyTitle>(terminal), Some(&TtyTitle(None)));
     }
 
@@ -93,25 +89,31 @@ mod tests {
     #[test]
     fn a_repeated_title_does_not_mark_the_component_changed() {
         let (mut app, terminal) = app_with_title();
-        app.world_mut().trigger(TtyTitleChangedSignal {
+        app.world_mut().trigger(TtyTitleSignal {
             terminal,
-            title: "sh".to_string(),
+            title: Some("sh".to_string()),
         });
         app.update();
         assert_eq!(app.world().resource::<ChangedTitles>().0, 1);
 
-        app.world_mut().trigger(TtyTitleChangedSignal {
+        app.world_mut().trigger(TtyTitleSignal {
             terminal,
-            title: "sh".to_string(),
+            title: Some("sh".to_string()),
         });
         app.update();
         assert_eq!(app.world().resource::<ChangedTitles>().0, 1);
 
-        app.world_mut().trigger(TtyTitleResetSignal { terminal });
+        app.world_mut().trigger(TtyTitleSignal {
+            terminal,
+            title: None,
+        });
         app.update();
         assert_eq!(app.world().resource::<ChangedTitles>().0, 2);
 
-        app.world_mut().trigger(TtyTitleResetSignal { terminal });
+        app.world_mut().trigger(TtyTitleSignal {
+            terminal,
+            title: None,
+        });
         app.update();
         assert_eq!(app.world().resource::<ChangedTitles>().0, 2);
     }
@@ -125,9 +127,9 @@ mod tests {
     fn a_title_signal_reaches_only_its_terminal() {
         let (mut app, terminal) = app_with_title();
         let other = app.world_mut().spawn(TtyTitle::default()).id();
-        app.world_mut().trigger(TtyTitleChangedSignal {
+        app.world_mut().trigger(TtyTitleSignal {
             terminal,
-            title: "vim".to_string(),
+            title: Some("vim".to_string()),
         });
         assert_eq!(app.world().get::<TtyTitle>(other), Some(&TtyTitle(None)));
     }

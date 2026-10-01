@@ -102,7 +102,8 @@ than `fine_lines`.
 
 orzma now keeps several layouts of panes as tabs, listed in a tab bar at the
 top of the window (see [Tabs](panes-and-tabs.md#tabs)). Closing the last pane
-of a tab closes the tab, and closing the last tab quits orzma.
+of a tab closes the tab, and closing the last tab quits orzma. A tab you have
+not named shows the title of its active pane.
 
 ### Companion apps
 

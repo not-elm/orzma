@@ -18,6 +18,9 @@ pub(crate) struct Pane {
     reported_cwd: Option<PathBuf>,
     /// The directory the pane's shell was spawned in, when one was given.
     spawn_cwd: Option<PathBuf>,
+    /// The title the pane's application last set, trimmed; `None` when it
+    /// set none, set only whitespace, or the terminal reset it.
+    title: Option<String>,
 }
 
 impl Pane {
@@ -33,6 +36,7 @@ impl Pane {
             applied,
             reported_cwd: None,
             spawn_cwd,
+            title: None,
         }
     }
 
@@ -64,6 +68,23 @@ impl Pane {
     /// replacing any earlier report.
     pub fn set_reported_cwd(&mut self, path: PathBuf) {
         self.reported_cwd = Some(path);
+    }
+
+    /// The title the pane's application last set.
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    /// Records `raw` as the pane's title, trimmed, where `None` or a title
+    /// that trims to nothing means no title. Returns whether the recorded
+    /// title changed.
+    pub fn set_title(&mut self, raw: Option<&str>) -> bool {
+        let next = raw.map(str::trim).filter(|title| !title.is_empty());
+        if self.title.as_deref() == next {
+            return false;
+        }
+        self.title = next.map(str::to_owned);
+        true
     }
 
     /// The directory one candidate names, or `None` when it holds none.

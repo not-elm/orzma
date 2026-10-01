@@ -1,8 +1,6 @@
 //! Tests of the webview host running inside the multiplexer loop.
 
-use crate::backend::{
-    NewPaneAt, OrzmuxEvent, PaneDirection, PaneId, PaneTarget, RequestId, SplitOrientation,
-};
+use crate::backend::{OrzmuxEvent, PaneDirection, PaneId, PaneTarget, RequestId};
 use crate::event_loop::OrzmuxCommand;
 use crate::test_support::{CONTROL_SOCK, FakePane, Harness};
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
@@ -104,26 +102,6 @@ fn print_mounts(pane: &FakePane, instances: &[InstanceId], rows: u16) {
         .map(|instance| format!("\x1b_Omount;n={instance},r={rows},c=8\x1b\\"))
         .collect();
     pane.print(apc.as_bytes());
-}
-
-/// Splits `pane` vertically and returns the pane the split opened.
-fn split(h: &mut Harness, pane: PaneId) -> PaneId {
-    h.send(OrzmuxCommand::NewPane {
-        request: RequestId(2),
-        at: NewPaneAt::Split {
-            pane: PaneTarget::Id(pane),
-            orientation: SplitOrientation::Vertical,
-        },
-        cwd: None,
-        env: vec![],
-    });
-    h.drain()
-        .into_iter()
-        .find_map(|event| match event {
-            OrzmuxEvent::PaneOpened { pane, .. } => Some(pane),
-            _ => None,
-        })
-        .expect("the split opens a pane")
 }
 
 fn webview_events(events: &VecDeque<OrzmuxEvent>) -> Vec<WebviewEvent<PaneId>> {
@@ -228,8 +206,7 @@ fn refused_mounts_hand_their_vt_reservations_back() {
     let (left, _left_fake) = h.open_root();
     let _left_lines = connect(&mut h, &control, 1);
     let foreign = register_inline(&mut h, &control, 1);
-    let right = split(&mut h, left);
-    let right_fake = h.spawned_pane().expect("the split spawned a pane");
+    let (right, right_fake) = h.open_split(PaneTarget::Id(left), RequestId(2));
     let _right_lines = connect(&mut h, &control, 2);
     let own = register_inline(&mut h, &control, 2);
     h.drain();
@@ -375,9 +352,8 @@ impl SplitPage {
         print_mounts(&left_fake, &[instance], 2);
         h.pump_pane(left);
         let _ = h.drain();
-        let right = split(h, left);
+        let (right, right_fake) = h.open_split(PaneTarget::Id(left), RequestId(2));
         assert_ne!(right, left);
-        let right_fake = h.spawned_pane().expect("the split spawned a pane");
         Self {
             left,
             left_fake,
@@ -473,7 +449,7 @@ fn a_webview_command_is_answered_with_its_seq() {
 #[test]
 fn selecting_another_pane_releases_a_focused_page() {
     let mut page = MountedPage::open();
-    let right = split(&mut page.h, page.pane);
+    let (right, _right_fake) = page.h.open_split(PaneTarget::Id(page.pane), RequestId(2));
     page.h.send(OrzmuxCommand::Webview(WebviewCommand::Focus {
         mount: Some(page.mount),
     }));

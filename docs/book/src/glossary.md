@@ -46,9 +46,9 @@ the latest 10,000 lines of each pane. Scroll back with the mouse wheel or in
 
 ### Tab
 
-One layout of panes, shown in the tab bar at the top of the window. The shells
-in the tabs that are not on screen keep running (see
-[Tabs](panes-and-tabs.md#tabs)).
+One layout of panes, shown in the tab bar at the top of the window and
+labelled with its name or its active pane's title. The shells in the tabs that
+are not on screen keep running (see [Tabs](panes-and-tabs.md#tabs)).
 
 ### Vi mode
 

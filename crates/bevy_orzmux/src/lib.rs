@@ -31,7 +31,7 @@ pub mod prelude {
         registry::PaneRegistry,
         requests::*,
         signals::*,
-        tab::{CurrentTabs, PendingTabMove},
+        tab::{CurrentTabs, PendingTabMove, PendingTabRename, RenameInFlight},
         title::TtyTitle,
         webview::OrzmuxWebviewEvent,
     };
