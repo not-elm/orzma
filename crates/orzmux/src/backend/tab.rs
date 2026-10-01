@@ -171,8 +171,9 @@ impl Tabs {
     /// # Errors
     ///
     /// Returns [`OrzmuxError::UnresolvedTarget`] when `target` is not in
-    /// the displayed tab, and [`OrzmuxError::SplitRefused`] when the
-    /// tree refuses the split.
+    /// the displayed tab, and [`OrzmuxError::SplitRefused`] when, in
+    /// `window`, it cannot hold two minimum leaves and a separator along
+    /// the split axis.
     pub fn split_active(
         &mut self,
         target: PaneId,
@@ -189,8 +190,11 @@ impl Tabs {
         if !tab.tree.contains(target) {
             return Err(OrzmuxError::UnresolvedTarget);
         }
+        if !tab.tree.tile(window).can_split(target, orientation) {
+            return Err(OrzmuxError::SplitRefused);
+        }
         tab.tree
-            .split(&mut self.split_ids, target, orientation, new, window)
+            .split(&mut self.split_ids, target, orientation, new)
     }
 
     /// The displayed tab's id.
@@ -348,6 +352,24 @@ mod tests {
         let (mut set, _) = three();
         assert_eq!(set.remove_pane(PaneId(99)), PaneRemoval::Absent);
         assert_eq!(set.entries().len(), 3);
+    }
+
+    /// Asserts that a split of a pane with too little room is refused and
+    /// leaves the tab's tree as it was.
+    ///
+    /// Case: the user presses split-vertical-pane in a window two columns
+    /// wide.
+    #[test]
+    fn a_split_without_room_is_refused_and_changes_nothing() {
+        let (mut set, [a, ..]) = three();
+        let narrow = GridSize { cols: 2, rows: 24 };
+        assert!(matches!(
+            set.split_active(PaneId(1), SplitOrientation::Vertical, PaneId(10), narrow),
+            Err(OrzmuxError::SplitRefused)
+        ));
+        let tree = &set.get(a).expect("the first tab stays").tree;
+        assert_eq!(tree.panes(), vec![PaneId(1)]);
+        assert_eq!(tree.active(), PaneId(1));
     }
 
     /// Asserts that `Next` and `Previous` wrap and that an out-of-range

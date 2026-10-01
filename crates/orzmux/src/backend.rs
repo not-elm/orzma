@@ -414,8 +414,8 @@ impl Backend {
     /// Returns [`OrzmuxError::NoGeometry`] before the window has
     /// reported its size, [`OrzmuxError::UnresolvedTarget`] when the
     /// split target is gone or not in the displayed tab,
-    /// [`OrzmuxError::SplitRefused`] when the tree refuses the
-    /// insertion, [`OrzmuxError::NoPaneRect`] or [`OrzmuxError::Vt`] when
+    /// [`OrzmuxError::SplitRefused`] when the target has too little room
+    /// to divide, [`OrzmuxError::NoPaneRect`] or [`OrzmuxError::Vt`] when
     /// the tiling gives the new pane no valid rectangle, and
     /// whatever the pane factory returns when the shell will not start.
     /// The tabs are left as they were in every case: a tab
