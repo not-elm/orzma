@@ -94,7 +94,7 @@ pub(crate) mod test_support {
         OrzmuxConnection, OrzmuxPane,
         layout::CurrentLayout,
         registry::PaneRegistry,
-        tab::{CurrentTabs, PendingTabMove},
+        tab::{CurrentTabs, PendingTabMove, PendingTabRename},
     };
     use bevy::prelude::*;
     use crossbeam_channel::{Receiver, Sender};
@@ -117,6 +117,7 @@ pub(crate) mod test_support {
             .init_resource::<CurrentLayout>()
             .init_resource::<CurrentTabs>()
             .init_resource::<PendingTabMove>()
+            .init_resource::<PendingTabRename>()
             .insert_resource(OrzmuxConnection(client));
         (app, events, commands)
     }

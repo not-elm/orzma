@@ -6,7 +6,7 @@ use crate::registry::PaneRegistry;
 use crate::signals::{
     TtyChildExitSignal, TtyFrameSignal, TtySelectionTextSignal, TtyTitleSignal, trigger_vt_signal,
 };
-use crate::tab::{CurrentTabs, PendingTabMove};
+use crate::tab::{CurrentTabs, PendingTabMove, PendingTabRename};
 use crate::webview::trigger_webview_event;
 use crate::{OrzmuxConnection, OrzmuxPane, OrzmuxSystems};
 use bevy::prelude::*;
@@ -35,6 +35,7 @@ impl Plugin for DrainPlugin {
             .init_resource::<CurrentLayout>()
             .init_resource::<CurrentTabs>()
             .init_resource::<PendingTabMove>()
+            .init_resource::<PendingTabRename>()
             .add_systems(
                 Update,
                 drain_orzmux_events
@@ -55,6 +56,7 @@ fn drain_orzmux_events(
     mut current: ResMut<CurrentLayout>,
     mut tabs: ResMut<CurrentTabs>,
     mut pending_move: ResMut<PendingTabMove>,
+    mut pending_rename: ResMut<PendingTabRename>,
     connection: Res<OrzmuxConnection>,
 ) {
     for event in connection.0.try_iter() {
@@ -64,6 +66,7 @@ fn drain_orzmux_events(
             &mut current,
             &mut tabs,
             &mut pending_move,
+            &mut pending_rename,
             event,
         );
     }
@@ -81,6 +84,7 @@ fn apply_event(
     current: &mut ResMut<CurrentLayout>,
     tabs: &mut ResMut<CurrentTabs>,
     pending_move: &mut ResMut<PendingTabMove>,
+    pending_rename: &mut ResMut<PendingTabRename>,
     event: OrzmuxEvent,
 ) {
     match event {
@@ -139,6 +143,9 @@ fn apply_event(
             if pending_move.0.is_some_and(|sent| seq >= sent) {
                 pending_move.0 = None;
             }
+            if pending_rename.0.values().any(|rename| seq >= rename.seq) {
+                pending_rename.0.retain(|_, rename| rename.seq > seq);
+            }
         }
     }
 }
@@ -155,6 +162,7 @@ mod tests {
     use super::*;
     use crate::requests::test_support::app_with_channels;
     use crate::signals::TtyFrameSignal;
+    use crate::tab::{PendingTabRename, RenameInFlight};
     use crate::title::{TtyTitle, TtyTitlePlugin};
     use crossbeam_channel::Sender;
     use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize};
@@ -364,6 +372,41 @@ mod tests {
         events.send(tabs(5, &[1])).unwrap();
         app.update();
         assert_eq!(app.world().resource::<PendingTabMove>().0, None);
+    }
+
+    /// Asserts that a `Tabs` clears exactly the pending renames whose
+    /// sequence it reaches.
+    ///
+    /// Case: the user renames two tabs one after the other, and the answer
+    /// to the first arrives before the answer to the second.
+    #[test]
+    fn a_tabs_clears_the_pending_renames_it_answers() {
+        let (mut app, events) = app();
+        {
+            let mut pending = app.world_mut().resource_mut::<PendingTabRename>();
+            pending.0.insert(
+                TabId(1),
+                RenameInFlight {
+                    seq: CommandSeq(5),
+                    name: Some("logs".into()),
+                },
+            );
+            pending.0.insert(
+                TabId(2),
+                RenameInFlight {
+                    seq: CommandSeq(6),
+                    name: Some("build".into()),
+                },
+            );
+        }
+        events.send(tabs(4, &[1, 2])).unwrap();
+        app.update();
+        assert_eq!(app.world().resource::<PendingTabRename>().0.len(), 2);
+        events.send(tabs(5, &[1, 2])).unwrap();
+        app.update();
+        let pending = &app.world().resource::<PendingTabRename>().0;
+        assert!(!pending.contains_key(&TabId(1)));
+        assert!(pending.contains_key(&TabId(2)));
     }
 
     /// Asserts that `CurrentTabs` is marked changed only when its
