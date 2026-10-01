@@ -1,7 +1,7 @@
 //! The ordered set of tabs: each tiles its own layout tree, and one
 //! of them is displayed.
 
-use crate::backend::layout::{LayoutTree, SplitIds};
+use crate::backend::layout::{LayoutTree, Removal, SplitIds};
 use crate::backend::{CloseTarget, PaneId, SplitOrientation, TabEntry, TabId, TabTarget};
 use crate::error::{OrzmuxError, OrzmuxResult};
 use orzma_vt::prelude::GridSize;
@@ -20,6 +20,17 @@ pub struct Tab {
 impl Tab {
     /// The longest tab name kept, in `char`s.
     pub const MAX_NAME_CHARS: usize = 64;
+}
+
+/// What [`Tabs::remove_pane`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneRemoval {
+    /// No tab holds the pane.
+    Absent,
+    /// The pane left its tab, which keeps its other panes.
+    Removed,
+    /// The pane was its tab's only pane, and the tab was removed with it.
+    TabClosed(TabId),
 }
 
 /// Every tab in display order, the displayed one, and the split-id
@@ -54,22 +65,34 @@ impl Tabs {
         id
     }
 
-    /// Removes `id`. When it was displayed, the tab that takes its
-    /// position is displayed, or the new last one when it was last.
-    /// Returns whether it existed.
-    pub fn remove(&mut self, id: TabId) -> bool {
-        let Some(index) = self.index_of(id) else {
-            return false;
+    /// Removes `pane` from the tab that holds it. A tab whose only pane it
+    /// was is removed as a whole; when it was displayed, the tab that takes
+    /// its position is displayed, or the new last one when it was last.
+    pub fn remove_pane(&mut self, pane: PaneId) -> PaneRemoval {
+        let Some(index) = self.order.iter().position(|t| t.tree.contains(pane)) else {
+            return PaneRemoval::Absent;
         };
-        self.order.remove(index);
-        if self.active == Some(id) {
-            self.active = self
-                .order
-                .get(index)
-                .or_else(|| self.order.last())
-                .map(|w| w.id);
+        let Tab { id, name, tree } = self.order.remove(index);
+        match tree.remove(pane) {
+            Removal::Removed(tree) => {
+                self.order.insert(index, Tab { id, name, tree });
+                PaneRemoval::Removed
+            }
+            Removal::Absent(tree) => {
+                self.order.insert(index, Tab { id, name, tree });
+                PaneRemoval::Absent
+            }
+            Removal::Last(_) => {
+                if self.active == Some(id) {
+                    self.active = self
+                        .order
+                        .get(index)
+                        .or_else(|| self.order.last())
+                        .map(|t| t.id);
+                }
+                PaneRemoval::TabClosed(id)
+            }
         }
-        true
     }
 
     /// Displays `id`. Returns whether the displayed tab changed; an
@@ -148,8 +171,9 @@ impl Tabs {
     /// # Errors
     ///
     /// Returns [`OrzmuxError::UnresolvedTarget`] when `target` is not in
-    /// the displayed tab, and [`OrzmuxError::SplitRefused`] when the
-    /// tree refuses the split.
+    /// the displayed tab, and [`OrzmuxError::SplitRefused`] when, in
+    /// `window`, it cannot hold two minimum leaves and a separator along
+    /// the split axis.
     pub fn split_active(
         &mut self,
         target: PaneId,
@@ -166,8 +190,11 @@ impl Tabs {
         if !tab.tree.contains(target) {
             return Err(OrzmuxError::UnresolvedTarget);
         }
+        if !tab.tree.tile(window).can_split(target, orientation) {
+            return Err(OrzmuxError::SplitRefused);
+        }
         tab.tree
-            .split(&mut self.split_ids, target, orientation, new, window)
+            .split(&mut self.split_ids, target, orientation, new)
     }
 
     /// The displayed tab's id.
@@ -197,6 +224,7 @@ impl Tabs {
     }
 
     /// The tab whose tree holds `pane`.
+    #[cfg(test)]
     pub fn tab_of(&self, pane: PaneId) -> Option<TabId> {
         self.order
             .iter()
@@ -261,22 +289,70 @@ mod tests {
         assert_eq!(set.entries().len(), 3);
     }
 
-    /// Asserts that removing the displayed tab displays the one that
-    /// takes its position, or the new last one when it was last.
+    /// Asserts that removing a tab's only pane removes the tab and
+    /// displays the tab that takes its position, or the new last one when
+    /// it was last.
     ///
     /// Case: the user closes the displayed tab in the middle, then the
-    /// last tab.
+    /// last tab, each holding one shell.
     #[test]
-    fn removing_the_displayed_tab_displays_its_right_neighbour() {
+    fn removing_a_tabs_only_pane_closes_it_and_displays_its_right_neighbour() {
         let (mut set, [a, b, c]) = three();
         set.activate(b);
-        assert!(set.remove(b));
+        assert_eq!(set.remove_pane(PaneId(2)), PaneRemoval::TabClosed(b));
         assert_eq!(set.active_id(), Some(c));
-        assert!(set.remove(c));
+        assert_eq!(set.remove_pane(PaneId(3)), PaneRemoval::TabClosed(c));
         assert_eq!(set.active_id(), Some(a));
-        assert!(set.remove(a));
+        assert_eq!(set.remove_pane(PaneId(1)), PaneRemoval::TabClosed(a));
         assert_eq!(set.active_id(), None);
         assert!(set.entries().is_empty());
+    }
+
+    /// Asserts that removing one of a tab's two panes keeps the tab in
+    /// its place with the other pane active.
+    ///
+    /// Case: the user splits the first tab, then the new pane's shell
+    /// exits.
+    #[test]
+    fn removing_one_of_two_panes_keeps_the_tab() {
+        let (mut set, [a, b, c]) = three();
+        set.split_active(PaneId(1), SplitOrientation::Vertical, PaneId(10), W)
+            .expect("the displayed root splits");
+        assert_eq!(set.remove_pane(PaneId(10)), PaneRemoval::Removed);
+        let order: Vec<_> = set.entries().into_iter().map(|e| e.id).collect();
+        assert_eq!(order, vec![a, b, c]);
+        let tree = &set.get(a).expect("the first tab stays").tree;
+        assert_eq!(tree.panes(), vec![PaneId(1)]);
+        assert_eq!(tree.active(), PaneId(1));
+        assert_eq!(set.active_id(), Some(a));
+    }
+
+    /// Asserts that removing a pane no tab holds changes nothing.
+    ///
+    /// Case: a stale close names a pane that already left its tab.
+    #[test]
+    fn removing_an_unknown_pane_changes_nothing() {
+        let (mut set, _) = three();
+        assert_eq!(set.remove_pane(PaneId(99)), PaneRemoval::Absent);
+        assert_eq!(set.entries().len(), 3);
+    }
+
+    /// Asserts that a split of a pane with too little room is refused and
+    /// leaves the tab's tree as it was.
+    ///
+    /// Case: the user presses split-vertical-pane in a window two columns
+    /// wide.
+    #[test]
+    fn a_split_without_room_is_refused_and_changes_nothing() {
+        let (mut set, [a, ..]) = three();
+        let narrow = GridSize { cols: 2, rows: 24 };
+        assert!(matches!(
+            set.split_active(PaneId(1), SplitOrientation::Vertical, PaneId(10), narrow),
+            Err(OrzmuxError::SplitRefused)
+        ));
+        let tree = &set.get(a).expect("the first tab stays").tree;
+        assert_eq!(tree.panes(), vec![PaneId(1)]);
+        assert_eq!(tree.active(), PaneId(1));
     }
 
     /// Asserts that `Next` and `Previous` wrap and that an out-of-range
@@ -356,7 +432,7 @@ mod tests {
             .expect("the displayed root splits");
         let split_of = |id| {
             set.get(id)
-                .map(|w| w.tree.solve(W).separators[0].split)
+                .map(|w| w.tree.tile(W).separators[0].split)
                 .expect("a split tab")
         };
         assert_ne!(split_of(a), split_of(b));

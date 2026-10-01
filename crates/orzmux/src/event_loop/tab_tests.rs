@@ -238,7 +238,7 @@ fn a_failed_new_tab_is_rolled_back() {
     assert!(tabs_of(&events).is_empty());
     assert_eq!(h.backend().tabs().entries().len(), 1);
     assert_eq!(
-        h.backend().tabs().active().and_then(|w| w.tree.active()),
+        h.backend().tabs().active().map(|w| w.tree.active()),
         Some(root)
     );
 }
@@ -279,7 +279,7 @@ fn a_resize_split_of_a_hidden_tab_does_nothing() {
             .get(hidden)
             .expect("the hidden tab")
             .tree
-            .solve(window)
+            .tile(window)
             .panes
             .iter()
             .map(|rect| rect.cols)

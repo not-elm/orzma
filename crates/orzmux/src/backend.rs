@@ -2,10 +2,10 @@
 //! trees they tile, and the webview host, applies the operations the event
 //! loop dispatches, and queues the events the GUI receives.
 
-use crate::backend::layout::Solved;
+use crate::backend::layout::Tiling;
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::ChunkDepth;
-use crate::backend::tab::Tabs;
+use crate::backend::tab::{PaneRemoval, Tabs};
 use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::Receiver;
 use orzma_tty::prelude::{
@@ -396,9 +396,9 @@ impl Backend {
     /// Returns [`OrzmuxError::NoGeometry`] before the window has
     /// reported its size, [`OrzmuxError::UnresolvedTarget`] when the
     /// split target is gone or not in the displayed tab,
-    /// [`OrzmuxError::SplitRefused`] when the tree refuses the
-    /// insertion, [`OrzmuxError::Unsolved`] or [`OrzmuxError::Vt`] when
-    /// the solved layout gives the new pane no valid rectangle, and
+    /// [`OrzmuxError::SplitRefused`] when the target has too little room
+    /// to divide, [`OrzmuxError::NoPaneRect`] or [`OrzmuxError::Vt`] when
+    /// the tiling gives the new pane no valid rectangle, and
     /// whatever the pane factory returns when the shell will not start.
     /// The tabs are left as they were in every case: a tab
     /// created for the pane is removed again.
@@ -413,7 +413,6 @@ impl Backend {
         let at = self.pinned_pane_at(at)?;
         let new = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
-        let previous_active = self.visible_active();
         let placement = self.insert_pane(new, at, geometry.size)?;
         let spawn_cwd = cwd.or_else(|| {
             placement
@@ -448,14 +447,7 @@ impl Backend {
                 Ok(())
             }
             Err(error) => {
-                if placement.created {
-                    self.tabs.remove(placement.tab);
-                } else if let Some(tab) = self.tabs.get_mut(placement.tab) {
-                    tab.tree.remove(new);
-                    if let Some(previous) = previous_active {
-                        tab.tree.select(previous);
-                    }
-                }
+                self.tabs.remove_pane(new);
                 let output = self.webview.pane_closed(new);
                 self.apply_webview(output);
                 Err(error)
@@ -924,12 +916,12 @@ impl Backend {
         }
     }
 
-    /// Spawns the terminal for `new` at the size the solved layout of
-    /// `tab` gives it.
+    /// Spawns the terminal for `new` at the size the tiling of `tab`
+    /// gives it.
     ///
     /// # Errors
     ///
-    /// Returns [`OrzmuxError::Unsolved`] when `tab` is gone or its
+    /// Returns [`OrzmuxError::NoPaneRect`] when `tab` is gone or its
     /// tree does not place the pane, [`OrzmuxError::Vt`] when its
     /// rectangle is not a valid size, and [`OrzmuxError::SpawnShell`]
     /// when the shell refuses to start.
@@ -944,17 +936,17 @@ impl Backend {
         let rect = self
             .tabs
             .get(tab)
-            .ok_or(OrzmuxError::Unsolved)?
+            .ok_or(OrzmuxError::NoPaneRect)?
             .tree
-            .solve(geometry.size)
+            .tile(geometry.size)
             .rect_of(new)
-            .ok_or(OrzmuxError::Unsolved)?;
+            .ok_or(OrzmuxError::NoPaneRect)?;
         let size = GridSize::new(rect.cols, rect.rows)?;
         let tty = self.factory.spawn(size, geometry.cell_px, cwd, env)?;
         Ok((tty, size))
     }
 
-    /// Tells every pane whether it holds focus, then re-solves every
+    /// Tells every pane whether it holds focus, then re-tiles every
     /// tab's tree, resizes every pane whose applied geometry differs
     /// (displayed or not), flushes those panes, and emits their signals
     /// followed by one `Layout` of the displayed tab carrying all
@@ -969,13 +961,13 @@ impl Backend {
             self.sync_webview_active();
             return;
         };
-        let solved: Vec<(TabId, Solved)> = self
+        let tilings: Vec<(TabId, Tiling)> = self
             .tabs
             .iter()
-            .map(|w| (w.id, w.tree.solve(geometry.size)))
+            .map(|w| (w.id, w.tree.tile(geometry.size)))
             .collect();
         let mut frames: Vec<(PaneId, Frame)> = Vec::new();
-        for rect in solved.iter().flat_map(|(_, s)| &s.panes) {
+        for rect in tilings.iter().flat_map(|(_, s)| &s.panes) {
             let Some(pane) = self.panes.get_mut(&rect.pane) else {
                 continue;
             };
@@ -1001,13 +993,13 @@ impl Backend {
             self.forward_items(Some(&mut frames), rect.pane, flushed.items);
         }
         let displayed = self.tabs.active_id();
-        let layout = match solved.into_iter().find(|(id, _)| Some(*id) == displayed) {
-            Some((_, solved)) => Layout {
+        let layout = match tilings.into_iter().find(|(id, _)| Some(*id) == displayed) {
+            Some((_, tiling)) => Layout {
                 seq: self.processed,
-                size: solved.size,
+                size: tiling.size,
                 active: self.visible_active(),
-                panes: solved.panes,
-                separators: solved.separators,
+                panes: tiling.panes,
+                separators: tiling.separators,
             },
             None => Layout {
                 seq: self.processed,
@@ -1096,21 +1088,12 @@ impl Backend {
             let flushed = pane.tty.flush_now();
             self.forward_items(None, id, flushed.items);
         }
-        let mut emptied = None;
-        if let Some(tab) = self.tabs.tab_of(id)
-            && let Some(entry) = self.tabs.get_mut(tab)
-        {
-            entry.tree.remove(id);
-            if entry.tree.is_empty() {
-                emptied = Some(tab);
-            }
-        }
+        let removal = self.tabs.remove_pane(id);
         self.panes.remove(&id);
         let output = self.webview.pane_closed(id);
         self.apply_webview(output);
         self.emit(OrzmuxEvent::PaneClosed { pane: id, reason });
-        if let Some(tab) = emptied {
-            self.tabs.remove(tab);
+        if matches!(removal, PaneRemoval::TabClosed(_)) {
             self.emit_tabs();
         }
     }
@@ -1206,7 +1189,7 @@ impl Backend {
 
     /// The displayed tab's active pane.
     fn visible_active(&self) -> Option<PaneId> {
-        self.tabs.active().and_then(|w| w.tree.active())
+        self.tabs.active().map(|t| t.tree.active())
     }
 
     /// Queues a `Tabs` snapshot stamped with the last processed

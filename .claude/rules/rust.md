@@ -499,7 +499,7 @@ Required:
 | Instead of                                                          | Use                                  |
 | ------------------------------------------------------------------- | ------------------------------------ |
 | `pub(crate) fn tree(&self) -> &LayoutTree` on a `pub(crate)` type   | `pub fn tree(&self) -> &LayoutTree`  |
-| `pub(super) fn solve(&self) -> Solved` on a `pub(super)` type       | `pub fn solve(&self) -> Solved`      |
+| `pub(super) fn tile(&self) -> Tiling` on a `pub(super)` type        | `pub fn tile(&self) -> Tiling`       |
 | `pub(crate) const LIMIT: usize` in such an `impl`                   | `pub const LIMIT: usize`             |
 
 Private stays private. This rule raises `pub(crate)`-and-wider to `pub`;
