@@ -24,9 +24,9 @@ fn a_root_only_tree_holds_its_active_pane() {
 fn a_vertical_split_halves_the_width_around_a_separator() {
     let mut ids = SplitIds::default();
     let tree = two_side_by_side(&mut ids);
-    let solved = tree.solve(W);
+    let tiling = tree.tile(W);
     assert_eq!(
-        rect_of(&solved, PaneId(1)),
+        rect_of(&tiling, PaneId(1)),
         PaneRect {
             pane: PaneId(1),
             x: 0,
@@ -36,7 +36,7 @@ fn a_vertical_split_halves_the_width_around_a_separator() {
         }
     );
     assert_eq!(
-        rect_of(&solved, PaneId(2)),
+        rect_of(&tiling, PaneId(2)),
         PaneRect {
             pane: PaneId(2),
             x: 41,
@@ -46,7 +46,7 @@ fn a_vertical_split_halves_the_width_around_a_separator() {
         }
     );
     assert_eq!(
-        solved.separators,
+        tiling.separators,
         vec![Separator {
             split: SplitId(0),
             orientation: SplitOrientation::Vertical,
@@ -74,10 +74,10 @@ fn a_horizontal_split_stacks_the_new_pane_below() {
         W,
     )
     .unwrap();
-    let solved = tree.solve(W);
-    assert_eq!(rect_of(&solved, PaneId(1)).rows, 12);
+    let tiling = tree.tile(W);
+    assert_eq!(rect_of(&tiling, PaneId(1)).rows, 12);
     assert_eq!(
-        rect_of(&solved, PaneId(2)),
+        rect_of(&tiling, PaneId(2)),
         PaneRect {
             pane: PaneId(2),
             x: 0,
@@ -145,10 +145,7 @@ fn trees_sharing_split_ids_never_reuse_an_id() {
         W,
     )
     .expect("an 80-column pane splits");
-    assert_ne!(
-        a.solve(W).separators[0].split,
-        b.solve(W).separators[0].split
-    );
+    assert_ne!(a.tile(W).separators[0].split, b.tile(W).separators[0].split);
 }
 
 /// Asserts that the id of a removed split is never handed to a later
@@ -168,10 +165,10 @@ fn a_split_id_is_never_reused() {
         W,
     )
     .unwrap();
-    let first = tree.solve(W).separators[0].split;
+    let first = tree.tile(W).separators[0].split;
 
     let mut tree = removed(tree, PaneId(2));
-    assert!(tree.solve(W).separators.is_empty());
+    assert!(tree.tile(W).separators.is_empty());
 
     tree.split(
         &mut ids,
@@ -181,5 +178,5 @@ fn a_split_id_is_never_reused() {
         W,
     )
     .unwrap();
-    assert_ne!(tree.solve(W).separators[0].split, first);
+    assert_ne!(tree.tile(W).separators[0].split, first);
 }

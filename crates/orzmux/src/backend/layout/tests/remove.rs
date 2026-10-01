@@ -68,9 +68,9 @@ fn removing_a_pane_gives_its_space_to_the_sibling_and_restores_recency() {
     tree.select(PaneId(2));
     let tree = removed(tree, PaneId(2));
     assert_eq!(tree.active(), PaneId(1));
-    let solved = tree.solve(W);
-    assert_eq!(rect_of(&solved, PaneId(1)).cols, 80);
-    assert!(solved.separators.is_empty());
+    let tiling = tree.tile(W);
+    assert_eq!(rect_of(&tiling, PaneId(1)).cols, 80);
+    assert!(tiling.separators.is_empty());
 }
 
 /// Asserts that removing a leaf can change a pane that was not its
@@ -100,10 +100,10 @@ fn removing_a_leaf_can_resize_a_pane_outside_its_subtree() {
     )
     .unwrap();
     tree.set_root_ratio_for_test(0.1);
-    let before = tree.solve(window);
+    let before = tree.tile(window);
     assert_eq!(rect_of(&before, PaneId(3)).cols, 5);
     let tree = removed(tree, PaneId(2));
-    let after = tree.solve(window);
+    let after = tree.tile(window);
     assert_eq!(rect_of(&after, PaneId(1)).cols, 2);
     assert_eq!(rect_of(&after, PaneId(3)).cols, 8);
 }
@@ -142,12 +142,12 @@ fn an_ancestor_split_keeps_its_id_when_a_descendant_collapses() {
         W,
     )
     .unwrap();
-    let before: Vec<SplitId> = tree.solve(W).separators.iter().map(|s| s.split).collect();
+    let before: Vec<SplitId> = tree.tile(W).separators.iter().map(|s| s.split).collect();
     assert_eq!(before.len(), 3);
 
     let tree = removed(tree, PaneId(4));
 
-    let after: Vec<SplitId> = tree.solve(W).separators.iter().map(|s| s.split).collect();
+    let after: Vec<SplitId> = tree.tile(W).separators.iter().map(|s| s.split).collect();
     assert_eq!(after.len(), 2);
     for id in &after {
         assert!(before.contains(id), "{id:?} was renumbered by the collapse");

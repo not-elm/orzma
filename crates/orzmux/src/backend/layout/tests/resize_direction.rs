@@ -36,12 +36,12 @@ fn a_middle_pane_moves_its_right_border() {
     tree.select(PaneId(2));
 
     assert!(tree.resize_direction(PaneDirection::Left, 5, W));
-    let solved = tree.solve(W);
-    assert_eq!(solved.separators[0].x, 40);
-    assert_eq!(solved.separators[1].x, 55);
+    let tiling = tree.tile(W);
+    assert_eq!(tiling.separators[0].x, 40);
+    assert_eq!(tiling.separators[1].x, 55);
 
     assert!(tree.resize_direction(PaneDirection::Right, 5, W));
-    assert_eq!(tree.solve(W).separators[1].x, 60);
+    assert_eq!(tree.tile(W).separators[1].x, 60);
 }
 
 /// Asserts that the last pane of a row, which has no divider after
@@ -56,10 +56,10 @@ fn the_last_pane_of_a_row_moves_its_left_border() {
 
     assert!(tree.resize_direction(PaneDirection::Left, 5, W));
 
-    let solved = tree.solve(W);
-    assert_eq!(solved.separators[0].x, 40);
-    assert_eq!(solved.separators[1].x, 55);
-    assert_eq!(rect_of(&solved, PaneId(3)).cols, 24);
+    let tiling = tree.tile(W);
+    assert_eq!(tiling.separators[0].x, 40);
+    assert_eq!(tiling.separators[1].x, 55);
+    assert_eq!(rect_of(&tiling, PaneId(3)).cols, 24);
 }
 
 /// Asserts that up and down move the divider of a stacked pair: the
@@ -83,12 +83,12 @@ fn stacked_panes_move_the_horizontal_divider() {
     tree.select(PaneId(1));
 
     assert!(tree.resize_direction(PaneDirection::Down, 5, W));
-    assert_eq!(tree.solve(W).separators[0].y, 17);
+    assert_eq!(tree.tile(W).separators[0].y, 17);
 
     tree.select(PaneId(2));
     assert!(tree.resize_direction(PaneDirection::Up, 5, W));
     assert!(tree.resize_direction(PaneDirection::Up, 5, W));
-    assert_eq!(tree.solve(W).separators[0].y, 7);
+    assert_eq!(tree.tile(W).separators[0].y, 7);
 }
 
 /// Asserts that a pane whose next divider belongs to an outer split
@@ -104,9 +104,9 @@ fn a_nested_pane_moves_the_outer_divider_after_it() {
 
     assert!(tree.resize_direction(PaneDirection::Right, 5, W));
 
-    let solved = tree.solve(W);
-    assert_eq!(solved.separators[1].x, 45);
-    assert_eq!(solved.separators[0].x, 22);
+    let tiling = tree.tile(W);
+    assert_eq!(tiling.separators[1].x, 45);
+    assert_eq!(tiling.separators[0].x, 22);
 }
 
 /// Asserts that the first pane of a nested run moves the nearest
@@ -122,9 +122,9 @@ fn the_first_pane_of_a_nested_run_moves_the_nearest_divider() {
 
     assert!(tree.resize_direction(PaneDirection::Right, 5, W));
 
-    let solved = tree.solve(W);
-    assert_eq!(solved.separators[0].x, 25);
-    assert_eq!(solved.separators[1].x, 40);
+    let tiling = tree.tile(W);
+    assert_eq!(tiling.separators[0].x, 25);
+    assert_eq!(tiling.separators[1].x, 40);
 }
 
 /// Asserts that the search for a divider crosses a split of the
@@ -147,7 +147,7 @@ fn a_stacked_pane_moves_the_column_divider_beside_it() {
 
     assert!(tree.resize_direction(PaneDirection::Left, 5, W));
 
-    assert_eq!(tree.solve(W).separators[0].x, 35);
+    assert_eq!(tree.tile(W).separators[0].x, 35);
 }
 
 /// Asserts that the run of same-orientation splits stops at a split
@@ -187,9 +187,9 @@ fn the_run_stops_at_a_split_of_the_other_orientation() {
 
     assert!(tree.resize_direction(PaneDirection::Left, 5, W));
 
-    let solved = tree.solve(W);
-    assert_eq!(solved.separators[1].x, 15);
-    assert_eq!(solved.separators[2].x, 40);
+    let tiling = tree.tile(W);
+    assert_eq!(tiling.separators[1].x, 15);
+    assert_eq!(tiling.separators[2].x, 40);
 }
 
 /// Asserts that a resize with no divider on the key's axis, or with a
@@ -201,9 +201,9 @@ fn the_run_stops_at_a_split_of_the_other_orientation() {
 fn a_resize_without_a_divider_on_the_axis_is_refused() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
-    let before = tree.solve(W);
+    let before = tree.tile(W);
     assert!(!tree.resize_direction(PaneDirection::Up, 5, W));
-    assert_eq!(tree.solve(W), before);
+    assert_eq!(tree.tile(W), before);
 
     let mut single = LayoutTree::with_root(PaneId(1));
     assert!(!single.resize_direction(PaneDirection::Left, 5, W));
@@ -222,10 +222,10 @@ fn repeated_resizes_stop_at_the_drag_minimum() {
 
     for expected in [35, 30, 25, 20, 15, 10, 5, 4] {
         assert!(tree.resize_direction(PaneDirection::Left, 5, W));
-        assert_eq!(tree.solve(W).separators[0].x, expected);
+        assert_eq!(tree.tile(W).separators[0].x, expected);
     }
     assert!(!tree.resize_direction(PaneDirection::Left, 5, W));
-    assert_eq!(tree.solve(W).separators[0].x, 4);
+    assert_eq!(tree.tile(W).separators[0].x, 4);
 }
 
 /// Asserts that a press whose clamp would move the divider against
@@ -240,13 +240,13 @@ fn a_resize_never_moves_the_divider_against_the_key() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
     tree.set_root_ratio_for_test(0.03);
-    assert_eq!(tree.solve(W).separators[0].x, 2);
+    assert_eq!(tree.tile(W).separators[0].x, 2);
 
     assert!(!tree.resize_direction(PaneDirection::Left, 5, W));
-    assert_eq!(tree.solve(W).separators[0].x, 2);
+    assert_eq!(tree.tile(W).separators[0].x, 2);
 
     assert!(tree.resize_direction(PaneDirection::Right, 5, W));
-    assert_eq!(tree.solve(W).separators[0].x, 7);
+    assert_eq!(tree.tile(W).separators[0].x, 7);
 }
 
 /// Asserts that a press widening a side already narrower than the drag
@@ -259,11 +259,11 @@ fn a_resize_widening_a_squeezed_side_moves_exactly_the_requested_cells() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
     tree.set_root_ratio_for_test(0.98);
-    assert_eq!(tree.solve(W).separators[0].x, 77);
+    assert_eq!(tree.tile(W).separators[0].x, 77);
 
     assert!(tree.resize_direction(PaneDirection::Left, 5, W));
 
-    assert_eq!(tree.solve(W).separators[0].x, 72);
+    assert_eq!(tree.tile(W).separators[0].x, 72);
 }
 
 /// Asserts that a zero-cell resize is refused.
@@ -290,5 +290,5 @@ fn a_cramped_window_resizes_down_to_the_tree_minimum() {
 
     assert!(tree.resize_direction(PaneDirection::Left, 5, narrow));
 
-    assert_eq!(tree.solve(narrow).separators[0].x, 2);
+    assert_eq!(tree.tile(narrow).separators[0].x, 2);
 }

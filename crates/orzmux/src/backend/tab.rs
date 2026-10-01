@@ -430,7 +430,7 @@ mod tests {
             .expect("the displayed root splits");
         let split_of = |id| {
             set.get(id)
-                .map(|tab| tab.tree.solve(W).separators[0].split)
+                .map(|tab| tab.tree.tile(W).separators[0].split)
                 .expect("a split tab")
         };
         assert_ne!(split_of(a), split_of(b));

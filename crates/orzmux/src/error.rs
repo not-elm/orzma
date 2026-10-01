@@ -27,9 +27,10 @@ pub enum OrzmuxError {
     /// hold two minimum leaves and a separator along the split axis.
     #[error("the target pane has too little room to divide")]
     SplitRefused,
-    /// The new pane is absent from the layout the tree solved for it.
-    #[error("the new pane is not in the solved layout")]
-    Unsolved,
+    /// The new pane has no rectangle: its tab is gone, or the tab's tree
+    /// does not hold the pane.
+    #[error("the new pane has no rectangle in its tab's layout")]
+    NoPaneRect,
     /// A VT operation for the new pane failed.
     #[error(transparent)]
     Vt(#[from] VtError),
