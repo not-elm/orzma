@@ -5,7 +5,7 @@
 use crate::backend::layout::Solved;
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::ChunkDepth;
-use crate::backend::tab::Tabs;
+use crate::backend::tab::{PaneRemoval, Tabs};
 use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::Receiver;
 use orzma_tty::prelude::{
@@ -413,7 +413,6 @@ impl Backend {
         let at = self.pinned_pane_at(at)?;
         let new = PaneId(self.next_pane_id);
         self.next_pane_id += 1;
-        let previous_active = self.visible_active();
         let placement = self.insert_pane(new, at, geometry.size)?;
         let spawn_cwd = cwd.or_else(|| {
             placement
@@ -448,14 +447,7 @@ impl Backend {
                 Ok(())
             }
             Err(error) => {
-                if placement.created {
-                    self.tabs.remove(placement.tab);
-                } else if let Some(tab) = self.tabs.get_mut(placement.tab) {
-                    tab.tree.remove(new);
-                    if let Some(previous) = previous_active {
-                        tab.tree.select(previous);
-                    }
-                }
+                self.tabs.remove_pane(new);
                 let output = self.webview.pane_closed(new);
                 self.apply_webview(output);
                 Err(error)
@@ -1096,21 +1088,12 @@ impl Backend {
             let flushed = pane.tty.flush_now();
             self.forward_items(None, id, flushed.items);
         }
-        let mut emptied = None;
-        if let Some(tab) = self.tabs.tab_of(id)
-            && let Some(entry) = self.tabs.get_mut(tab)
-        {
-            entry.tree.remove(id);
-            if entry.tree.is_empty() {
-                emptied = Some(tab);
-            }
-        }
+        let removal = self.tabs.remove_pane(id);
         self.panes.remove(&id);
         let output = self.webview.pane_closed(id);
         self.apply_webview(output);
         self.emit(OrzmuxEvent::PaneClosed { pane: id, reason });
-        if let Some(tab) = emptied {
-            self.tabs.remove(tab);
+        if matches!(removal, PaneRemoval::TabClosed(_)) {
             self.emit_tabs();
         }
     }
@@ -1206,7 +1189,7 @@ impl Backend {
 
     /// The displayed tab's active pane.
     fn visible_active(&self) -> Option<PaneId> {
-        self.tabs.active().and_then(|w| w.tree.active())
+        self.tabs.active().map(|t| t.tree.active())
     }
 
     /// Queues a `Tabs` snapshot stamped with the last processed

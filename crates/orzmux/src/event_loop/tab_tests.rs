@@ -238,7 +238,7 @@ fn a_failed_new_tab_is_rolled_back() {
     assert!(tabs_of(&events).is_empty());
     assert_eq!(h.backend().tabs().entries().len(), 1);
     assert_eq!(
-        h.backend().tabs().active().and_then(|w| w.tree.active()),
+        h.backend().tabs().active().map(|w| w.tree.active()),
         Some(root)
     );
 }

@@ -51,10 +51,38 @@ impl SplitIds {
 }
 
 /// The split tree plus the activation history.
-#[derive(Debug, Default)]
+///
+/// # Invariants
+///
+/// The tree holds at least one pane, and the active pane is one of them.
+/// `history` holds the other panes activated earlier, oldest first, each
+/// once and never the active pane.
+#[derive(Debug)]
 pub struct LayoutTree {
-    root: Option<Node>,
+    root: Node,
+    active: PaneId,
     history: Vec<PaneId>,
+}
+
+/// What [`LayoutTree::remove`] did; each variant carries the tree back.
+#[derive(Debug)]
+pub enum Removal {
+    /// The pane is not in the tree, which is unchanged.
+    Absent(LayoutTree),
+    /// The pane left the tree, and its space went to its sibling.
+    Removed(LayoutTree),
+    /// The pane is the tree's only pane, and the tree is unchanged.
+    Last(LayoutTree),
+}
+
+/// What [`Node::without`] left of a subtree.
+enum Pruned {
+    /// The pane is not in the subtree, which comes back unchanged.
+    Absent(Node),
+    /// The pane left the subtree; the survivors remain.
+    Removed(Node),
+    /// The subtree is the pane's own leaf, which comes back unchanged.
+    Only(Node),
 }
 
 #[derive(Debug)]
@@ -107,27 +135,21 @@ impl LayoutTree {
     /// A tree whose only pane is `pane`, which is active.
     pub fn with_root(pane: PaneId) -> Self {
         Self {
-            root: Some(Node::Leaf(pane)),
-            history: vec![pane],
+            root: Node::Leaf(pane),
+            active: pane,
+            history: Vec::new(),
         }
     }
 
-    /// Whether the tree holds no pane.
-    pub fn is_empty(&self) -> bool {
-        self.root.is_none()
-    }
-
-    /// The active pane, if any: the most recently activated survivor.
-    pub fn active(&self) -> Option<PaneId> {
-        self.history.last().copied()
+    /// The active pane: the most recently activated survivor.
+    pub fn active(&self) -> PaneId {
+        self.active
     }
 
     /// Every pane in the tree, left-to-right / top-to-bottom.
     pub fn panes(&self) -> Vec<PaneId> {
         let mut out = Vec::new();
-        if let Some(root) = &self.root {
-            root.collect_leaves(&mut out);
-        }
+        self.root.collect_leaves(&mut out);
         out
     }
 
@@ -158,29 +180,48 @@ impl LayoutTree {
         if along < needed {
             return Err(OrzmuxError::SplitRefused);
         }
-        let Some(root) = self.root.as_mut() else {
-            return Err(OrzmuxError::SplitRefused);
-        };
-        if !root.split_leaf(target, orientation, new, ids.mint()) {
+        if !self.root.split_leaf(target, orientation, new, ids.mint()) {
             return Err(OrzmuxError::SplitRefused);
         }
         self.activate(new);
         Ok(())
     }
 
-    /// Removes `pane`, handing its space to its sibling. Returns whether
-    /// it existed. A removed active pane is replaced by the most recently
-    /// active survivor.
-    pub fn remove(&mut self, pane: PaneId) -> bool {
-        let Some(root) = self.root.take() else {
-            return false;
-        };
-        let (next, removed) = root.without(pane);
-        self.root = next;
-        if removed {
-            self.history.retain(|p| *p != pane);
+    /// Removes `pane`, handing its space to its sibling. A removed active
+    /// pane is replaced by the most recently active survivor, or by the
+    /// first pane left-to-right / top-to-bottom when no survivor was
+    /// activated before. The tree's only pane is never removed.
+    pub fn remove(self, pane: PaneId) -> Removal {
+        let Self {
+            root,
+            active,
+            mut history,
+        } = self;
+        match root.without(pane) {
+            Pruned::Absent(root) => Removal::Absent(Self {
+                root,
+                active,
+                history,
+            }),
+            Pruned::Only(root) => Removal::Last(Self {
+                root,
+                active,
+                history,
+            }),
+            Pruned::Removed(root) => {
+                history.retain(|p| *p != pane);
+                let active = if active == pane {
+                    history.pop().unwrap_or_else(|| root.first_leaf())
+                } else {
+                    active
+                };
+                Removal::Removed(Self {
+                    root,
+                    active,
+                    history,
+                })
+            }
         }
-        removed
     }
 
     /// Makes `pane` active. Returns whether it exists.
@@ -198,9 +239,7 @@ impl LayoutTree {
     /// candidate wins, never-visited candidates tie to the top / left.
     /// Returns whether the active pane changed.
     pub fn select_direction(&mut self, direction: PaneDirection, window: GridSize) -> bool {
-        let Some(active) = self.active() else {
-            return false;
-        };
+        let active = self.active;
         let solved = self.solve(window);
         let Some(from) = solved.rect_of(active) else {
             return false;
@@ -224,19 +263,16 @@ impl LayoutTree {
     /// per axis so every pane keeps at least one cell; the caller clips
     /// what overflows.
     pub fn solve(&self, window: GridSize) -> Solved {
+        let rect = self.root_rect(window);
         let mut solved = Solved {
-            size: window,
+            size: GridSize {
+                cols: rect.cols,
+                rows: rect.rows,
+            },
             panes: Vec::new(),
             separators: Vec::new(),
         };
-        let (Some(root), Some(rect)) = (&self.root, self.root_rect(window)) else {
-            return solved;
-        };
-        solved.size = GridSize {
-            cols: rect.cols,
-            rows: rect.rows,
-        };
-        root.solve_into(&mut solved, rect);
+        self.root.solve_into(&mut solved, rect);
         solved
     }
 
@@ -276,9 +312,7 @@ impl LayoutTree {
         cells: u16,
         window: GridSize,
     ) -> bool {
-        let Some(active) = self.active() else {
-            return false;
-        };
+        let active = self.active;
         let (orientation, toward_first) = match direction {
             PaneDirection::Left => (SplitOrientation::Vertical, true),
             PaneDirection::Right => (SplitOrientation::Vertical, false),
@@ -305,12 +339,12 @@ impl LayoutTree {
 
     /// Whether `pane` is a leaf of the tree.
     pub fn contains(&self, pane: PaneId) -> bool {
-        self.root.as_ref().is_some_and(|root| root.has_leaf(pane))
+        self.root.has_leaf(pane)
     }
 
     #[cfg(test)]
     fn set_root_ratio_for_test(&mut self, ratio: f32) {
-        if let Some(Node::Split(split)) = self.root.as_mut() {
+        if let Node::Split(split) = &mut self.root {
             split.ratio = ratio;
         }
     }
@@ -318,55 +352,56 @@ impl LayoutTree {
     /// Forgets every activation but the active pane's own.
     #[cfg(test)]
     fn clear_history_for_test(&mut self) {
-        let active = self.history.pop();
         self.history.clear();
-        self.history.extend(active);
     }
 
     #[cfg(test)]
     fn min_size_for_drag(&self) -> GridSize {
-        self.root
-            .as_ref()
-            .map(Node::min_size_for_drag)
-            .unwrap_or(GridSize { cols: 0, rows: 0 })
+        self.root.min_size_for_drag()
     }
 
     fn activate(&mut self, pane: PaneId) {
+        if pane == self.active {
+            return;
+        }
         self.history.retain(|p| *p != pane);
-        self.history.push(pane);
+        self.history.push(self.active);
+        self.active = pane;
     }
 
-    /// Position in the activation history (higher is more recent), or
-    /// `None` for a pane never activated.
+    /// Position in the activation history (higher is more recent, the
+    /// active pane highest), or `None` for a pane never activated.
     fn recency(&self, pane: PaneId) -> Option<usize> {
+        if pane == self.active {
+            return Some(self.history.len());
+        }
         self.history.iter().position(|p| *p == pane)
     }
 
     /// The rectangle the tree tiles for `window`: the window widened per
-    /// axis to the tree's minimum. `None` when the tree is empty.
-    fn root_rect(&self, window: GridSize) -> Option<Rect> {
-        let root = self.root.as_ref()?;
-        let min = root.min_size();
-        Some(Rect {
+    /// axis to the tree's minimum.
+    fn root_rect(&self, window: GridSize) -> Rect {
+        let min = self.root.min_size();
+        Rect {
             x: 0,
             y: 0,
             cols: window.cols.max(min.cols),
             rows: window.rows.max(min.rows),
-        })
+        }
     }
 
     /// The split with `id` and the rectangle it divides when the tree is
     /// solved against `window`, or `None` when it is not in the tree.
     fn split_mut(&mut self, id: SplitId, window: GridSize) -> Option<(&mut Split, Rect)> {
-        let root_rect = self.root_rect(window)?;
-        self.root.as_mut()?.find_split_mut(id, root_rect)
+        let root_rect = self.root_rect(window);
+        self.root.find_split_mut(id, root_rect)
     }
 
     /// The split whose divider a directional resize of `pane` on
     /// `orientation`'s axis moves, or `None` when no split of that
     /// orientation sits above `pane`.
     fn border_split(&self, pane: PaneId, orientation: SplitOrientation) -> Option<SplitId> {
-        let path = self.root.as_ref()?.path_to(pane)?;
+        let path = self.root.path_to(pane)?;
         let mut run = path
             .iter()
             .skip_while(|a| a.orientation != orientation)
@@ -489,14 +524,22 @@ impl Node {
         }
     }
 
-    /// The tree without `pane`: the split immediately containing the
-    /// removed leaf collapses into its sibling, while an ancestor split
-    /// whose child only shrank keeps its structure around that child.
-    /// Returns `(new subtree or None when emptied, removed)`.
-    fn without(self, pane: PaneId) -> (Option<Node>, bool) {
+    /// The pane left-to-right / top-to-bottom first in this subtree.
+    fn first_leaf(&self) -> PaneId {
         match self {
-            Node::Leaf(id) if id == pane => (None, true),
-            Node::Leaf(id) => (Some(Node::Leaf(id)), false),
+            Node::Leaf(id) => *id,
+            Node::Split(s) => s.first.first_leaf(),
+        }
+    }
+
+    /// The subtree without `pane`: the split immediately containing the
+    /// removed leaf collapses into its sibling, while an ancestor split
+    /// whose child only shrank keeps its structure around that child. A
+    /// subtree that is `pane`'s own leaf comes back as [`Pruned::Only`].
+    fn without(self, pane: PaneId) -> Pruned {
+        match self {
+            Node::Leaf(id) if id == pane => Pruned::Only(Node::Leaf(id)),
+            Node::Leaf(id) => Pruned::Absent(Node::Leaf(id)),
             Node::Split(Split {
                 id,
                 orientation,
@@ -504,20 +547,28 @@ impl Node {
                 first,
                 second,
             }) => {
-                let (first, removed_first) = first.without(pane);
-                let (second, removed_second) = second.without(pane);
-                let node = match (first, second) {
-                    (Some(first), Some(second)) => Some(Node::Split(Split {
+                let rebuild = |first: Box<Node>, second: Box<Node>| {
+                    Node::Split(Split {
                         id,
                         orientation,
                         ratio,
-                        first: Box::new(first),
-                        second: Box::new(second),
-                    })),
-                    (Some(only), None) | (None, Some(only)) => Some(only),
-                    (None, None) => None,
+                        first,
+                        second,
+                    })
                 };
-                (node, removed_first || removed_second)
+                match (*first).without(pane) {
+                    Pruned::Only(_) => Pruned::Removed(*second),
+                    Pruned::Removed(first) => Pruned::Removed(rebuild(Box::new(first), second)),
+                    Pruned::Absent(first) => match (*second).without(pane) {
+                        Pruned::Only(_) => Pruned::Removed(first),
+                        Pruned::Removed(second) => {
+                            Pruned::Removed(rebuild(Box::new(first), Box::new(second)))
+                        }
+                        Pruned::Absent(second) => {
+                            Pruned::Absent(rebuild(Box::new(first), Box::new(second)))
+                        }
+                    },
+                }
             }
         }
     }
@@ -711,6 +762,66 @@ mod tests {
         tree
     }
 
+    /// The tree after removing `pane`, which must leave other panes behind.
+    fn removed(tree: LayoutTree, pane: PaneId) -> LayoutTree {
+        match tree.remove(pane) {
+            Removal::Removed(tree) => tree,
+            other => panic!("expected Removed, got {other:?}"),
+        }
+    }
+
+    /// Asserts that the tree's only pane is not removed and that the tree
+    /// comes back unchanged.
+    ///
+    /// Case: the last shell of a tab exits, and the tab closes as a whole
+    /// instead of keeping an empty tree.
+    #[test]
+    fn the_only_pane_is_not_removed() {
+        let tree = LayoutTree::with_root(PaneId(1));
+        let Removal::Last(tree) = tree.remove(PaneId(1)) else {
+            panic!("expected Last");
+        };
+        assert_eq!(tree.panes(), vec![PaneId(1)]);
+        assert_eq!(tree.active(), PaneId(1));
+    }
+
+    /// Asserts that removing a pane the tree does not hold changes nothing.
+    ///
+    /// Case: a stale close names a pane that already left the tab.
+    #[test]
+    fn removing_an_absent_pane_changes_nothing() {
+        let mut ids = SplitIds::default();
+        let tree = two_side_by_side(&mut ids);
+        let Removal::Absent(tree) = tree.remove(PaneId(9)) else {
+            panic!("expected Absent");
+        };
+        assert_eq!(tree.panes(), vec![PaneId(1), PaneId(2)]);
+        assert_eq!(tree.active(), PaneId(2));
+    }
+
+    /// Asserts that a removed active pane with no earlier activation left
+    /// hands the activity to the first pane left-to-right / top-to-bottom,
+    /// not to its sibling.
+    ///
+    /// Case: the right column is split into top and bottom, the history is
+    /// forgotten, and the active bottom pane's shell exits.
+    #[test]
+    fn a_removed_active_pane_without_history_falls_to_the_first_pane() {
+        let mut ids = SplitIds::default();
+        let mut tree = two_side_by_side(&mut ids);
+        tree.split(
+            &mut ids,
+            PaneId(2),
+            SplitOrientation::Horizontal,
+            PaneId(3),
+            W,
+        )
+        .expect("an 80-column pane splits");
+        tree.clear_history_for_test();
+        let tree = removed(tree, PaneId(3));
+        assert_eq!(tree.active(), PaneId(1));
+    }
+
     /// Asserts that two trees splitting through one `SplitIds` never
     /// hand out the same split id.
     ///
@@ -751,9 +862,8 @@ mod tests {
     fn a_root_only_tree_holds_its_active_pane() {
         let tree = LayoutTree::with_root(PaneId(7));
         assert_eq!(tree.panes(), vec![PaneId(7)]);
-        assert_eq!(tree.active(), Some(PaneId(7)));
+        assert_eq!(tree.active(), PaneId(7));
         assert!(tree.contains(PaneId(7)));
-        assert!(!tree.is_empty());
     }
 
     /// Asserts that a vertical split halves the width around a one-cell
@@ -796,7 +906,7 @@ mod tests {
                 len: 24
             }]
         );
-        assert_eq!(tree.active(), Some(PaneId(2)));
+        assert_eq!(tree.active(), PaneId(2));
     }
 
     /// Asserts that a horizontal split stacks the panes with the new one
@@ -871,8 +981,8 @@ mod tests {
         let mut tree = two_side_by_side(&mut ids);
         tree.select(PaneId(1));
         tree.select(PaneId(2));
-        assert!(tree.remove(PaneId(2)));
-        assert_eq!(tree.active(), Some(PaneId(1)));
+        let tree = removed(tree, PaneId(2));
+        assert_eq!(tree.active(), PaneId(1));
         let solved = tree.solve(W);
         assert_eq!(rect_of(&solved, PaneId(1)).cols, 80);
         assert!(solved.separators.is_empty());
@@ -907,7 +1017,7 @@ mod tests {
         tree.set_root_ratio_for_test(0.1);
         let before = tree.solve(window);
         assert_eq!(rect_of(&before, PaneId(3)).cols, 5);
-        tree.remove(PaneId(2));
+        let tree = removed(tree, PaneId(2));
         let after = tree.solve(window);
         assert_eq!(rect_of(&after, PaneId(1)).cols, 2);
         assert_eq!(rect_of(&after, PaneId(3)).cols, 8);
@@ -924,11 +1034,11 @@ mod tests {
         let mut tree = two_side_by_side(&mut ids);
         tree.select(PaneId(1));
         assert!(tree.select_direction(PaneDirection::Right, W));
-        assert_eq!(tree.active(), Some(PaneId(2)));
+        assert_eq!(tree.active(), PaneId(2));
         assert!(!tree.select_direction(PaneDirection::Right, W));
-        assert_eq!(tree.active(), Some(PaneId(2)));
+        assert_eq!(tree.active(), PaneId(2));
         assert!(tree.select_direction(PaneDirection::Left, W));
-        assert_eq!(tree.active(), Some(PaneId(1)));
+        assert_eq!(tree.active(), PaneId(1));
     }
 
     /// Asserts that among several adjacent candidates the most recently
@@ -950,11 +1060,7 @@ mod tests {
         .unwrap();
         tree.select(PaneId(1));
         assert!(tree.select_direction(PaneDirection::Right, W));
-        assert_eq!(
-            tree.active(),
-            Some(PaneId(3)),
-            "pane 3 was active most recently"
-        );
+        assert_eq!(tree.active(), PaneId(3), "pane 3 was active most recently");
 
         let mut fresh_ids = SplitIds::default();
         let mut fresh = two_side_by_side(&mut fresh_ids);
@@ -973,7 +1079,7 @@ mod tests {
         assert!(fresh.select_direction(PaneDirection::Right, W));
         assert_eq!(
             fresh.active(),
-            Some(PaneId(2)),
+            PaneId(2),
             "never-visited candidates tie to the topmost"
         );
     }
@@ -1031,18 +1137,7 @@ mod tests {
         tree.select(PaneId(1));
         let tiny = GridSize { cols: 2, rows: 1 };
         assert!(tree.select_direction(PaneDirection::Right, tiny));
-        assert_eq!(tree.active(), Some(PaneId(2)));
-    }
-
-    /// Asserts that removing the last pane empties the tree.
-    ///
-    /// Case: the last shell in the window exits.
-    #[test]
-    fn the_last_removal_empties_the_tree() {
-        let mut tree = LayoutTree::with_root(PaneId(1));
-        assert!(tree.remove(PaneId(1)));
-        assert!(tree.is_empty());
-        assert_eq!(tree.active(), None);
+        assert_eq!(tree.active(), PaneId(2));
     }
 
     /// Asserts that a split that survives the collapse of an unrelated
@@ -1082,7 +1177,7 @@ mod tests {
         let before: Vec<SplitId> = tree.solve(W).separators.iter().map(|s| s.split).collect();
         assert_eq!(before.len(), 3);
 
-        assert!(tree.remove(PaneId(4)));
+        let tree = removed(tree, PaneId(4));
 
         let after: Vec<SplitId> = tree.solve(W).separators.iter().map(|s| s.split).collect();
         assert_eq!(after.len(), 2);
@@ -1110,7 +1205,7 @@ mod tests {
         .unwrap();
         let first = tree.solve(W).separators[0].split;
 
-        assert!(tree.remove(PaneId(2)));
+        let mut tree = removed(tree, PaneId(2));
         assert!(tree.solve(W).separators.is_empty());
 
         tree.split(
@@ -1586,12 +1681,11 @@ mod tests {
         assert_eq!(solved.separators[2].x, 40);
     }
 
-    /// Asserts that a resize with no divider on the key's axis, with a
-    /// lone pane, or with no pane at all is refused and changes nothing.
+    /// Asserts that a resize with no divider on the key's axis, or with a
+    /// lone pane, is refused and changes nothing.
     ///
     /// Case: the user presses resize-up-pane with only side-by-side panes
-    /// open, then resize-left-pane with a single pane, and a press also
-    /// arrives before the first pane has opened.
+    /// open, then resize-left-pane with a single pane.
     #[test]
     fn a_resize_without_a_divider_on_the_axis_is_refused() {
         let mut ids = SplitIds::default();
@@ -1602,8 +1696,6 @@ mod tests {
 
         let mut single = LayoutTree::with_root(PaneId(1));
         assert!(!single.resize_direction(PaneDirection::Left, 5, W));
-
-        assert!(!LayoutTree::default().resize_direction(PaneDirection::Left, 5, W));
     }
 
     /// Asserts that repeated presses stop the divider at the drag

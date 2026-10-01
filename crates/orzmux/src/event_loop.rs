@@ -804,7 +804,7 @@ mod tests {
         ));
         let tree = displayed_tree(&h);
         assert_eq!(tree.panes(), vec![root]);
-        assert_eq!(tree.active(), Some(root));
+        assert_eq!(tree.active(), root);
     }
 
     /// Asserts that a split whose target no longer exists is answered
@@ -1414,7 +1414,7 @@ mod tests {
         )));
         let tree = displayed_tree(&h);
         assert_eq!(tree.panes(), vec![root]);
-        assert_eq!(tree.active(), Some(root));
+        assert_eq!(tree.active(), root);
     }
 
     /// Asserts that a kill flushes the pane's pending output before
