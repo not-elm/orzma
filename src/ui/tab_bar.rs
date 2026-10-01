@@ -610,6 +610,7 @@ mod tests {
     use bevy_orzmux::prelude::{PaneRegistry, PendingTabRename, RenameInFlight, TtyTitle};
     use orzmux::prelude::CommandSeq;
     use orzmux::prelude::PaneId;
+    use orzmux::prelude::Tab;
     use std::fmt::Debug;
     use std::time::Duration;
 
@@ -1195,6 +1196,39 @@ mod tests {
                 .get::<EditableText>(field)
                 .map(|text| text.value().to_string()),
             Some("vim".to_string())
+        );
+    }
+
+    /// Asserts that the rename field holds a shown title longer than a
+    /// name may be in full, so committing it untouched keeps the tab
+    /// unnamed.
+    ///
+    /// Case: the user double-clicks a tab showing a 74-character title
+    /// and presses Enter without typing.
+    #[test]
+    fn the_rename_field_holds_a_long_shown_title_in_full() {
+        let mut app = app_with_tab_bar();
+        set_tabs(&mut app, &[1], 1);
+        let title = "x".repeat(Tab::MAX_NAME_CHARS + 10);
+        set_title(&mut app, 1, Some(&title));
+        app.update();
+        app.update();
+        let first = tab_of(&mut app, 1);
+        app.world_mut().trigger(clicks(first, 2));
+        app.update();
+        let field = app
+            .world()
+            .get::<Children>(first)
+            .expect("the tab has parts")[0];
+        let value = app
+            .world()
+            .get::<EditableText>(field)
+            .map(|text| text.value().to_string())
+            .expect("the rename field holds text");
+        assert_eq!(value, title);
+        assert_eq!(
+            rename::RenameOutcome::decide(&value, None, &title),
+            rename::RenameOutcome::Keep
         );
     }
 
