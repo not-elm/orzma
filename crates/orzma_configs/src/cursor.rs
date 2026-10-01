@@ -43,12 +43,17 @@ pub struct CursorConfig {
 
 impl Default for CursorConfig {
     fn default() -> Self {
+        /// The default blink interval, in milliseconds.
+        const DEFAULT_BLINK_INTERVAL_MS: u64 = 750;
+        /// The default blink timeout, in seconds.
+        const DEFAULT_BLINK_TIMEOUT_SECS: u64 = 5;
+
         Self {
             style: CursorStyleSetting::default(),
             unfocused_hollow: true,
             blink_interval: DEFAULT_BLINK_INTERVAL_MS,
             blink_timeout: DEFAULT_BLINK_TIMEOUT_SECS,
-            thickness: DEFAULT_THICKNESS,
+            thickness: Self::DEFAULT_THICKNESS,
         }
     }
 }
@@ -57,6 +62,9 @@ impl CursorConfig {
     /// The interval between blink phases; `None` when the caret does
     /// not blink. A value below 10 ms is raised to 10 ms.
     pub fn blink_interval(&self) -> Option<Duration> {
+        /// The shortest blink interval, in milliseconds.
+        const MIN_BLINK_INTERVAL_MS: u64 = 10;
+
         if self.blink_interval == 0 {
             return None;
         }
@@ -83,14 +91,12 @@ impl CursorConfig {
     /// Caret thickness as a fraction of the cell width, in `0.0..=1.0`;
     /// the default stands in for a NaN.
     pub fn thickness(&self) -> f32 {
-        norm_unit(self.thickness, DEFAULT_THICKNESS)
+        norm_unit(self.thickness, Self::DEFAULT_THICKNESS)
     }
-}
 
-const DEFAULT_BLINK_INTERVAL_MS: u64 = 750;
-const DEFAULT_BLINK_TIMEOUT_SECS: u64 = 5;
-const DEFAULT_THICKNESS: f32 = 0.15;
-const MIN_BLINK_INTERVAL_MS: u64 = 10;
+    /// The default caret thickness, as a fraction of the cell width.
+    const DEFAULT_THICKNESS: f32 = 0.15;
+}
 
 #[cfg(test)]
 mod tests {

@@ -528,9 +528,10 @@ fn spawn_reader_thread(
 /// second thread that waits for the child and sends the single `exit_tx`
 /// message once the output has gone quiet.
 ///
-/// The watcher waits [`OUTPUT_QUIESCENCE`] after the reader's last completed
-/// read or send, and only while the reader is not parked on a full queue,
-/// so the child's final output is queued before the exit is reported.
+/// The watcher waits until the output has stayed idle for a short window
+/// after the reader's last completed read or send, and only while the reader
+/// is not parked on a full queue, so the child's final output is queued
+/// before the exit is reported.
 /// The reader sees no EOF at the child's exit and ends when the master is
 /// dropped or a send finds the receiver gone.
 #[cfg(windows)]
@@ -540,6 +541,13 @@ fn spawn_reader_thread(
     chunk_tx: Sender<Vec<u8>>,
     exit_tx: Sender<Option<i32>>,
 ) {
+    /// How long the output stream must stay idle after the child exits
+    /// before the exit is reported.
+    const OUTPUT_QUIESCENCE: Duration = Duration::from_millis(50);
+    /// The longest the watcher lets an unparked reader stream after the
+    /// child exits.
+    const OUTPUT_QUIESCENCE_CAP: Duration = Duration::from_secs(2);
+
     let progress = Arc::new(ReaderProgress::new(Instant::now()));
     let reader_progress = Arc::clone(&progress);
     thread::spawn(move || forward_chunks(reader.as_mut(), &chunk_tx, &reader_progress));
@@ -549,20 +557,6 @@ fn spawn_reader_thread(
         let _ = exit_tx.send(code);
     });
 }
-
-/// How long the output stream must stay idle after the child exits
-/// before the exit is reported.
-#[cfg(windows)]
-const OUTPUT_QUIESCENCE: Duration = Duration::from_millis(50);
-
-/// The longest the watcher lets an unparked reader stream after the
-/// child exits.
-#[cfg(windows)]
-const OUTPUT_QUIESCENCE_CAP: Duration = Duration::from_secs(2);
-
-/// The shortest sleep between two polls of the reader's progress.
-#[cfg(any(windows, test))]
-const QUIESCENCE_POLL_FLOOR: Duration = Duration::from_millis(10);
 
 /// Blocks until the reader is not parked and no read or send has
 /// completed for `quiescence`, or until the reader has spent `cap` in
@@ -578,6 +572,9 @@ const QUIESCENCE_POLL_FLOOR: Duration = Duration::from_millis(10);
 /// single interval still is.
 #[cfg(any(windows, test))]
 fn wait_for_output_quiescence(progress: &ReaderProgress, quiescence: Duration, cap: Duration) {
+    /// The shortest sleep between two polls of the reader's progress.
+    const QUIESCENCE_POLL_FLOOR: Duration = Duration::from_millis(10);
+
     let mut unparked = Duration::ZERO;
     let mut last_poll = Instant::now();
     let mut was_parked = progress.is_parked();

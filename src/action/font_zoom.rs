@@ -6,14 +6,6 @@ use bevy::prelude::*;
 use bevy_orzma_tty_renderer::prelude::TerminalFontSize;
 use orzma_configs::shortcuts::FontSizeStep;
 
-/// The zoom factors, in ascending order. `FACTORS[BASE]` is the unzoomed 1.0.
-const FACTORS: [f32; 12] = [
-    0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
-];
-
-/// The index of the unzoomed factor in [`FACTORS`].
-const BASE: usize = 4;
-
 /// The host asks for one zoom step on the terminal font size.
 #[derive(Event, Debug, Clone, Copy)]
 pub(crate) struct FontZoomAction {
@@ -29,14 +21,14 @@ pub(crate) struct FontZoom {
 
 impl Default for FontZoom {
     fn default() -> Self {
-        Self { index: BASE }
+        Self { index: Self::BASE }
     }
 }
 
 impl FontZoom {
     /// The factor the current step multiplies the configured font size by.
     pub fn factor(&self) -> f32 {
-        FACTORS.get(self.index).copied().unwrap_or(1.0)
+        Self::FACTORS.get(self.index).copied().unwrap_or(1.0)
     }
 
     /// Moves the current step to `index`.
@@ -47,16 +39,24 @@ impl FontZoom {
     /// Returns the index one rung away in `direction`, or `None` when the
     /// ladder has no rung left that way.
     ///
-    /// A `Reset` returns `BASE`, or `None` when the current step is already
-    /// `BASE`.
+    /// A `Reset` returns [`Self::BASE`], or `None` when the current step is
+    /// already [`Self::BASE`].
     pub fn next_index(&self, direction: FontSizeStep) -> Option<usize> {
         let index = match direction {
-            FontSizeStep::Reset => BASE,
+            FontSizeStep::Reset => Self::BASE,
             FontSizeStep::Increase => self.index.checked_add(1)?,
             FontSizeStep::Decrease => self.index.checked_sub(1)?,
         };
-        (index != self.index && index < FACTORS.len()).then_some(index)
+        (index != self.index && index < Self::FACTORS.len()).then_some(index)
     }
+
+    /// The zoom factors, in ascending order. `FACTORS[BASE]` is the unzoomed 1.0.
+    const FACTORS: [f32; 12] = [
+        0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
+    ];
+
+    /// The index of the unzoomed factor in [`Self::FACTORS`].
+    const BASE: usize = 4;
 }
 
 /// Adds the font-size zoom pipeline.
@@ -94,7 +94,10 @@ mod tests {
     #[test]
     fn an_increase_advances_one_rung() {
         let zoom = FontZoom::default();
-        assert_eq!(zoom.next_index(FontSizeStep::Increase), Some(BASE + 1));
+        assert_eq!(
+            zoom.next_index(FontSizeStep::Increase),
+            Some(FontZoom::BASE + 1)
+        );
     }
 
     /// Asserts that a decrease moves to the adjacent smaller rung.
@@ -103,7 +106,10 @@ mod tests {
     #[test]
     fn a_decrease_retreats_one_rung() {
         let zoom = FontZoom::default();
-        assert_eq!(zoom.next_index(FontSizeStep::Decrease), Some(BASE - 1));
+        assert_eq!(
+            zoom.next_index(FontSizeStep::Decrease),
+            Some(FontZoom::BASE - 1)
+        );
     }
 
     /// Asserts that an increase at the top of the ladder is ignored rather
@@ -113,7 +119,7 @@ mod tests {
     #[test]
     fn an_increase_at_the_top_returns_none() {
         let mut zoom = FontZoom::default();
-        zoom.set_index(FACTORS.len() - 1);
+        zoom.set_index(FontZoom::FACTORS.len() - 1);
         assert_eq!(zoom.next_index(FontSizeStep::Increase), None);
     }
 
@@ -134,8 +140,8 @@ mod tests {
     #[test]
     fn a_reset_returns_the_base_rung() {
         let mut zoom = FontZoom::default();
-        zoom.set_index(FACTORS.len() - 1);
-        assert_eq!(zoom.next_index(FontSizeStep::Reset), Some(BASE));
+        zoom.set_index(FontZoom::FACTORS.len() - 1);
+        assert_eq!(zoom.next_index(FontSizeStep::Reset), Some(FontZoom::BASE));
     }
 
     /// Asserts that a reset from the unzoomed rung is ignored rather than

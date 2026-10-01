@@ -118,10 +118,12 @@ struct ImeUnderline;
 #[derive(Resource, Default)]
 struct ImeGlyphPool(Vec<Entity>);
 
-/// Initial number of pooled glyph nodes pre-spawned at Startup. Covers
-/// typical short compositions without runtime growth; longer compositions grow
-/// the pool on demand.
-const INITIAL_POOL_CAP: usize = 16;
+impl ImeGlyphPool {
+    /// Initial number of pooled glyph nodes pre-spawned at Startup. Covers
+    /// typical short compositions without runtime growth; longer compositions
+    /// grow the pool on demand.
+    const INITIAL_CAP: usize = 16;
+}
 
 /// True while an IME preedit composition is active. Takes
 /// `Option<Res<ImeState>>` so it returns `false` rather than panicking when
@@ -448,11 +450,6 @@ fn hide_ime_overlay(
 /// above all other UI nodes.
 const IME_OVERLAY_Z: i32 = 200;
 
-/// Z-index for the opaque occluding background rect — one below
-/// [`IME_OVERLAY_Z`] so the preedit glyph cells, underline, caret, and clause
-/// box (all at [`IME_OVERLAY_Z`]) always render in front of it.
-const IME_OVERLAY_BG_Z: i32 = IME_OVERLAY_Z - 1;
-
 /// Spawns the overlay entity tree.
 ///
 /// `LineBreak::NoWrap` is set as defense-in-depth against residual
@@ -479,6 +476,11 @@ fn spawn_ime_overlay_once(
     ui_font: Res<TerminalUiFont>,
     font_size: Res<TerminalFontSize>,
 ) {
+    /// Z-index for the opaque occluding background rect — one below
+    /// [`IME_OVERLAY_Z`] so the preedit glyph cells, underline, caret, and clause
+    /// box (all at [`IME_OVERLAY_Z`]) always render in front of it.
+    const IME_OVERLAY_BG_Z: i32 = IME_OVERLAY_Z - 1;
+
     let color = Color::WHITE;
 
     commands.spawn((
@@ -541,7 +543,7 @@ fn spawn_ime_overlay_once(
         ImeUnderline,
     ));
 
-    pool.0 = (0..INITIAL_POOL_CAP)
+    pool.0 = (0..ImeGlyphPool::INITIAL_CAP)
         .map(|_| {
             spawn_glyph_cell(
                 &mut commands,
@@ -944,7 +946,7 @@ mod tests {
 
         assert_eq!(
             app.world().resource::<ImeGlyphPool>().0.len(),
-            INITIAL_POOL_CAP,
+            ImeGlyphPool::INITIAL_CAP,
             "the glyph pool must be pre-spawned at the initial capacity"
         );
         let mut underlines = app

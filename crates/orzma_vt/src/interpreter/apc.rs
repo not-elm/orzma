@@ -1,6 +1,6 @@
 //! The orzma APC webview request and its wire parser.
 
-use crate::placement::{InstanceId, MAX_COLS, MAX_ROWS, PlacementSize};
+use crate::placement::{InstanceId, PlacementSize};
 use std::str;
 
 /// What an orzma APC payload asked for: an inline mount or unmount of a
@@ -26,7 +26,10 @@ impl WebviewApcRequest {
     /// Parses an orzma APC payload into the verb it names, or `None`
     /// when the payload is not a well-formed orzma webview verb.
     pub(crate) fn parse(bytes: &[u8]) -> Option<Self> {
-        if MAX_APC_LEN < bytes.len() {
+        /// The byte every orzma APC payload starts with.
+        const ORZMA_APC_PREFIX: &[u8; 1] = b"O";
+
+        if Self::MAX_LEN < bytes.len() {
             return None;
         }
         let body = bytes.strip_prefix(ORZMA_APC_PREFIX)?;
@@ -46,10 +49,10 @@ impl WebviewApcRequest {
             _ => None,
         }
     }
-}
 
-const MAX_APC_LEN: usize = 1024;
-const ORZMA_APC_PREFIX: &[u8; 1] = b"O";
+    /// The longest payload, in bytes, [`Self::parse`] reads.
+    const MAX_LEN: usize = 1024;
+}
 
 fn parse_mount_action(payload: &str) -> Option<WebviewApcRequest> {
     let fields = payload.split(',');
@@ -66,14 +69,14 @@ fn parse_mount_action(payload: &str) -> Option<WebviewApcRequest> {
         match k {
             "c" if cols.is_none() => {
                 let c = v.parse::<u16>().ok()?;
-                if c == 0 || MAX_COLS < c {
+                if c == 0 || PlacementSize::MAX_COLS < c {
                     return None;
                 }
                 cols.replace(c);
             }
             "r" if rows.is_none() => {
                 let r = v.parse().ok()?;
-                if r == 0 || MAX_ROWS < r {
+                if r == 0 || PlacementSize::MAX_ROWS < r {
                     return None;
                 }
                 rows.replace(r);
@@ -198,9 +201,9 @@ mod tests {
     fn mount_out_of_range_dims_rejected() {
         for payload in [
             format!("Omount;n={ID},r=0,c=20"),
-            format!("Omount;n={ID},r={},c=20", MAX_ROWS + 1),
+            format!("Omount;n={ID},r={},c=20", PlacementSize::MAX_ROWS + 1),
             format!("Omount;n={ID},r=3,c=0"),
-            format!("Omount;n={ID},r=3,c={}", MAX_COLS + 1),
+            format!("Omount;n={ID},r=3,c={}", PlacementSize::MAX_COLS + 1),
         ] {
             assert_eq!(parse(&payload), None, "payload={payload}");
         }
@@ -311,11 +314,11 @@ mod tests {
     #[test]
     fn oversized_payload_rejected() {
         let mut huge = b"O".to_vec();
-        huge.resize(MAX_APC_LEN + 1, b'a');
+        huge.resize(WebviewApcRequest::MAX_LEN + 1, b'a');
         assert_eq!(
             WebviewApcRequest::parse(&huge),
             None,
-            "payloads beyond MAX_APC_LEN are rejected before field parsing"
+            "payloads beyond MAX_LEN are rejected before field parsing"
         );
     }
 }

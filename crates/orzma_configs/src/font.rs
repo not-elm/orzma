@@ -5,8 +5,6 @@ mod style;
 use serde::Deserialize;
 pub use style::{FontSlant, FontStyleSpec};
 
-const DEFAULT_SIZE: f32 = 11.25;
-
 /// One face's font configuration: a family name and a style string, both
 /// optional. Omitted `family` inherits `normal`'s; omitted `style` uses the
 /// face's canonical default.
@@ -44,6 +42,9 @@ pub struct FontConfig {
 
 impl Default for FontConfig {
     fn default() -> Self {
+        /// The default font size, in logical pixels.
+        const DEFAULT_SIZE: f32 = 11.25;
+
         Self {
             size: DEFAULT_SIZE,
             normal: FontFaceConfig::default(),

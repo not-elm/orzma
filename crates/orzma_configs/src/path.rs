@@ -6,9 +6,6 @@ use crate::OrzmaConfigsResult;
 use std::path::{Path, PathBuf};
 
 pub(crate) const ENV_ORZMA_CONFIG: &str = "ORZMA_CONFIG";
-pub(crate) const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
-const CONFIG_REL_PATH: &str = "orzma/config.toml";
-const HOME_CONFIG_DIR: &str = ".config";
 
 /// Abstraction over the environment lookups used to resolve user-specified
 /// paths.
@@ -40,6 +37,13 @@ impl Env for SystemEnv {
 /// `<home_dir>/.config/orzma/config.toml`. Returns `HomeDirNotFound` only
 /// when all three lookups fail.
 pub(crate) fn resolve_config_path(env: &dyn Env) -> OrzmaConfigsResult<PathBuf> {
+    /// The variable that names the XDG config directory.
+    const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
+    /// The config file's path under a config directory.
+    const CONFIG_REL_PATH: &str = "orzma/config.toml";
+    /// The config directory's path under the home directory.
+    const HOME_CONFIG_DIR: &str = ".config";
+
     if let Some(p) = env.var(ENV_ORZMA_CONFIG) {
         return Ok(PathBuf::from(p));
     }

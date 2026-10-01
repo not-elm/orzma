@@ -76,9 +76,9 @@ pub enum ClientMsg {
         row: u16,
         /// 0-based column of the rect's left edge.
         col: u16,
-        /// Rect height in cells (`1..=MAX_ROWS`).
+        /// Rect height in cells (`1..=PlacementSize::MAX_ROWS`).
         rows: u16,
-        /// Rect width in cells (`1..=MAX_COLS`).
+        /// Rect width in cells (`1..=PlacementSize::MAX_COLS`).
         cols: u16,
     },
     /// Removes one placement this connection mounted.

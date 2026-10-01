@@ -41,14 +41,6 @@ impl DynamicColor {
 }
 
 impl DynamicColorRequest {
-    /// The colors a chain reaches, in the order successive values
-    /// address them.
-    const CHAIN: [DynamicColor; 3] = [
-        DynamicColor::Foreground,
-        DynamicColor::Background,
-        DynamicColor::Cursor,
-    ];
-
     /// The dynamic-color requests one operating system command carries,
     /// in the order they appear; empty for every other command.
     ///
@@ -70,10 +62,18 @@ impl DynamicColorRequest {
     /// terminal does not carry, and a command whose number names one
     /// decodes to nothing. A reset ignores whatever follows its number.
     pub fn parse(params: &[&[u8]]) -> Vec<Self> {
+        /// The colors a chain reaches, in the order successive values
+        /// address them.
+        const CHAIN: [DynamicColor; 3] = [
+            DynamicColor::Foreground,
+            DynamicColor::Background,
+            DynamicColor::Cursor,
+        ];
+
         match params {
-            [b"10", specs @ ..] => Self::chain(&Self::CHAIN, specs),
-            [b"11", specs @ ..] => Self::chain(&Self::CHAIN[1..], specs),
-            [b"12", specs @ ..] => Self::chain(&Self::CHAIN[2..], specs),
+            [b"10", specs @ ..] => Self::chain(&CHAIN, specs),
+            [b"11", specs @ ..] => Self::chain(&CHAIN[1..], specs),
+            [b"12", specs @ ..] => Self::chain(&CHAIN[2..], specs),
             [b"110", ..] => vec![Self::Reset {
                 target: DynamicColor::Foreground,
             }],

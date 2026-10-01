@@ -99,6 +99,10 @@ impl SemanticEscapeChars {
 /// The separator set `` ,│`|:"' ()[]{}<> `` plus the tab.
 impl Default for SemanticEscapeChars {
     fn default() -> Self {
+        /// The word separators of the built-in semantic motions, besides
+        /// whitespace.
+        const DEFAULT_SEMANTIC_ESCAPE_CHARS: &str = ",│`|:\"' ()[]{}<>\t";
+
         Self::new(DEFAULT_SEMANTIC_ESCAPE_CHARS)
     }
 }
@@ -452,10 +456,6 @@ impl Screen {
         self.extend_covering(end)
     }
 }
-
-/// The word separators of the built-in semantic motions, besides
-/// whitespace.
-const DEFAULT_SEMANTIC_ESCAPE_CHARS: &str = ",│`|:\"' ()[]{}<>\t";
 
 /// Whether `c` is a blank or a tab.
 fn is_blank_char(c: char) -> bool {

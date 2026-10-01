@@ -17,10 +17,6 @@ use crate::screen::grid::row::Row;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
 
-/// The narrowest grid the terminal will build: a width-2 glyph needs two
-/// columns.
-pub const MIN_COLUMNS: u16 = 2;
-
 /// Grid dimensions in cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridSize {
@@ -31,12 +27,15 @@ pub struct GridSize {
 }
 
 impl GridSize {
+    /// The narrowest grid the terminal will build: a width-2 glyph needs two
+    /// columns.
+    pub const MIN_COLS: u16 = 2;
     /// Upper bound on the column count [`Self::new`] accepts.
     pub const MAX_COLS: u16 = 4096;
     /// Upper bound on the row count [`Self::new`] accepts.
     pub const MAX_ROWS: u16 = 4096;
 
-    /// Builds a size with the column count raised to [`MIN_COLUMNS`].
+    /// Builds a size with the column count raised to [`Self::MIN_COLS`].
     ///
     /// # Errors
     ///
@@ -51,7 +50,7 @@ impl GridSize {
             return Err(GridSizeError::TooLarge.into());
         }
         Ok(Self {
-            cols: cols.max(MIN_COLUMNS),
+            cols: cols.max(Self::MIN_COLS),
             rows,
         })
     }

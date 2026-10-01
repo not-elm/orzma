@@ -95,15 +95,6 @@ impl Plugin for LayoutPlugin {
     }
 }
 
-/// Separator colour.
-///
-/// TODO: make the colour configurable.
-const SEPARATOR_COLOR: Color = Color::srgb(0.35, 0.35, 0.40);
-
-/// Logical-px thickness of the line painted inside a reserved separator
-/// cell, before rounding to whole physical px (never below one).
-const SEPARATOR_THICKNESS_LOGICAL_PX: f32 = 1.0;
-
 /// Positions the panes in the latest layout, hides every other pane with
 /// `Display::None` and `OrzmuxPaneHidden`, reconciles the separators, and
 /// applies the active pane.
@@ -154,6 +145,11 @@ fn reconcile_separators(
     geometry: &PaneGeometry,
     container: Entity,
 ) {
+    /// Separator colour.
+    ///
+    /// TODO: make the colour configurable.
+    const SEPARATOR_COLOR: Color = Color::srgb(0.35, 0.35, 0.40);
+
     let mut stale: HashMap<SplitId, Entity> = separators
         .iter()
         .map(|(entity, _, separator)| (separator.split, entity))
@@ -204,10 +200,9 @@ fn pane_node(rect: &PaneRect, layout: &Layout, geometry: &PaneGeometry) -> Node 
     )
 }
 
-/// The node for a separator: a line `SEPARATOR_THICKNESS_LOGICAL_PX`
-/// thick occupying the far end of the one cell the layout reserves for
-/// it, flush against the pane that follows, spanning the separator's
-/// full length.
+/// The node for a separator: a line occupying the far end of the one
+/// cell the layout reserves for it, flush against the pane that follows,
+/// spanning the separator's full length.
 ///
 /// A separator that stops short of the layout size ends inside the cell
 /// reserved for a crossing line, so its far end is extended across that
@@ -266,6 +261,10 @@ fn gap_before_line(start: u16, extent: u16, limit: u16, cell: f32, thickness: f3
 
 /// The separator line's thickness in whole physical px, never below one.
 fn line_thickness_phys(geometry: &PaneGeometry) -> f32 {
+    /// The thickness of the line painted inside a reserved separator cell,
+    /// in logical px.
+    const SEPARATOR_THICKNESS_LOGICAL_PX: f32 = 1.0;
+
     (SEPARATOR_THICKNESS_LOGICAL_PX * geometry.scale_factor)
         .round()
         .max(1.0)

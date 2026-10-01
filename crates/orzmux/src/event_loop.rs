@@ -311,11 +311,14 @@ impl EventLoop {
         }
     }
 
-    /// Applies up to `COMMAND_BATCH` queued commands, applying only the
+    /// Applies one batch of queued commands, applying only the
     /// last of a run of consecutive `Resize` commands, and only the last
     /// of a run of consecutive `ResizeSplit` commands for the same split.
     /// Returns `false` when the command channel is disconnected.
     pub fn drain_commands(&mut self) -> bool {
+        /// How many queued commands one iteration applies before pumping panes.
+        const COMMAND_BATCH: usize = 64;
+
         let mut held: Option<(CommandSeq, OrzmuxCommand)> = None;
         let mut connected = true;
         for _ in 0..COMMAND_BATCH {
@@ -353,9 +356,13 @@ impl EventLoop {
         connected
     }
 
-    /// Applies up to `CONTROL_BATCH` queued control-socket events, logging
-    /// each one the webview host refuses.
+    /// Applies one batch of queued control-socket events, logging each one
+    /// the webview host refuses.
     pub fn drain_control(&mut self) {
+        /// How many queued control-socket events one iteration applies before
+        /// panes and GUI commands get a turn.
+        const CONTROL_BATCH: usize = 64;
+
         for _ in 0..CONTROL_BATCH {
             let Some(event) = self.backend.try_recv_control() else {
                 return;
@@ -597,13 +604,6 @@ enum Ready {
     Control,
     Pane(PaneId),
 }
-
-/// How many queued commands one iteration applies before pumping panes.
-const COMMAND_BATCH: usize = 64;
-
-/// How many queued control-socket events one iteration applies before
-/// panes and GUI commands get a turn.
-const CONTROL_BATCH: usize = 64;
 
 #[cfg(test)]
 mod tests {

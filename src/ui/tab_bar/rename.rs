@@ -201,11 +201,6 @@ impl Plugin for TabRenamePlugin {
     }
 }
 
-/// A blink period long enough that the caret stays drawn.
-const STEADY_CARET: Duration = Duration::from_secs(3600);
-/// The background of the rename field's selected text.
-const SELECTION_BG: Color = Color::srgb_u8(0x4c, 0x1d, 0x95);
-
 /// One rename: the tab, its field, the label the field replaces, the
 /// name the tab had, the text the field started with, and how the rename
 /// ends.
@@ -237,6 +232,11 @@ fn start_rename(
     buttons: Query<(Entity, &TabButton, &Children)>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
+    /// A blink period long enough that the caret stays drawn.
+    const STEADY_CARET: Duration = Duration::from_secs(3600);
+    /// The background of the rename field's selected text.
+    const SELECTION_BG: Color = Color::srgb_u8(0x4c, 0x1d, 0x95);
+
     if rename.is_active() {
         return;
     }

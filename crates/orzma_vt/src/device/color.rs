@@ -122,8 +122,8 @@ impl Default for Palette {
     fn default() -> Self {
         Self {
             indexed: Box::new(Self::XTERM_INDEXED),
-            foreground: DEFAULT_FOREGROUND,
-            background: DEFAULT_BACKGROUND,
+            foreground: Self::DEFAULT_FOREGROUND,
+            background: Self::DEFAULT_BACKGROUND,
             cursor: None,
         }
     }
@@ -195,7 +195,7 @@ impl Palette {
     ///
     /// - `OSC 110`
     pub fn reset_foreground(&mut self) -> bool {
-        self.set_foreground(DEFAULT_FOREGROUND)
+        self.set_foreground(Self::DEFAULT_FOREGROUND)
     }
 
     /// Returns the default background to its built-in default, leaving
@@ -205,7 +205,7 @@ impl Palette {
     ///
     /// - `OSC 111`
     pub fn reset_background(&mut self) -> bool {
-        self.set_background(DEFAULT_BACKGROUND)
+        self.set_background(Self::DEFAULT_BACKGROUND)
     }
 
     /// Sets the text cursor color to `color`; returns whether it
@@ -235,6 +235,16 @@ impl Palette {
         Self::assign(self, Self::default())
     }
 
+    /// The built-in default foreground.
+    const DEFAULT_FOREGROUND: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
+
+    /// The built-in default background.
+    const DEFAULT_BACKGROUND: Rgb = Rgb { r: 0, g: 0, b: 0 };
+
     /// Writes `value` into `slot`; returns whether the slot changed.
     fn assign<T: PartialEq>(slot: &mut T, value: T) -> bool {
         if *slot == value {
@@ -244,16 +254,6 @@ impl Palette {
         true
     }
 }
-
-/// The default foreground [`Palette`] carries.
-const DEFAULT_FOREGROUND: Rgb = Rgb {
-    r: 255,
-    g: 255,
-    b: 255,
-};
-
-/// The default background [`Palette`] carries.
-const DEFAULT_BACKGROUND: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
 /// Channel ramp for the 6x6x6 cube portion of the xterm table.
 const CUBE_RAMP: [u8; 6] = [0, 95, 135, 175, 215, 255];
@@ -654,7 +654,7 @@ mod tests {
         palette.set_background(color);
         palette.set_indexed(1, color);
         assert!(palette.reset_foreground());
-        assert_eq!(palette.foreground, DEFAULT_FOREGROUND);
+        assert_eq!(palette.foreground, Palette::DEFAULT_FOREGROUND);
         assert_eq!(palette.background, color);
         assert_eq!(palette.indexed[1], color);
     }
@@ -672,7 +672,7 @@ mod tests {
         palette.set_background(color);
         palette.set_indexed(1, color);
         assert!(palette.reset_background());
-        assert_eq!(palette.background, DEFAULT_BACKGROUND);
+        assert_eq!(palette.background, Palette::DEFAULT_BACKGROUND);
         assert_eq!(palette.foreground, color);
         assert_eq!(palette.indexed[1], color);
     }

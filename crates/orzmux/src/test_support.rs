@@ -281,8 +281,8 @@ impl Harness {
             .map(|(_, v)| v.0.clone())
     }
 
-    /// Applies up to `CONTROL_BATCH` queued control events, then flushes the
-    /// events the backend generated onto the event channel.
+    /// Applies one batch of queued control events, then flushes the events
+    /// the backend generated onto the event channel.
     pub fn drain_control(&mut self) {
         self.event_loop.drain_control();
         self.event_loop.flush_events();

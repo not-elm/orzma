@@ -32,11 +32,6 @@ impl Plugin for MouseWheelInputPlugin {
     }
 }
 
-/// Whether the OS delivers a discrete Shift+wheel as horizontal travel,
-/// so a Shift-held frame's line-unit horizontal travel is folded onto the
-/// vertical axis.
-const SHIFT_WHEEL_ARRIVES_HORIZONTAL: bool = cfg!(target_os = "macos");
-
 /// A resolved wheel target for one frame: the surface entity, the cursor
 /// that hit it, and the cell pitch.
 struct WheelTarget {
@@ -60,6 +55,11 @@ fn dispatch_mouse_wheel(
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    /// Whether the OS delivers a discrete Shift+wheel as horizontal travel,
+    /// so a Shift-held frame's line-unit horizontal travel is folded onto the
+    /// vertical axis.
+    const SHIFT_WHEEL_ARRIVES_HORIZONTAL: bool = cfg!(target_os = "macos");
+
     let Some(wt) = resolve_wheel_target(&terminals, &windows, &metrics) else {
         wheel.clear();
         return;

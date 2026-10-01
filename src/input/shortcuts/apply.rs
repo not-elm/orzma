@@ -42,9 +42,6 @@ impl Plugin for ShortcutsApplyPlugin {
     }
 }
 
-/// How many cells one resize-pane shortcut moves a divider.
-const PANE_RESIZE_CELLS: u16 = 5;
-
 /// Applies the frame's key effects in press order: shortcuts, vi-mode
 /// keys, typed keys, and the chords a focused webview declared as forward
 /// keys all go through `commands.trigger`, never a direct backend send, so
@@ -96,6 +93,9 @@ fn apply_shortcut(
     focused: Option<Entity>,
     in_vi_mode: bool,
 ) {
+    /// How many cells one resize-pane shortcut moves a divider.
+    const PANE_RESIZE_CELLS: u16 = 5;
+
     match action {
         Shortcut::EnterViMode => {
             if let Some(entity) = focused {
