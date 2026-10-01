@@ -1,6 +1,6 @@
 //! Inactive-pane treatment configuration: the `[inactive_pane]` section's
 //! background tint and brightness dim for every pane that is not its
-//! workspace's active pane.
+//! tab's active pane.
 
 use crate::norm_unit;
 use serde::{Deserialize, Serialize};

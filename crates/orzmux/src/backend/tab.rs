@@ -1,51 +1,49 @@
-//! The ordered set of workspaces: each tiles its own layout tree, and one
+//! The ordered set of tabs: each tiles its own layout tree, and one
 //! of them is displayed.
 
 use crate::backend::layout::{LayoutTree, SplitIds};
-use crate::backend::{
-    CloseTarget, PaneId, SplitOrientation, WorkspaceEntry, WorkspaceId, WorkspaceTarget,
-};
+use crate::backend::{CloseTarget, PaneId, SplitOrientation, TabEntry, TabId, TabTarget};
 use crate::error::{OrzmuxError, OrzmuxResult};
 use orzma_vt::prelude::GridSize;
 
-/// One workspace: its name and the tree its panes tile.
+/// One tab: its name and the tree its panes tile.
 #[derive(Debug)]
-pub struct Workspace {
-    /// The workspace's id.
-    pub id: WorkspaceId,
+pub struct Tab {
+    /// The tab's id.
+    pub id: TabId,
     /// The name the user gave it, or `None` for the automatic name.
     pub name: Option<String>,
     /// The panes it tiles.
     pub tree: LayoutTree,
 }
 
-impl Workspace {
-    /// The longest workspace name kept, in `char`s.
+impl Tab {
+    /// The longest tab name kept, in `char`s.
     pub const MAX_NAME_CHARS: usize = 64;
 }
 
-/// Every workspace in display order, the displayed one, and the split-id
+/// Every tab in display order, the displayed one, and the split-id
 /// minter their trees share.
 ///
 /// # Invariants
 ///
-/// The displayed id names a workspace of the set whenever the set is not
-/// empty, and is `None` when it is empty. Workspace ids are never reused.
+/// The displayed id names a tab of the set whenever the set is not
+/// empty, and is `None` when it is empty. Tab ids are never reused.
 #[derive(Debug, Default)]
-pub struct Workspaces {
-    order: Vec<Workspace>,
-    active: Option<WorkspaceId>,
+pub struct Tabs {
+    order: Vec<Tab>,
+    active: Option<TabId>,
     last_id: u32,
     split_ids: SplitIds,
 }
 
-impl Workspaces {
-    /// Appends a workspace whose only pane is `root` and returns its id.
-    /// It becomes displayed only when it is the only workspace.
-    pub fn create(&mut self, root: PaneId) -> WorkspaceId {
+impl Tabs {
+    /// Appends a tab whose only pane is `root` and returns its id.
+    /// It becomes displayed only when it is the only tab.
+    pub fn create(&mut self, root: PaneId) -> TabId {
         self.last_id += 1;
-        let id = WorkspaceId(self.last_id);
-        self.order.push(Workspace {
+        let id = TabId(self.last_id);
+        self.order.push(Tab {
             id,
             name: None,
             tree: LayoutTree::with_root(root),
@@ -56,10 +54,10 @@ impl Workspaces {
         id
     }
 
-    /// Removes `id`. When it was displayed, the workspace that takes its
+    /// Removes `id`. When it was displayed, the tab that takes its
     /// position is displayed, or the new last one when it was last.
     /// Returns whether it existed.
-    pub fn remove(&mut self, id: WorkspaceId) -> bool {
+    pub fn remove(&mut self, id: TabId) -> bool {
         let Some(index) = self.index_of(id) else {
             return false;
         };
@@ -74,9 +72,9 @@ impl Workspaces {
         true
     }
 
-    /// Displays `id`. Returns whether the displayed workspace changed; an
+    /// Displays `id`. Returns whether the displayed tab changed; an
     /// unknown id changes nothing.
-    pub fn activate(&mut self, id: WorkspaceId) -> bool {
+    pub fn activate(&mut self, id: TabId) -> bool {
         if self.active == Some(id) || self.index_of(id).is_none() {
             return false;
         }
@@ -84,23 +82,23 @@ impl Workspaces {
         true
     }
 
-    /// The workspace `target` names in the current order, or `None` when
+    /// The tab `target` names in the current order, or `None` when
     /// it names none.
-    pub fn resolve(&self, target: WorkspaceTarget) -> Option<WorkspaceId> {
+    pub fn resolve(&self, target: TabTarget) -> Option<TabId> {
         let displayed = self.active.and_then(|id| self.index_of(id));
         let len = self.order.len();
         let index = match target {
-            WorkspaceTarget::Active => displayed?,
-            WorkspaceTarget::Id(id) => self.index_of(id)?,
-            WorkspaceTarget::Index(index) => usize::from(index),
-            WorkspaceTarget::Next => (displayed? + 1) % len,
-            WorkspaceTarget::Previous => (displayed? + len - 1) % len,
+            TabTarget::Active => displayed?,
+            TabTarget::Id(id) => self.index_of(id)?,
+            TabTarget::Index(index) => usize::from(index),
+            TabTarget::Next => (displayed? + 1) % len,
+            TabTarget::Previous => (displayed? + len - 1) % len,
         };
         self.order.get(index).map(|w| w.id)
     }
 
-    /// The workspace `target` names, or `None` when it names none.
-    pub fn resolve_close(&self, target: CloseTarget) -> Option<WorkspaceId> {
+    /// The tab `target` names, or `None` when it names none.
+    pub fn resolve_close(&self, target: CloseTarget) -> Option<TabId> {
         match target {
             CloseTarget::Active => self.active,
             CloseTarget::Id(id) => self.index_of(id).map(|_| id),
@@ -112,45 +110,45 @@ impl Workspaces {
     ///
     /// # Errors
     ///
-    /// Returns [`OrzmuxError::UnresolvedWorkspace`] for an unknown id;
+    /// Returns [`OrzmuxError::UnresolvedTab`] for an unknown id;
     /// the order is unchanged.
-    pub fn move_to(&mut self, id: WorkspaceId, index: u16) -> OrzmuxResult<bool> {
-        let from = self.index_of(id).ok_or(OrzmuxError::UnresolvedWorkspace)?;
+    pub fn move_to(&mut self, id: TabId, index: u16) -> OrzmuxResult<bool> {
+        let from = self.index_of(id).ok_or(OrzmuxError::UnresolvedTab)?;
         let to = usize::from(index).min(self.order.len().saturating_sub(1));
         if from == to {
             return Ok(false);
         }
-        let workspace = self.order.remove(from);
-        self.order.insert(to, workspace);
+        let tab = self.order.remove(from);
+        self.order.insert(to, tab);
         Ok(true)
     }
 
     /// Names `id` after `name` with control characters removed, the
     /// surrounding whitespace trimmed, and at most
-    /// [`Workspace::MAX_NAME_CHARS`] characters kept. A name that ends up
+    /// [`Tab::MAX_NAME_CHARS`] characters kept. A name that ends up
     /// empty, or `None`, restores the automatic name. Returns whether the
     /// name changed.
     ///
     /// # Errors
     ///
-    /// Returns [`OrzmuxError::UnresolvedWorkspace`] for an unknown id.
-    pub fn rename(&mut self, id: WorkspaceId, name: Option<String>) -> OrzmuxResult<bool> {
-        let workspace = self.get_mut(id).ok_or(OrzmuxError::UnresolvedWorkspace)?;
+    /// Returns [`OrzmuxError::UnresolvedTab`] for an unknown id.
+    pub fn rename(&mut self, id: TabId, name: Option<String>) -> OrzmuxResult<bool> {
+        let tab = self.get_mut(id).ok_or(OrzmuxError::UnresolvedTab)?;
         let name = name.as_deref().and_then(sanitized_name);
-        if workspace.name == name {
+        if tab.name == name {
             return Ok(false);
         }
-        workspace.name = name;
+        tab.name = name;
         Ok(true)
     }
 
-    /// Splits `target`, a pane of the displayed workspace, placing `new`
+    /// Splits `target`, a pane of the displayed tab, placing `new`
     /// right of / below it.
     ///
     /// # Errors
     ///
     /// Returns [`OrzmuxError::UnresolvedTarget`] when `target` is not in
-    /// the displayed workspace, and [`OrzmuxError::SplitRefused`] when the
+    /// the displayed tab, and [`OrzmuxError::SplitRefused`] when the
     /// tree refuses the split.
     pub fn split_active(
         &mut self,
@@ -160,83 +158,78 @@ impl Workspaces {
         window: GridSize,
     ) -> OrzmuxResult {
         let active = self.active.ok_or(OrzmuxError::UnresolvedTarget)?;
-        let workspace = self
+        let tab = self
             .order
             .iter_mut()
             .find(|w| w.id == active)
             .ok_or(OrzmuxError::UnresolvedTarget)?;
-        if !workspace.tree.contains(target) {
+        if !tab.tree.contains(target) {
             return Err(OrzmuxError::UnresolvedTarget);
         }
-        workspace
-            .tree
+        tab.tree
             .split(&mut self.split_ids, target, orientation, new, window)
     }
 
-    /// The displayed workspace's id.
-    pub fn active_id(&self) -> Option<WorkspaceId> {
+    /// The displayed tab's id.
+    pub fn active_id(&self) -> Option<TabId> {
         self.active
     }
 
-    /// The displayed workspace.
-    pub fn active(&self) -> Option<&Workspace> {
+    /// The displayed tab.
+    pub fn active(&self) -> Option<&Tab> {
         self.active.and_then(|id| self.get(id))
     }
 
-    /// The displayed workspace, for a change to its tree.
-    pub fn active_mut(&mut self) -> Option<&mut Workspace> {
+    /// The displayed tab, for a change to its tree.
+    pub fn active_mut(&mut self) -> Option<&mut Tab> {
         let id = self.active?;
         self.get_mut(id)
     }
 
-    /// The workspace `id` names.
-    pub fn get(&self, id: WorkspaceId) -> Option<&Workspace> {
+    /// The tab `id` names.
+    pub fn get(&self, id: TabId) -> Option<&Tab> {
         self.order.iter().find(|w| w.id == id)
     }
 
-    /// The workspace `id` names, for a change.
-    pub fn get_mut(&mut self, id: WorkspaceId) -> Option<&mut Workspace> {
+    /// The tab `id` names, for a change.
+    pub fn get_mut(&mut self, id: TabId) -> Option<&mut Tab> {
         self.order.iter_mut().find(|w| w.id == id)
     }
 
-    /// The workspace whose tree holds `pane`.
-    pub fn workspace_of(&self, pane: PaneId) -> Option<WorkspaceId> {
+    /// The tab whose tree holds `pane`.
+    pub fn tab_of(&self, pane: PaneId) -> Option<TabId> {
         self.order
             .iter()
             .find(|w| w.tree.contains(pane))
             .map(|w| w.id)
     }
 
-    /// Every workspace in display order.
-    pub fn iter(&self) -> impl Iterator<Item = &Workspace> {
+    /// Every tab in display order.
+    pub fn iter(&self) -> impl Iterator<Item = &Tab> {
         self.order.iter()
     }
 
-    /// Every workspace in display order, as the GUI lists them.
-    pub fn entries(&self) -> Vec<WorkspaceEntry> {
+    /// Every tab in display order, as the GUI lists them.
+    pub fn entries(&self) -> Vec<TabEntry> {
         self.order
             .iter()
-            .map(|w| WorkspaceEntry {
+            .map(|w| TabEntry {
                 id: w.id,
                 name: w.name.clone(),
             })
             .collect()
     }
 
-    fn index_of(&self, id: WorkspaceId) -> Option<usize> {
+    fn index_of(&self, id: TabId) -> Option<usize> {
         self.order.iter().position(|w| w.id == id)
     }
 }
 
 /// `name` without control characters, trimmed, and cut to
-/// [`Workspace::MAX_NAME_CHARS`] characters; `None` when nothing is left.
+/// [`Tab::MAX_NAME_CHARS`] characters; `None` when nothing is left.
 fn sanitized_name(name: &str) -> Option<String> {
     let kept: String = name.chars().filter(|c| !c.is_control()).collect();
-    let cut: String = kept
-        .trim()
-        .chars()
-        .take(Workspace::MAX_NAME_CHARS)
-        .collect();
+    let cut: String = kept.trim().chars().take(Tab::MAX_NAME_CHARS).collect();
     let trimmed = cut.trim_end();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
@@ -247,34 +240,34 @@ mod tests {
 
     const W: GridSize = GridSize { cols: 80, rows: 24 };
 
-    fn three() -> (Workspaces, [WorkspaceId; 3]) {
-        let mut set = Workspaces::default();
+    fn three() -> (Tabs, [TabId; 3]) {
+        let mut set = Tabs::default();
         let a = set.create(PaneId(1));
         let b = set.create(PaneId(2));
         let c = set.create(PaneId(3));
         (set, [a, b, c])
     }
 
-    /// Asserts that only the first workspace becomes displayed on creation
+    /// Asserts that only the first tab becomes displayed on creation
     /// and that ids increase.
     ///
-    /// Case: orzma starts with one workspace, then the user opens two more
+    /// Case: orzma starts with one tab, then the user opens two more
     /// in the background of the spawn.
     #[test]
-    fn the_first_workspace_is_displayed_and_ids_increase() {
+    fn the_first_tab_is_displayed_and_ids_increase() {
         let (set, [a, b, c]) = three();
         assert_eq!(set.active_id(), Some(a));
         assert!(a < b && b < c);
         assert_eq!(set.entries().len(), 3);
     }
 
-    /// Asserts that removing the displayed workspace displays the one that
+    /// Asserts that removing the displayed tab displays the one that
     /// takes its position, or the new last one when it was last.
     ///
     /// Case: the user closes the displayed tab in the middle, then the
     /// last tab.
     #[test]
-    fn removing_the_displayed_workspace_displays_its_right_neighbour() {
+    fn removing_the_displayed_tab_displays_its_right_neighbour() {
         let (mut set, [a, b, c]) = three();
         set.activate(b);
         assert!(set.remove(b));
@@ -295,15 +288,15 @@ mod tests {
     fn targets_wrap_and_out_of_range_indexes_resolve_to_nothing() {
         let (mut set, [a, _b, c]) = three();
         set.activate(c);
-        assert_eq!(set.resolve(WorkspaceTarget::Next), Some(a));
+        assert_eq!(set.resolve(TabTarget::Next), Some(a));
         set.activate(a);
-        assert_eq!(set.resolve(WorkspaceTarget::Previous), Some(c));
-        assert_eq!(set.resolve(WorkspaceTarget::Index(2)), Some(c));
-        assert_eq!(set.resolve(WorkspaceTarget::Index(8)), None);
+        assert_eq!(set.resolve(TabTarget::Previous), Some(c));
+        assert_eq!(set.resolve(TabTarget::Index(2)), Some(c));
+        assert_eq!(set.resolve(TabTarget::Index(8)), None);
     }
 
     /// Asserts that a move clamps to the last position, reports whether the
-    /// order changed, and refuses an unknown workspace.
+    /// order changed, and refuses an unknown tab.
     ///
     /// Case: the user drags the first tab past the end of the bar, then
     /// drops a tab where it already was.
@@ -315,8 +308,8 @@ mod tests {
         assert_eq!(order, vec![b, c, a]);
         assert_eq!(set.move_to(a, 2).ok(), Some(false));
         assert!(matches!(
-            set.move_to(WorkspaceId(99), 0),
-            Err(OrzmuxError::UnresolvedWorkspace)
+            set.move_to(TabId(99), 0),
+            Err(OrzmuxError::UnresolvedTab)
         ));
     }
 
@@ -333,24 +326,24 @@ mod tests {
         assert_eq!(set.get(a).and_then(|w| w.name.clone()), Some("logs".into()));
         assert_eq!(set.rename(a, Some("logs".into())).ok(), Some(false));
         let long: String = "あ".repeat(70);
-        set.rename(a, Some(long)).expect("a known workspace");
+        set.rename(a, Some(long)).expect("a known tab");
         assert_eq!(
             set.get(a)
                 .and_then(|w| w.name.clone())
                 .map(|n| n.chars().count()),
-            Some(Workspace::MAX_NAME_CHARS)
+            Some(Tab::MAX_NAME_CHARS)
         );
         assert_eq!(set.rename(a, Some("   ".into())).ok(), Some(true));
         assert_eq!(set.get(a).and_then(|w| w.name.clone()), None);
     }
 
-    /// Asserts that a split must target the displayed workspace and that
-    /// split ids stay unique across workspaces.
+    /// Asserts that a split must target the displayed tab and that
+    /// split ids stay unique across tabs.
     ///
-    /// Case: the user splits a pane in one workspace, switches, and splits
+    /// Case: the user splits a pane in one tab, switches, and splits
     /// in the other, while a stale request still names a hidden pane.
     #[test]
-    fn splits_target_the_displayed_workspace_with_unique_ids() {
+    fn splits_target_the_displayed_tab_with_unique_ids() {
         let (mut set, [a, b, _c]) = three();
         set.split_active(PaneId(1), SplitOrientation::Vertical, PaneId(10), W)
             .expect("the displayed root splits");
@@ -364,9 +357,9 @@ mod tests {
         let split_of = |id| {
             set.get(id)
                 .map(|w| w.tree.solve(W).separators[0].split)
-                .expect("a split workspace")
+                .expect("a split tab")
         };
         assert_ne!(split_of(a), split_of(b));
-        assert_eq!(set.workspace_of(PaneId(12)), Some(b));
+        assert_eq!(set.tab_of(PaneId(12)), Some(b));
     }
 }

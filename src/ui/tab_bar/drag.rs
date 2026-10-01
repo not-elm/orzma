@@ -1,13 +1,12 @@
-//! Dragging a tab along the strip to reorder workspaces.
+//! Dragging a tab along the strip to reorder tabs.
 
-use crate::ui::tab_bar::rename::WorkspaceRename;
+use crate::ui::tab_bar::rename::TabRename;
 use crate::ui::tab_bar::{
-    TAB_GAP_PX, TAB_STRIP_LEFT_PADDING_PX, TabBarSystems, TabStrip, WorkspaceTab,
+    TAB_GAP_PX, TAB_STRIP_LEFT_PADDING_PX, TabBarSystems, TabButton, TabStrip,
 };
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{
-    CurrentWorkspaces, OrzmuxSystems, PendingWorkspaceMove, RequestWorkspaceAction,
-    WorkspaceAction, WorkspaceId,
+    CurrentTabs, OrzmuxSystems, PendingTabMove, RequestTabAction, TabAction, TabId,
 };
 
 /// The drag in progress, and the drop the tab bar still shows while its
@@ -15,38 +14,38 @@ use bevy_orzmux::prelude::{
 #[derive(Resource, Default, Debug)]
 pub(crate) struct TabDrag {
     active: Option<ActiveDrag>,
-    dropped: Option<(WorkspaceId, usize)>,
+    dropped: Option<(TabId, usize)>,
 }
 
 impl TabDrag {
-    /// The dragged workspace and the slot the tabs show it in: the live drag
+    /// The dragged tab and the slot the tabs show it in: the live drag
     /// once it passed the threshold, else the last drop still waiting for
     /// its answer.
-    pub fn preview(&self) -> Option<(WorkspaceId, usize)> {
+    pub fn preview(&self) -> Option<(TabId, usize)> {
         self.active
             .filter(|drag| drag.moved)
-            .map(|drag| (drag.workspace, drag.target))
+            .map(|drag| (drag.tab, drag.target))
             .or(self.dropped)
     }
 
-    /// Whether `workspace`'s tab is being dragged past the threshold; it
+    /// Whether `tab`'s tab is being dragged past the threshold; it
     /// stays so until [`finish`](Self::finish).
-    pub fn is_dragging(&self, workspace: WorkspaceId) -> bool {
+    pub fn is_dragging(&self, tab: TabId) -> bool {
         self.active
-            .is_some_and(|drag| drag.moved && drag.workspace == workspace)
+            .is_some_and(|drag| drag.moved && drag.tab == tab)
     }
 
-    /// Whether a press on `workspace`'s tab is being followed, past the
+    /// Whether a press on `tab`'s tab is being followed, past the
     /// threshold or not.
-    pub fn tracks(&self, workspace: WorkspaceId) -> bool {
-        self.active.is_some_and(|drag| drag.workspace == workspace)
+    pub fn tracks(&self, tab: TabId) -> bool {
+        self.active.is_some_and(|drag| drag.tab == tab)
     }
 
-    /// Starts following a press on `workspace`'s tab at display position
+    /// Starts following a press on `tab`'s tab at display position
     /// `origin`, with the strip scrolled by `scroll_x` logical px.
-    pub fn start(&mut self, workspace: WorkspaceId, origin: usize, scroll_x: f32) {
+    pub fn start(&mut self, tab: TabId, origin: usize, scroll_x: f32) {
         self.active = Some(ActiveDrag {
-            workspace,
+            tab,
             origin,
             target: origin,
             moved: false,
@@ -91,10 +90,10 @@ impl TabDrag {
     /// Ends the press. Returns the move to send when the tab travelled past
     /// the threshold to another slot; that drop stays shown until
     /// [`forget_drop`](Self::forget_drop).
-    pub fn finish(&mut self) -> Option<(WorkspaceId, usize)> {
+    pub fn finish(&mut self) -> Option<(TabId, usize)> {
         let drag = self.active.take()?;
         let moved_to =
-            (drag.moved && drag.target != drag.origin).then_some((drag.workspace, drag.target));
+            (drag.moved && drag.target != drag.origin).then_some((drag.tab, drag.target));
         if moved_to.is_some() {
             self.dropped = moved_to;
         }
@@ -130,7 +129,7 @@ pub(crate) fn drop_index(
     slot.clamp(0.0, (count - 1) as f32) as usize
 }
 
-/// Lets a tab be dragged along the strip to reorder the workspaces, and
+/// Lets a tab be dragged along the strip to reorder the tabs, and
 /// stops showing a drop once its move is answered.
 pub(crate) struct TabDragPlugin;
 
@@ -145,7 +144,7 @@ impl Plugin for TabDragPlugin {
                 forget_answered_drop
                     .after(OrzmuxSystems::Drain)
                     .before(TabBarSystems::Reconcile)
-                    .run_if(resource_exists_and_changed::<PendingWorkspaceMove>),
+                    .run_if(resource_exists_and_changed::<PendingTabMove>),
             );
     }
 }
@@ -159,14 +158,14 @@ const EDGE_SCROLL_ZONE_PX: f32 = 24.0;
 /// How far the strip scrolls per pointer move near its edge, in logical px.
 const EDGE_SCROLL_STEP_PX: f32 = 12.0;
 /// The stacking of a tab dragged past the threshold among the strip's
-/// children, above the other tabs and the new-workspace button.
+/// children, above the other tabs and the new-tab button.
 const DRAGGED_TAB_Z: ZIndex = ZIndex(1);
 
 /// A press on a tab, followed from its first movement until its release.
 #[derive(Debug, Clone, Copy)]
 struct ActiveDrag {
-    /// The workspace whose tab was pressed.
-    workspace: WorkspaceId,
+    /// The tab whose tab was pressed.
+    tab: TabId,
     /// The tab's display position at the press.
     origin: usize,
     /// The slot under the pointer.
@@ -187,25 +186,25 @@ fn passes_threshold(dx: f32) -> bool {
 fn on_drag_start(
     ev: On<Pointer<DragStart>>,
     mut drag: ResMut<TabDrag>,
-    tabs: Query<&WorkspaceTab>,
+    buttons: Query<&TabButton>,
     strips: Query<&ScrollPosition, With<TabStrip>>,
-    workspaces: Res<CurrentWorkspaces>,
-    rename: Res<WorkspaceRename>,
+    tabs: Res<CurrentTabs>,
+    rename: Res<TabRename>,
 ) {
     if ev.button != PointerButton::Primary {
         return;
     }
-    let Ok(tab) = tabs.get(ev.entity) else {
+    let Ok(tab) = buttons.get(ev.entity) else {
         return;
     };
-    if rename.workspace() == Some(tab.workspace) {
+    if rename.tab() == Some(tab.id) {
         return;
     }
-    let Some(origin) = workspaces.position_of(tab.workspace) else {
+    let Some(origin) = tabs.position_of(tab.id) else {
         return;
     };
     let scroll_x = strips.single().map_or(0.0, |scroll| scroll.x);
-    drag.start(tab.workspace, origin, scroll_x);
+    drag.start(tab.id, origin, scroll_x);
 }
 
 /// Follows the pointer: updates the target slot, keeps the tab under the
@@ -214,18 +213,18 @@ fn on_drag_start(
 fn on_drag(
     ev: On<Pointer<Drag>>,
     mut drag: ResMut<TabDrag>,
-    mut placements: Query<(&mut UiTransform, &mut ZIndex), With<WorkspaceTab>>,
+    mut placements: Query<(&mut UiTransform, &mut ZIndex), With<TabButton>>,
     mut strips: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<TabStrip>>,
-    tabs: Query<(&WorkspaceTab, &ComputedNode)>,
-    workspaces: Res<CurrentWorkspaces>,
+    buttons: Query<(&TabButton, &ComputedNode)>,
+    tabs: Res<CurrentTabs>,
 ) {
     if ev.button != PointerButton::Primary {
         return;
     }
-    let Ok((tab, tab_node)) = tabs.get(ev.entity) else {
+    let Ok((tab, tab_node)) = buttons.get(ev.entity) else {
         return;
     };
-    if !drag.tracks(tab.workspace) {
+    if !drag.tracks(tab.id) {
         return;
     }
     let Ok((strip_node, strip_transform, mut scroll)) = strips.single_mut() else {
@@ -243,12 +242,12 @@ fn on_drag(
         first_left,
         scroll.x,
         slot_width,
-        workspaces.entries.len(),
+        tabs.entries.len(),
     );
     if drag.would_change(dx, target) {
         drag.update(dx, target);
     }
-    if drag.is_dragging(tab.workspace) {
+    if drag.is_dragging(tab.id) {
         let max_scroll = ((strip_node.content_size().x - strip_node.size().x)
             * strip_node.inverse_scale_factor)
             .max(0.0);
@@ -262,7 +261,7 @@ fn on_drag(
         if transform.translation.x != offset {
             transform.translation.x = offset;
         }
-        let stacking = if drag.is_dragging(tab.workspace) {
+        let stacking = if drag.is_dragging(tab.id) {
             DRAGGED_TAB_Z
         } else {
             ZIndex::default()
@@ -278,30 +277,30 @@ fn on_drag_end(
     ev: On<Pointer<DragEnd>>,
     mut commands: Commands,
     mut drag: ResMut<TabDrag>,
-    mut placements: Query<(&mut UiTransform, &mut ZIndex), With<WorkspaceTab>>,
-    tabs: Query<&WorkspaceTab>,
+    mut placements: Query<(&mut UiTransform, &mut ZIndex), With<TabButton>>,
+    buttons: Query<&TabButton>,
 ) {
     if ev.button != PointerButton::Primary {
         return;
     }
-    let Ok(tab) = tabs.get(ev.entity) else {
+    let Ok(tab) = buttons.get(ev.entity) else {
         return;
     };
     if let Ok((mut transform, mut z_index)) = placements.get_mut(ev.entity) {
         transform.set_if_neq(UiTransform::default());
         z_index.set_if_neq(ZIndex::default());
     }
-    if !drag.tracks(tab.workspace) {
+    if !drag.tracks(tab.id) {
         return;
     }
     // NOTE: bevy_picking triggers a release's `Click` before its `DragEnd`,
     // so the click observers still see `is_dragging` and ignore the click
     // that ends a drag. Finishing the drag on any earlier event of the
     // release would turn every drop into a selection or a close.
-    if let Some((workspace, index)) = drag.finish() {
-        commands.trigger(RequestWorkspaceAction {
-            action: WorkspaceAction::Move {
-                workspace,
+    if let Some((tab, index)) = drag.finish() {
+        commands.trigger(RequestTabAction {
+            action: TabAction::Move {
+                tab,
                 index: u16::try_from(index).unwrap_or(u16::MAX),
             },
         });
@@ -328,7 +327,7 @@ fn edge_scroll(
 }
 
 /// Stops showing a drop once the backend answered its move.
-fn forget_answered_drop(mut drag: ResMut<TabDrag>, pending: Res<PendingWorkspaceMove>) {
+fn forget_answered_drop(mut drag: ResMut<TabDrag>, pending: Res<PendingTabMove>) {
     if pending.0.is_none() && drag.has_drop() {
         drag.forget_drop();
     }
@@ -359,13 +358,13 @@ mod tests {
     #[test]
     fn a_drag_past_the_threshold_moves_once() {
         let mut drag = TabDrag::default();
-        drag.start(WorkspaceId(1), 0, 0.0);
+        drag.start(TabId(1), 0, 0.0);
         drag.update(2.0, 1);
-        assert!(!drag.is_dragging(WorkspaceId(1)));
+        assert!(!drag.is_dragging(TabId(1)));
         drag.update(180.0, 2);
-        assert!(drag.is_dragging(WorkspaceId(1)));
-        assert_eq!(drag.finish(), Some((WorkspaceId(1), 2)));
-        assert!(!drag.is_dragging(WorkspaceId(1)));
+        assert!(drag.is_dragging(TabId(1)));
+        assert_eq!(drag.finish(), Some((TabId(1), 2)));
+        assert!(!drag.is_dragging(TabId(1)));
         assert_eq!(drag.finish(), None);
     }
 
@@ -378,7 +377,7 @@ mod tests {
     #[test]
     fn the_visual_offset_follows_the_pointer_not_the_slot() {
         let mut drag = TabDrag::default();
-        drag.start(WorkspaceId(1), 0, 0.0);
+        drag.start(TabId(1), 0, 0.0);
         drag.update(250.0, 2);
         assert_eq!(drag.visual_offset(250.0, 100.0, 0.0), 50.0);
         assert_eq!(drag.visual_offset(250.0, 100.0, 30.0), 80.0);
@@ -392,7 +391,7 @@ mod tests {
     #[test]
     fn a_press_under_the_threshold_keeps_the_tab_in_its_slot() {
         let mut drag = TabDrag::default();
-        drag.start(WorkspaceId(1), 0, 0.0);
+        drag.start(TabId(1), 0, 0.0);
         drag.update(3.0, 1);
         assert_eq!(drag.preview(), None);
         assert_eq!(drag.visual_offset(3.0, 100.0, 0.0), 3.0);
@@ -407,7 +406,7 @@ mod tests {
     fn only_the_threshold_or_a_new_slot_changes_the_drag() {
         let mut drag = TabDrag::default();
         assert!(!drag.would_change(50.0, 1));
-        drag.start(WorkspaceId(1), 0, 0.0);
+        drag.start(TabId(1), 0, 0.0);
         assert!(!drag.would_change(2.0, 0));
         assert!(drag.would_change(5.0, 0));
         drag.update(5.0, 0);
@@ -437,12 +436,12 @@ mod tests {
     #[test]
     fn a_press_is_tracked_until_it_finishes() {
         let mut drag = TabDrag::default();
-        assert!(!drag.tracks(WorkspaceId(1)));
-        drag.start(WorkspaceId(1), 0, 0.0);
+        assert!(!drag.tracks(TabId(1)));
+        drag.start(TabId(1), 0, 0.0);
         drag.update(1.0, 0);
-        assert!(drag.tracks(WorkspaceId(1)));
-        assert!(!drag.tracks(WorkspaceId(2)));
+        assert!(drag.tracks(TabId(1)));
+        assert!(!drag.tracks(TabId(2)));
         assert_eq!(drag.finish(), None);
-        assert!(!drag.tracks(WorkspaceId(1)));
+        assert!(!drag.tracks(TabId(1)));
     }
 }

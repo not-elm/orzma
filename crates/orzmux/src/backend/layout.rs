@@ -714,7 +714,7 @@ mod tests {
     /// Asserts that two trees splitting through one `SplitIds` never
     /// hand out the same split id.
     ///
-    /// Case: two workspaces each split their first pane, and the GUI keys
+    /// Case: two tabs each split their first pane, and the GUI keys
     /// its divider nodes by split id.
     #[test]
     fn trees_sharing_split_ids_never_reuse_an_id() {
@@ -746,7 +746,7 @@ mod tests {
     /// Asserts that a root-only tree holds exactly its pane, which is
     /// active.
     ///
-    /// Case: a new workspace opens with its first shell.
+    /// Case: a new tab opens with its first shell.
     #[test]
     fn a_root_only_tree_holds_its_active_pane() {
         let tree = LayoutTree::with_root(PaneId(7));

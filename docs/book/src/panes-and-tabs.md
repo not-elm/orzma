@@ -1,9 +1,8 @@
-# Panes and Workspaces
+# Panes and Tabs
 
 orzma can split its window into panes, each running its own shell, and keep
-several such layouts as workspaces, listed as tabs across the top of the
-window. The panes are part of orzma itself, so there is no separate
-multiplexer to start.
+several such layouts as tabs across the top of the window. The panes are part
+of orzma itself, so there is no separate multiplexer to start.
 
 {{#include default-key-bindings.md:pane-actions}}
 
@@ -15,28 +14,26 @@ for what they take away from the shell.
 
 A new pane becomes the active pane. You can also click a pane to make it
 active, and drag the border between two panes to resize them. When the last
-pane of a workspace closes, the workspace closes; when the last workspace
-closes, orzma quits.
+pane of a tab closes, the tab closes; when the last tab closes, orzma quits.
 
-## Workspaces
+## Tabs
 
-A workspace is one layout of panes. The tab bar across the top of the window
-lists every workspace; the highlighted tab is the one on screen. The shells in
-the other workspaces keep running, and pages shown in them keep their state.
+A tab is one layout of panes. The tab bar across the top of the window lists
+every tab; the highlighted tab is the one on screen. The shells in the other
+tabs keep running, and pages shown in them keep their state.
 
-{{#include default-key-bindings.md:workspace-actions}}
+{{#include default-key-bindings.md:tab-actions}}
 
-Click a tab to show its workspace, click its `×` to close it, and click `+` to
-open a new one. When the tabs do not fit in the window, turn the mouse wheel
-over the tab bar to scroll through them. A workspace you have not named is
-called `Workspace n`, where `n` is its position in the tab bar. A new workspace
-starts in the working directory of the active pane, like a split.
+Click a tab to show it, click its `×` to close it, and click `+` to open a new
+one. When the tabs do not fit in the window, turn the mouse wheel over the tab
+bar to scroll through them. A tab you have not named is called `Tab n`, where
+`n` is its position in the tab bar. A new tab starts in the working directory
+of the active pane, like a split.
 
-Double-click a tab, or press the `rename-workspace` key, to rename its
-workspace in place. `Enter` or a click anywhere else keeps the new name, and
-`Escape` keeps the old one. Leave the field empty to go back to `Workspace n`.
-Drag a tab to move its workspace; the numbers of unnamed workspaces follow
-their new positions.
+Double-click a tab, or press the `rename-tab` key, to rename it in place.
+`Enter` or a click anywhere else keeps the new name, and `Escape` keeps the old
+one. Leave the field empty to go back to `Tab n`. Drag a tab to move it; the
+numbers of unnamed tabs follow their new positions.
 
 ## Resizing panes
 

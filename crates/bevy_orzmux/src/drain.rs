@@ -6,14 +6,14 @@ use crate::registry::PaneRegistry;
 use crate::signals::{
     TtyChildExitSignal, TtyFrameSignal, TtySelectionTextSignal, trigger_vt_signal,
 };
+use crate::tab::{CurrentTabs, PendingTabMove};
 use crate::webview::trigger_webview_event;
-use crate::workspace::{CurrentWorkspaces, PendingWorkspaceMove};
 use crate::{OrzmuxConnection, OrzmuxPane, OrzmuxSystems};
 use bevy::prelude::*;
 use orzma_vt::prelude::Frame;
 use orzmux::prelude::{CloseReason, OrzmuxEvent, PaneId};
 
-/// The session is over: the last workspace closed, or the backend is
+/// The session is over: the last tab closed, or the backend is
 /// gone.
 #[derive(Event, Debug, Clone, Copy)]
 pub struct OrzmuxSessionEnded;
@@ -33,8 +33,8 @@ impl Plugin for DrainPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PaneRegistry>()
             .init_resource::<CurrentLayout>()
-            .init_resource::<CurrentWorkspaces>()
-            .init_resource::<PendingWorkspaceMove>()
+            .init_resource::<CurrentTabs>()
+            .init_resource::<PendingTabMove>()
             .add_systems(
                 Update,
                 drain_orzmux_events
@@ -53,8 +53,8 @@ fn drain_orzmux_events(
     mut commands: Commands,
     mut registry: ResMut<PaneRegistry>,
     mut current: ResMut<CurrentLayout>,
-    mut workspaces: ResMut<CurrentWorkspaces>,
-    mut pending_move: ResMut<PendingWorkspaceMove>,
+    mut tabs: ResMut<CurrentTabs>,
+    mut pending_move: ResMut<PendingTabMove>,
     connection: Res<OrzmuxConnection>,
 ) {
     for event in connection.0.try_iter() {
@@ -62,7 +62,7 @@ fn drain_orzmux_events(
             &mut commands,
             &mut registry,
             &mut current,
-            &mut workspaces,
+            &mut tabs,
             &mut pending_move,
             event,
         );
@@ -73,14 +73,14 @@ fn drain_orzmux_events(
     }
 }
 
-/// Applies one event. `current` and `workspaces` are marked changed only
+/// Applies one event. `current` and `tabs` are marked changed only
 /// when their content differs.
 fn apply_event(
     commands: &mut Commands,
     registry: &mut PaneRegistry,
     current: &mut ResMut<CurrentLayout>,
-    workspaces: &mut ResMut<CurrentWorkspaces>,
-    pending_move: &mut ResMut<PendingWorkspaceMove>,
+    tabs: &mut ResMut<CurrentTabs>,
+    pending_move: &mut ResMut<PendingTabMove>,
     event: OrzmuxEvent,
 ) {
     match event {
@@ -123,15 +123,15 @@ fn apply_event(
         OrzmuxEvent::Webview { event, seq } => {
             trigger_webview_event(commands, registry, event, seq);
         }
-        OrzmuxEvent::Workspaces {
+        OrzmuxEvent::Tabs {
             seq,
             entries,
             active,
         } => {
-            if !workspaces.entries.is_empty() && entries.is_empty() {
+            if !tabs.entries.is_empty() && entries.is_empty() {
                 commands.trigger(OrzmuxSessionEnded);
             }
-            workspaces.set_if_neq(CurrentWorkspaces { entries, active });
+            tabs.set_if_neq(CurrentTabs { entries, active });
             if pending_move.0.is_some_and(|sent| seq >= sent) {
                 pending_move.0 = None;
             }
@@ -153,9 +153,7 @@ mod tests {
     use crate::signals::TtyFrameSignal;
     use crossbeam_channel::Sender;
     use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize};
-    use orzmux::prelude::{
-        CloseReason, CommandSeq, Layout, PaneRect, RequestId, WorkspaceEntry, WorkspaceId,
-    };
+    use orzmux::prelude::{CloseReason, CommandSeq, Layout, PaneRect, RequestId, TabEntry, TabId};
 
     #[derive(Resource, Default)]
     struct Seen {
@@ -164,7 +162,7 @@ mod tests {
         frames: Vec<Entity>,
         texts: Vec<Option<String>>,
         layout_changes: usize,
-        workspace_changes: usize,
+        tab_changes: usize,
     }
 
     fn app() -> (App, Sender<OrzmuxEvent>) {
@@ -188,9 +186,9 @@ mod tests {
                             seen.layout_changes += 1;
                         }
                     },
-                    |workspaces: Res<CurrentWorkspaces>, mut seen: ResMut<Seen>| {
-                        if workspaces.is_changed() {
-                            seen.workspace_changes += 1;
+                    |tabs: Res<CurrentTabs>, mut seen: ResMut<Seen>| {
+                        if tabs.is_changed() {
+                            seen.tab_changes += 1;
                         }
                     },
                 )
@@ -299,29 +297,29 @@ mod tests {
         );
     }
 
-    fn workspaces(seq: u64, ids: &[u32]) -> OrzmuxEvent {
-        OrzmuxEvent::Workspaces {
+    fn tabs(seq: u64, ids: &[u32]) -> OrzmuxEvent {
+        OrzmuxEvent::Tabs {
             seq: CommandSeq(seq),
             entries: ids
                 .iter()
-                .map(|id| WorkspaceEntry {
-                    id: WorkspaceId(*id),
+                .map(|id| TabEntry {
+                    id: TabId(*id),
                     name: None,
                 })
                 .collect(),
-            active: ids.first().map(|id| WorkspaceId(*id)),
+            active: ids.first().map(|id| TabId(*id)),
         }
     }
 
-    /// Asserts that the session ends only when a non-empty workspace list
+    /// Asserts that the session ends only when a non-empty tab list
     /// becomes empty, not when a `Layout` has no panes.
     ///
-    /// Case: the displayed workspace's last shell exits while another
-    /// workspace remains, and later the last workspace's shell exits.
+    /// Case: the displayed tab's last shell exits while another
+    /// tab remains, and later the last tab's shell exits.
     #[test]
-    fn the_session_ends_only_when_the_workspace_list_empties() {
+    fn the_session_ends_only_when_the_tab_list_empties() {
         let (mut app, events) = app();
-        events.send(workspaces(1, &[1, 2])).unwrap();
+        events.send(tabs(1, &[1, 2])).unwrap();
         events
             .send(OrzmuxEvent::Layout {
                 layout: layout(1, &[(PaneId(1), 0)]),
@@ -337,57 +335,57 @@ mod tests {
             .unwrap();
         app.update();
         assert_eq!(app.world().resource::<Seen>().ended, 0);
-        events.send(workspaces(3, &[])).unwrap();
+        events.send(tabs(3, &[])).unwrap();
         app.update();
         assert_eq!(app.world().resource::<Seen>().ended, 1);
     }
 
-    /// Asserts that a `Workspaces` whose sequence reaches the pending
+    /// Asserts that a `Tabs` whose sequence reaches the pending
     /// move clears it, and an older one does not.
     ///
     /// Case: the user drops a tab while a rename of another tab is still
     /// being answered.
     #[test]
-    fn a_workspaces_at_or_after_the_move_clears_the_pending_move() {
+    fn a_tabs_at_or_after_the_move_clears_the_pending_move() {
         let (mut app, events) = app();
-        app.world_mut().resource_mut::<PendingWorkspaceMove>().0 = Some(CommandSeq(5));
-        events.send(workspaces(4, &[1])).unwrap();
+        app.world_mut().resource_mut::<PendingTabMove>().0 = Some(CommandSeq(5));
+        events.send(tabs(4, &[1])).unwrap();
         app.update();
         assert_eq!(
-            app.world().resource::<PendingWorkspaceMove>().0,
+            app.world().resource::<PendingTabMove>().0,
             Some(CommandSeq(5))
         );
-        events.send(workspaces(5, &[1])).unwrap();
+        events.send(tabs(5, &[1])).unwrap();
         app.update();
-        assert_eq!(app.world().resource::<PendingWorkspaceMove>().0, None);
+        assert_eq!(app.world().resource::<PendingTabMove>().0, None);
     }
 
-    /// Asserts that `CurrentWorkspaces` is marked changed only when its
-    /// content actually differs between two `Workspaces` events.
+    /// Asserts that `CurrentTabs` is marked changed only when its
+    /// content actually differs between two `Tabs` events.
     ///
     /// Case: the backend answers a no-op tab drop with the same list, and
     /// the tab bar must not rebuild.
     #[test]
-    fn current_workspaces_changes_only_when_its_content_does() {
+    fn current_tabs_changes_only_when_its_content_does() {
         let (mut app, events) = app();
         app.update();
-        app.world_mut().resource_mut::<Seen>().workspace_changes = 0;
+        app.world_mut().resource_mut::<Seen>().tab_changes = 0;
 
-        events.send(workspaces(1, &[1, 2])).unwrap();
+        events.send(tabs(1, &[1, 2])).unwrap();
         app.update();
-        assert_eq!(app.world().resource::<Seen>().workspace_changes, 1);
+        assert_eq!(app.world().resource::<Seen>().tab_changes, 1);
 
-        events.send(workspaces(2, &[1, 2])).unwrap();
+        events.send(tabs(2, &[1, 2])).unwrap();
         app.update();
         assert_eq!(
-            app.world().resource::<Seen>().workspace_changes,
+            app.world().resource::<Seen>().tab_changes,
             1,
             "an answer with the same entries and active is not marked changed"
         );
 
-        events.send(workspaces(3, &[1])).unwrap();
+        events.send(tabs(3, &[1])).unwrap();
         app.update();
-        assert_eq!(app.world().resource::<Seen>().workspace_changes, 2);
+        assert_eq!(app.world().resource::<Seen>().tab_changes, 2);
     }
 
     /// Asserts that `PaneClosed` despawns the entity with its children

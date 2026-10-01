@@ -5,7 +5,7 @@
 use crate::backend::queue_sample::QueueSampler;
 use crate::backend::{
     Backend, CloseTarget, CommandSeq, NewPaneAt, PaneDirection, PaneId, PaneTarget, RequestId,
-    SplitId, WorkspaceId, WorkspaceTarget, log_refused_write,
+    SplitId, TabId, TabTarget, log_refused_write,
 };
 use crate::error::{OrzmuxError, OrzmuxResult};
 use crossbeam_channel::{Receiver, Select, TryRecvError};
@@ -34,7 +34,7 @@ pub enum OrzmuxCommand {
     /// Spawn a pane. `env` is forwarded to the shell verbatim.
     ///
     /// A split with `cwd: None` starts in the target pane's working
-    /// directory and a new workspace in the displayed active pane's,
+    /// directory and a new tab in the displayed active pane's,
     /// found as follows: on Unix the directory of its foreground process
     /// or shell when the OS reports one, else the directory it last
     /// reported through OSC 7 or OSC 9;9, else the directory it was
@@ -46,7 +46,7 @@ pub enum OrzmuxCommand {
         /// The id the resulting `PaneOpened` / `SpawnFailed` correlates to.
         request: RequestId,
         /// Where the new pane goes: into a split of an existing pane, or
-        /// as the first pane of a new workspace.
+        /// as the first pane of a new tab.
         at: NewPaneAt,
         /// The working directory to spawn the shell in, when given.
         cwd: Option<PathBuf>,
@@ -168,33 +168,33 @@ pub enum OrzmuxCommand {
     /// A report the GUI sends the webview host: a focus change, a first
     /// frame, or a page's call, event, or URL change.
     Webview(WebviewCommand),
-    /// Kill every pane of a workspace and remove it; its right neighbour,
+    /// Kill every pane of a tab and remove it; its right neighbour,
     /// else its left one, is displayed when it was displayed.
-    CloseWorkspace {
-        /// The workspace to close.
-        workspace: CloseTarget,
+    CloseTab {
+        /// The tab to close.
+        tab: CloseTarget,
     },
-    /// Display a workspace. Nothing is published when it already is, or
-    /// when the target names no workspace.
-    SelectWorkspace {
-        /// The workspace to display.
-        workspace: WorkspaceTarget,
+    /// Display a tab. Nothing is published when it already is, or
+    /// when the target names no tab.
+    SelectTab {
+        /// The tab to display.
+        tab: TabTarget,
     },
-    /// Name a workspace, or restore its automatic name with `None`. The
+    /// Name a tab, or restore its automatic name with `None`. The
     /// name loses its control characters and surrounding whitespace and is
     /// cut to 64 characters.
-    RenameWorkspace {
-        /// The workspace to name.
-        workspace: WorkspaceId,
+    RenameTab {
+        /// The tab to name.
+        tab: TabId,
         /// The new name.
         name: Option<String>,
     },
-    /// Move a workspace to a zero-based position, clamped to the last.
-    /// Always answered with exactly one `Workspaces`, even when nothing
-    /// moves or the workspace is gone.
-    MoveWorkspace {
-        /// The workspace to move.
-        workspace: WorkspaceId,
+    /// Move a tab to a zero-based position, clamped to the last.
+    /// Always answered with exactly one `Tabs`, even when nothing
+    /// moves or the tab is gone.
+    MoveTab {
+        /// The tab to move.
+        tab: TabId,
         /// Its new position.
         index: u16,
     },
@@ -227,10 +227,10 @@ impl OrzmuxCommand {
             }
             Self::ResizeSplit { .. } => ("ResizeSplit", None),
             Self::Webview(_) => ("Webview", None),
-            Self::CloseWorkspace { .. } => ("CloseWorkspace", None),
-            Self::SelectWorkspace { .. } => ("SelectWorkspace", None),
-            Self::RenameWorkspace { .. } => ("RenameWorkspace", None),
-            Self::MoveWorkspace { .. } => ("MoveWorkspace", None),
+            Self::CloseTab { .. } => ("CloseTab", None),
+            Self::SelectTab { .. } => ("SelectTab", None),
+            Self::RenameTab { .. } => ("RenameTab", None),
+            Self::MoveTab { .. } => ("MoveTab", None),
         }
     }
 
@@ -463,16 +463,10 @@ impl EventLoop {
                 self.backend.vi_selection_toggle(pane, kind)
             }
             OrzmuxCommand::Webview(command) => self.backend.webview_command(command),
-            OrzmuxCommand::CloseWorkspace { workspace } => self.backend.close_workspace(workspace),
-            OrzmuxCommand::SelectWorkspace { workspace } => {
-                self.backend.select_workspace(workspace)
-            }
-            OrzmuxCommand::RenameWorkspace { workspace, name } => {
-                self.backend.rename_workspace(workspace, name)
-            }
-            OrzmuxCommand::MoveWorkspace { workspace, index } => {
-                self.backend.move_workspace(workspace, index)
-            }
+            OrzmuxCommand::CloseTab { tab } => self.backend.close_tab(tab),
+            OrzmuxCommand::SelectTab { tab } => self.backend.select_tab(tab),
+            OrzmuxCommand::RenameTab { tab, name } => self.backend.rename_tab(tab, name),
+            OrzmuxCommand::MoveTab { tab, index } => self.backend.move_tab(tab, index),
         }
     }
 
@@ -554,7 +548,7 @@ impl EventLoop {
 
 /// Logs a command the backend refused, at the level its failure earns.
 ///
-/// An unresolvable pane or workspace target and a request the webview
+/// An unresolvable pane or tab target and a request the webview
 /// host turned down log at `DEBUG`, a refused PTY write goes through
 /// [`log_refused_write`] at `ERROR`, and every other failure logs at `WARN`.
 fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &OrzmuxError) {
@@ -571,11 +565,8 @@ fn log_refused_command(name: &'static str, target: Option<PaneTarget>, error: &O
                 tracing::debug!(command = name, "pane command dropped: no such pane");
             }
         },
-        OrzmuxError::UnresolvedWorkspace => {
-            tracing::debug!(
-                command = name,
-                "workspace command dropped: no such workspace"
-            );
+        OrzmuxError::UnresolvedTab => {
+            tracing::debug!(command = name, "tab command dropped: no such tab");
         }
         OrzmuxError::PtyWrite { pane, source } => {
             log_refused_write(*pane, name, source, Level::ERROR);
@@ -728,7 +719,7 @@ mod tests {
         );
     }
 
-    /// Asserts that `NewPane { Workspace }` before any `Resize` fails
+    /// Asserts that `NewPane { Tab }` before any `Resize` fails
     /// instead of guessing a size.
     ///
     /// Case: a misordered GUI start-up spawns before the window metrics
@@ -738,7 +729,7 @@ mod tests {
         let mut h = Harness::new();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(9),
-            at: NewPaneAt::Workspace,
+            at: NewPaneAt::Tab,
             cwd: None,
             env: vec![],
         });
@@ -763,11 +754,11 @@ mod tests {
         h.drain();
         h.send(OrzmuxCommand::NewPane {
             request: RequestId(1),
-            at: NewPaneAt::Workspace,
+            at: NewPaneAt::Tab,
             cwd: None,
             env: vec![],
         });
-        let mut events = h.drain_skipping_workspaces();
+        let mut events = h.drain_skipping_tabs();
         assert!(matches!(
             events.pop_front(),
             Some(OrzmuxEvent::PaneOpened {
@@ -1120,13 +1111,9 @@ mod tests {
         .into_bytes()
     }
 
-    /// The displayed workspace's tree.
+    /// The displayed tab's tree.
     fn displayed_tree(h: &Harness) -> &LayoutTree {
-        &h.backend()
-            .workspaces()
-            .active()
-            .expect("a displayed workspace")
-            .tree
+        &h.backend().tabs().active().expect("a displayed tab").tree
     }
 
     /// Splits the active pane and returns the new pane's id and its
@@ -1497,7 +1484,7 @@ mod tests {
             panic!("Layout must be last");
         };
         assert!(layout.panes.is_empty());
-        assert!(h.backend().workspaces().entries().is_empty());
+        assert!(h.backend().tabs().entries().is_empty());
     }
 
     /// Asserts that keyboard input reaches the active pane's PTY and that
@@ -2097,4 +2084,4 @@ mod tests {
 mod webview_tests;
 
 #[cfg(test)]
-mod workspace_tests;
+mod tab_tests;

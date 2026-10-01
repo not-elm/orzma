@@ -18,8 +18,8 @@ This guide describes orzma {{#include ../../../VERSION}}.
 - **Web pages in the terminal.** A program places web pages among its own
   text and exchanges messages with them. A Rust SDK does the protocol work
   for the program, and a TypeScript package types the page's side.
-- **Panes and workspaces.** Split the window into panes, and keep several
-  layouts as workspaces in a tab bar.
+- **Panes and tabs.** Split the window into panes, and keep several
+  layouts as tabs in a tab bar.
 - **Vi mode.** Move over the screen and the scrollback with vi keys, and
   select and copy text without the mouse.
 - **Companion apps.** `orzmd` shows Markdown and `orzbrowser` browses the web,

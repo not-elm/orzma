@@ -15,18 +15,18 @@ use crate::{
         shortcuts::{KeyEffectMessage, ShortcutSet},
     },
     session::spawn::PaneSpawnRequest,
-    ui::tab_bar::rename::StartWorkspaceRename,
+    ui::tab_bar::rename::StartTabRename,
 };
 use bevy::prelude::*;
 use bevy_orzmux::prelude::{
-    PaneAction, RequestActiveKeyInput, RequestPaneAction, RequestWorkspaceAction, WorkspaceAction,
+    PaneAction, RequestActiveKeyInput, RequestPaneAction, RequestTabAction, TabAction,
 };
 use orzma_configs::shortcuts::{
     PaneDirection as ConfigPaneDirection, Shortcut, SplitOrientation as ConfigSplitOrientation,
 };
 use orzmux::prelude::{
     CloseTarget, NewPaneAt, PaneDirection as OrzmuxPaneDirection, PaneTarget,
-    SplitOrientation as OrzmuxSplitOrientation, WorkspaceTarget,
+    SplitOrientation as OrzmuxSplitOrientation, TabTarget,
 };
 
 pub(super) struct ShortcutsApplyPlugin;
@@ -85,9 +85,9 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
 /// (fires unconditionally — vi mode included; no-selection is a no-op
 /// downstream), the font-size zoom (window-wide, so it fires even with no
 /// focused surface), the pane actions (select/split/kill/resize, targeting
-/// the backend's active pane), the workspace actions
+/// the backend's active pane), the tab actions
 /// (new/close/next/previous/select), and the rename of the displayed
-/// workspace. `Quit` and `ReleaseWebviewFocus` are handled upstream in
+/// tab. `Quit` and `ReleaseWebviewFocus` are handled upstream in
 /// `resolve_key_effects`.
 fn apply_shortcut(
     commands: &mut Commands,
@@ -129,24 +129,20 @@ fn apply_shortcut(
                 cells: PANE_RESIZE_CELLS,
             },
         }),
-        Shortcut::NewWorkspace => commands.trigger(PaneSpawnRequest {
-            at: NewPaneAt::Workspace,
+        Shortcut::NewTab => commands.trigger(PaneSpawnRequest { at: NewPaneAt::Tab }),
+        Shortcut::CloseTab => commands.trigger(RequestTabAction {
+            action: TabAction::Close(CloseTarget::Active),
         }),
-        Shortcut::CloseWorkspace => commands.trigger(RequestWorkspaceAction {
-            action: WorkspaceAction::Close(CloseTarget::Active),
+        Shortcut::NextTab => commands.trigger(RequestTabAction {
+            action: TabAction::Select(TabTarget::Next),
         }),
-        Shortcut::NextWorkspace => commands.trigger(RequestWorkspaceAction {
-            action: WorkspaceAction::Select(WorkspaceTarget::Next),
+        Shortcut::PreviousTab => commands.trigger(RequestTabAction {
+            action: TabAction::Select(TabTarget::Previous),
         }),
-        Shortcut::PreviousWorkspace => commands.trigger(RequestWorkspaceAction {
-            action: WorkspaceAction::Select(WorkspaceTarget::Previous),
+        Shortcut::SelectTab(number) => commands.trigger(RequestTabAction {
+            action: TabAction::Select(TabTarget::Index(u16::from(number.saturating_sub(1)))),
         }),
-        Shortcut::SelectWorkspace(number) => commands.trigger(RequestWorkspaceAction {
-            action: WorkspaceAction::Select(WorkspaceTarget::Index(u16::from(
-                number.saturating_sub(1),
-            ))),
-        }),
-        Shortcut::RenameWorkspace => commands.trigger(StartWorkspaceRename { workspace: None }),
+        Shortcut::RenameTab => commands.trigger(StartTabRename { tab: None }),
         Shortcut::Quit | Shortcut::ReleaseWebviewFocus => {}
     }
 }
@@ -180,7 +176,7 @@ mod tests {
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
-    use bevy_orzmux::prelude::WorkspaceId;
+    use bevy_orzmux::prelude::TabId;
     use orzma_configs::shortcuts::{FontSizeStep, Modifiers, PaneDirection, SplitOrientation};
     use orzma_tty::prelude::TerminalKey;
     use orzmux::prelude::PaneDirection as OrzmuxDirection;
@@ -567,25 +563,25 @@ mod tests {
     }
 
     #[derive(Resource, Default)]
-    struct WorkspaceRequests(Vec<WorkspaceAction>);
+    struct TabRequests(Vec<TabAction>);
 
-    /// Asserts that each workspace shortcut becomes its request.
+    /// Asserts that each tab shortcut becomes its request.
     ///
     /// Case: the user presses the leader and then c, Shift+X, ], [, and 2.
     #[test]
-    fn workspace_shortcuts_become_workspace_requests() {
+    fn tab_shortcuts_become_tab_requests() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
-        app.init_resource::<WorkspaceRequests>().add_observer(
-            |ev: On<RequestWorkspaceAction>, mut seen: ResMut<WorkspaceRequests>| {
+        app.init_resource::<TabRequests>().add_observer(
+            |ev: On<RequestTabAction>, mut seen: ResMut<TabRequests>| {
                 seen.0.push(ev.action.clone());
             },
         );
         let actions = [
-            Shortcut::NewWorkspace,
-            Shortcut::CloseWorkspace,
-            Shortcut::NextWorkspace,
-            Shortcut::PreviousWorkspace,
-            Shortcut::SelectWorkspace(2),
+            Shortcut::NewTab,
+            Shortcut::CloseTab,
+            Shortcut::NextTab,
+            Shortcut::PreviousTab,
+            Shortcut::SelectTab(2),
         ];
         dispatch(
             &mut app,
@@ -599,38 +595,38 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().resource::<Captured>().spawns,
-            vec![NewPaneAt::Workspace]
+            vec![NewPaneAt::Tab]
         );
         assert_eq!(
-            app.world().resource::<WorkspaceRequests>().0,
+            app.world().resource::<TabRequests>().0,
             vec![
-                WorkspaceAction::Close(CloseTarget::Active),
-                WorkspaceAction::Select(WorkspaceTarget::Next),
-                WorkspaceAction::Select(WorkspaceTarget::Previous),
-                WorkspaceAction::Select(WorkspaceTarget::Index(1)),
+                TabAction::Close(CloseTarget::Active),
+                TabAction::Select(TabTarget::Next),
+                TabAction::Select(TabTarget::Previous),
+                TabAction::Select(TabTarget::Index(1)),
             ]
         );
     }
 
     #[derive(Resource, Default)]
-    struct RenameStarts(Vec<Option<WorkspaceId>>);
+    struct RenameStarts(Vec<Option<TabId>>);
 
-    /// Asserts that the rename-workspace shortcut starts renaming the
-    /// displayed workspace.
+    /// Asserts that the rename-tab shortcut starts renaming the
+    /// displayed tab.
     ///
     /// Case: the user presses the leader and then r to rename the tab on
     /// screen.
     #[test]
-    fn the_rename_shortcut_starts_renaming_the_displayed_workspace() {
+    fn the_rename_shortcut_starts_renaming_the_displayed_tab() {
         let (mut app, term) = dispatch_app(Shortcuts::default());
         app.init_resource::<RenameStarts>().add_observer(
-            |ev: On<StartWorkspaceRename>, mut seen: ResMut<RenameStarts>| {
-                seen.0.push(ev.workspace);
+            |ev: On<StartTabRename>, mut seen: ResMut<RenameStarts>| {
+                seen.0.push(ev.tab);
             },
         );
         dispatch(
             &mut app,
-            vec![action_effect(Shortcut::RenameWorkspace, true)],
+            vec![action_effect(Shortcut::RenameTab, true)],
             Some(term),
             false,
         );

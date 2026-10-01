@@ -1110,8 +1110,8 @@ fn a_socket_focus_moves_focus_to_an_owned_mount() {
 /// screen is refused before focus moves, so the page on screen keeps focus
 /// and neither program is told anything.
 ///
-/// Case: a program in a background workspace focuses its page while the
-/// user types in a page of the displayed workspace.
+/// Case: a program in a background tab focuses its page while the
+/// user types in a page of the displayed tab.
 #[test]
 fn a_socket_focus_of_a_hidden_pane_is_refused_before_focus_moves() {
     let (mut fixture, _hidden_handle, hidden_instance, _hidden_mount) = focused_fixture();

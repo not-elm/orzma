@@ -348,7 +348,7 @@ mod validate_tests {
     /// fails validation, naming both actions.
     ///
     /// Case: a user bound the vertical split to `Alt+c` before `Alt+c` became
-    /// the stock new-workspace chord.
+    /// the stock new-tab chord.
     #[test]
     fn a_custom_binding_on_a_new_stock_alt_chord_fails_validation() {
         let toml_str = "[shortcuts]\nsplit-vertical-pane = \"Alt+c\"\n";
@@ -356,7 +356,7 @@ mod validate_tests {
             OrzmaConfigsError::DuplicateChords(dupes) => {
                 assert_eq!(dupes.len(), 1);
                 assert!(dupes[0].actions.contains(&"split-vertical-pane"));
-                assert!(dupes[0].actions.contains(&"new-workspace"));
+                assert!(dupes[0].actions.contains(&"new-tab"));
             }
             other => panic!("expected DuplicateChords, got {other:?}"),
         }

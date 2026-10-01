@@ -332,15 +332,15 @@ impl Harness {
     pub fn open_root(&mut self) -> (PaneId, FakePane) {
         self.resize(GridSize::new(80, 24).expect("a valid size"));
         self.drain();
-        self.open_workspace(RequestId(1))
+        self.open_tab(RequestId(1))
     }
 
-    /// Opens a new workspace whose first pane answers `request`, and
+    /// Opens a new tab whose first pane answers `request`, and
     /// returns the pane with its test ends. The events are drained.
-    pub fn open_workspace(&mut self, request: RequestId) -> (PaneId, FakePane) {
+    pub fn open_tab(&mut self, request: RequestId) -> (PaneId, FakePane) {
         self.send(OrzmuxCommand::NewPane {
             request,
-            at: NewPaneAt::Workspace,
+            at: NewPaneAt::Tab,
             cwd: None,
             env: vec![],
         });
@@ -351,12 +351,12 @@ impl Harness {
         (*pane, self.panes.try_recv().expect("one spawned pane"))
     }
 
-    /// Like [`drain`](Self::drain), without the `Workspaces` snapshots,
+    /// Like [`drain`](Self::drain), without the `Tabs` snapshots,
     /// for a test that pins the order of the other events.
-    pub fn drain_skipping_workspaces(&mut self) -> VecDeque<OrzmuxEvent> {
+    pub fn drain_skipping_tabs(&mut self) -> VecDeque<OrzmuxEvent> {
         self.drain()
             .into_iter()
-            .filter(|event| !matches!(event, OrzmuxEvent::Workspaces { .. }))
+            .filter(|event| !matches!(event, OrzmuxEvent::Tabs { .. }))
             .collect()
     }
 

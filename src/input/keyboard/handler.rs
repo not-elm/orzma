@@ -13,7 +13,7 @@ use crate::input::shortcuts::{
     HeldRepeatKey, KeyEffectMessage, LeaderGate, LeaderPhase, ShortcutSet, Shortcuts,
     clear_leader_phase,
 };
-use crate::ui::tab_bar::rename::WorkspaceRename;
+use crate::ui::tab_bar::rename::TabRename;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -69,7 +69,7 @@ fn resolve_key_effects(
     mut held_repeat: ResMut<HeldRepeatKey>,
     mut messages: MessageWriter<KeyEffectMessage>,
     ime: Res<ImeState>,
-    rename: Option<Res<WorkspaceRename>>,
+    rename: Option<Res<TabRename>>,
     focused_webview: Res<FocusedWebview>,
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -79,7 +79,7 @@ fn resolve_key_effects(
     forward_keys: Query<&ForwardKeys>,
 ) {
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    let renaming = rename.as_deref().is_some_and(WorkspaceRename::is_active);
+    let renaming = rename.as_deref().is_some_and(TabRename::is_active);
     if ime.is_composing() || !focused_window || renaming {
         clear_leader_phase(&mut leader_phase);
         if held_repeat.0.is_some() {
@@ -179,7 +179,7 @@ mod tests {
     use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy_orzma_webview::{ChordKey, NormalizedChord};
-    use bevy_orzmux::prelude::WorkspaceId;
+    use bevy_orzmux::prelude::TabId;
     use orzma_configs::keyboard::OptionAsAlt;
     use orzma_configs::shortcuts::{FontSizeStep, Modifiers, PaneDirection};
     use orzma_vt::prelude::{GridColumn, GridLine, GridPoint, SelectionGeometry, SelectionRange};
@@ -354,7 +354,7 @@ mod tests {
             Duration::ZERO,
         ));
         app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
-        app.insert_resource(WorkspaceRename::active_for_test(WorkspaceId(1)));
+        app.insert_resource(TabRename::active_for_test(TabId(1)));
         *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
         press_key(&mut app, KeyCode::KeyH, Key::Character("h".into()));
         press_key(&mut app, KeyCode::Enter, Key::Enter);

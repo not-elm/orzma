@@ -1,5 +1,5 @@
 //! The built-in terminal multiplexer backend: a Bevy-free thread that
-//! owns every pane's PTY and VT plus the workspaces' cell-unit layout
+//! owns every pane's PTY and VT plus the tabs' cell-unit layout
 //! trees, and talks to the GUI over channels with plain-data commands and
 //! events.
 
@@ -11,11 +11,11 @@ pub(crate) mod event_loop;
 pub(crate) mod test_support;
 
 pub mod prelude {
-    pub use crate::backend::workspace::Workspace;
+    pub use crate::backend::tab::Tab;
     pub use crate::backend::{
         CloseReason, CloseTarget, CommandSeq, Layout, NewPaneAt, OrzmuxEvent, PaneDirection,
-        PaneId, PaneRect, PaneTarget, RequestId, Separator, SplitId, SplitOrientation,
-        WorkspaceEntry, WorkspaceId, WorkspaceTarget,
+        PaneId, PaneRect, PaneTarget, RequestId, Separator, SplitId, SplitOrientation, TabEntry,
+        TabId, TabTarget,
     };
     pub use crate::client::{OrzmuxClient, OrzmuxConfig};
     pub use crate::error::{OrzmuxError, OrzmuxResult};

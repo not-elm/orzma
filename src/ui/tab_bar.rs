@@ -1,19 +1,19 @@
-//! The workspace tab bar across the top of the window: its node, its
+//! The tab bar across the top of the window: its node, its
 //! height, and the tabs it lists.
 
 use crate::font::TerminalUiFont;
 use crate::session::spawn::PaneSpawnRequest;
 use crate::ui::UiRoot;
 use crate::ui::tab_bar::drag::{TabDrag, TabDragPlugin};
-use crate::ui::tab_bar::rename::{StartWorkspaceRename, TabRenamePlugin, WorkspaceRename};
+use crate::ui::tab_bar::rename::{StartTabRename, TabRename, TabRenamePlugin};
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy::ui_widgets::{ScrollArea, ScrollIntoView};
 use bevy::window::{PrimaryWindow, WindowScaleFactorChanged};
 use bevy_orzmux::prelude::{
-    CloseTarget, CurrentWorkspaces, OrzmuxSystems, RequestWorkspaceAction, WorkspaceAction,
-    WorkspaceEntry, WorkspaceId, WorkspaceTarget,
+    CloseTarget, CurrentTabs, OrzmuxSystems, RequestTabAction, TabAction, TabEntry, TabId,
+    TabTarget,
 };
 use orzmux::prelude::NewPaneAt;
 use std::collections::HashMap;
@@ -31,19 +31,19 @@ pub(crate) enum TabBarSystems {
     Style,
 }
 
-/// The workspace tab bar's root node, the first child of `UiRoot`.
+/// The tab bar's root node, the first child of `UiRoot`.
 #[derive(Component)]
 pub(crate) struct TabBar;
 
-/// The scroll container the tabs and the new-workspace button live in.
+/// The scroll container the tabs and the new-tab button live in.
 #[derive(Component)]
 pub(crate) struct TabStrip;
 
-/// One workspace's tab.
+/// The button that stands for one tab in the tab bar.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct WorkspaceTab {
-    /// The workspace the tab stands for.
-    pub workspace: WorkspaceId,
+pub(crate) struct TabButton {
+    /// The tab the button stands for.
+    pub id: TabId,
 }
 
 /// A tab's label: a direct child of the tab that holds the label text and
@@ -52,7 +52,7 @@ pub(crate) struct WorkspaceTab {
 pub(crate) struct TabLabel;
 
 /// Spawns the tab bar, keeps its height on whole physical pixels, and
-/// keeps one clickable tab per workspace in it.
+/// keeps one clickable button per tab in it.
 pub(crate) struct TabBarPlugin;
 
 impl Plugin for TabBarPlugin {
@@ -73,15 +73,15 @@ impl Plugin for TabBarPlugin {
                         .before(TabBarSystems::Reconcile),
                     size_tab_bar.run_if(on_message::<WindowScaleFactorChanged>),
                     reconcile_tabs.in_set(TabBarSystems::Reconcile).run_if(
-                        resource_exists_and_changed::<CurrentWorkspaces>
+                        resource_exists_and_changed::<CurrentTabs>
                             .or_else(any_match_filter::<Added<TabStrip>>)
                             .or_else(resource_exists_and_changed::<TabDrag>),
                     ),
                     style_tabs.in_set(TabBarSystems::Style).run_if(
-                        resource_exists_and_changed::<CurrentWorkspaces>
+                        resource_exists_and_changed::<CurrentTabs>
                             .or_else(any_match_filter::<Added<TabHovered>>)
                             .or_else(any_component_removed::<TabHovered>)
-                            .or_else(any_match_filter::<Added<WorkspaceTab>>),
+                            .or_else(any_match_filter::<Added<TabButton>>),
                     ),
                 ),
             )
@@ -89,7 +89,7 @@ impl Plugin for TabBarPlugin {
                 PostUpdate,
                 scroll_active_tab_into_view
                     .after(UiSystems::Layout)
-                    .run_if(resource_exists_and_changed::<CurrentWorkspaces>),
+                    .run_if(resource_exists_and_changed::<CurrentTabs>),
             );
     }
 }
@@ -100,22 +100,19 @@ pub(crate) fn tab_bar_height_phys(scale_factor: f32) -> u32 {
 }
 
 /// The text a tab shows at zero-based `position`: its name, or
-/// `Workspace {position + 1}`.
+/// `Tab {position + 1}`.
 pub(crate) fn tab_label(position: usize, name: Option<&str>) -> String {
     match name {
         Some(name) => name.to_string(),
-        None => format!("Workspace {}", position + 1),
+        None => format!("Tab {}", position + 1),
     }
 }
 
-/// The workspace ids in the order the tabs show them: the backend's order,
+/// The tab ids in the order the tabs show them: the backend's order,
 /// with a dragged or just-dropped tab moved to its slot. A slot past the
 /// end puts the tab last.
-pub(crate) fn tab_order(
-    entries: &[WorkspaceEntry],
-    preview: Option<(WorkspaceId, usize)>,
-) -> Vec<WorkspaceId> {
-    let mut order: Vec<WorkspaceId> = entries.iter().map(|entry| entry.id).collect();
+pub(crate) fn tab_order(entries: &[TabEntry], preview: Option<(TabId, usize)>) -> Vec<TabId> {
+    let mut order: Vec<TabId> = entries.iter().map(|entry| entry.id).collect();
     if let Some((dragged, slot)) = preview
         && let Some(from) = order.iter().position(|id| *id == dragged)
     {
@@ -138,7 +135,7 @@ const ACTIVE_BG: Color = Color::srgb_u8(0x7c, 0x3a, 0xed);
 /// The displayed tab's text.
 const ACTIVE_TEXT: Color = Color::srgb_u8(0xff, 0xff, 0xff);
 /// The text of the other tabs, of their close buttons, and of the
-/// new-workspace button.
+/// new-tab button.
 const INACTIVE_TEXT: Color = Color::srgb_u8(0x8c, 0x8c, 0x98);
 /// The background of a hovered tab that is not displayed.
 const HOVER_BG: Color = Color::srgb_u8(0x3e, 0x2e, 0x66);
@@ -153,9 +150,9 @@ struct TabLabelText;
 #[derive(Component)]
 struct TabClose;
 
-/// The new-workspace button.
+/// The new-tab button.
 #[derive(Component)]
-struct NewWorkspaceButton;
+struct NewTabButton;
 
 /// Marks a tab under the pointer.
 #[derive(Component)]
@@ -213,9 +210,9 @@ fn ensure_tab_bar(
 }
 
 /// Spawns the horizontally scrolling strip under `bar`, holding only the
-/// new-workspace button.
+/// new-tab button.
 fn spawn_tab_strip(commands: &mut Commands, bar: Entity, font: &TextFont) {
-    /// The width of the new-workspace button, in logical px.
+    /// The width of the new-tab button, in logical px.
     const NEW_BUTTON_WIDTH_PX: f32 = 36.0;
 
     let strip = commands
@@ -237,7 +234,7 @@ fn spawn_tab_strip(commands: &mut Commands, bar: Entity, font: &TextFont) {
         .id();
     commands
         .spawn((
-            NewWorkspaceButton,
+            NewTabButton,
             Node {
                 width: Val::Px(NEW_BUTTON_WIDTH_PX),
                 flex_shrink: 0.0,
@@ -248,7 +245,7 @@ fn spawn_tab_strip(commands: &mut Commands, bar: Entity, font: &TextFont) {
             ChildOf(strip),
         ))
         .with_child((Text::new("+"), font.clone(), TextColor(INACTIVE_TEXT)))
-        .observe(on_new_workspace_click);
+        .observe(on_new_tab_click);
 }
 
 /// Re-applies the bar's height after the window's scale factor changes.
@@ -267,31 +264,31 @@ fn size_tab_bar(
     }
 }
 
-/// Spawns a tab for each new workspace, despawns the tabs of closed ones,
+/// Spawns a button for each new tab, despawns the buttons of closed ones,
 /// and orders the strip's children and numbers the labels as `tab_order`
-/// says with the drag's preview, keeping the new-workspace button last.
+/// says with the drag's preview, keeping the new-tab button last.
 fn reconcile_tabs(
     mut commands: Commands,
     mut labels: Query<&mut Text, With<TabLabelText>>,
-    workspaces: Res<CurrentWorkspaces>,
+    tabs: Res<CurrentTabs>,
     drag: Res<TabDrag>,
     ui_font: Option<Res<TerminalUiFont>>,
-    tabs: Query<(Entity, &WorkspaceTab, Option<&Children>)>,
+    buttons: Query<(Entity, &TabButton, Option<&Children>)>,
     label_boxes: Query<&Children, With<TabLabel>>,
     strip: Query<(Entity, Option<&Children>), With<TabStrip>>,
-    plus: Query<Entity, With<NewWorkspaceButton>>,
+    plus: Query<Entity, With<NewTabButton>>,
 ) {
     let Ok((strip, strip_children)) = strip.single() else {
         return;
     };
-    let order = tab_order(&workspaces.entries, drag.preview());
-    let mut by_id: HashMap<WorkspaceId, Entity> = HashMap::new();
-    for (entity, tab, parts) in &tabs {
-        let Some(position) = order.iter().position(|id| *id == tab.workspace) else {
+    let order = tab_order(&tabs.entries, drag.preview());
+    let mut by_id: HashMap<TabId, Entity> = HashMap::new();
+    for (entity, tab, parts) in &buttons {
+        let Some(position) = order.iter().position(|id| *id == tab.id) else {
             commands.entity(entity).despawn();
             continue;
         };
-        let label = tab_label(position, workspace_name(&workspaces.entries, tab.workspace));
+        let label = tab_label(position, tab_name(&tabs.entries, tab.id));
         let texts = parts
             .into_iter()
             .flat_map(|parts| label_texts(parts, &label_boxes));
@@ -302,14 +299,14 @@ fn reconcile_tabs(
                 text.0.clone_from(&label);
             }
         }
-        by_id.insert(tab.workspace, entity);
+        by_id.insert(tab.id, entity);
     }
     let font = tab_font(ui_font.as_deref());
     for (position, id) in order.iter().enumerate() {
         if by_id.contains_key(id) {
             continue;
         }
-        let label = tab_label(position, workspace_name(&workspaces.entries, *id));
+        let label = tab_label(position, tab_name(&tabs.entries, *id));
         let tab = spawn_tab(&mut commands, strip, *id, label, &font);
         by_id.insert(*id, tab);
     }
@@ -328,7 +325,7 @@ fn reconcile_tabs(
 fn spawn_tab(
     commands: &mut Commands,
     strip: Entity,
-    workspace: WorkspaceId,
+    tab: TabId,
     label: String,
     font: &TextFont,
 ) -> Entity {
@@ -339,7 +336,7 @@ fn spawn_tab(
 
     let tab = commands
         .spawn((
-            WorkspaceTab { workspace },
+            TabButton { id: tab },
             Node {
                 flex_grow: 1.0,
                 flex_basis: Val::Px(TAB_MAX_WIDTH_PX),
@@ -393,9 +390,9 @@ fn spawn_tab(
     tab
 }
 
-/// The name of workspace `id` among `entries`; `None` when it has none or
+/// The name of tab `id` among `entries`; `None` when it has none or
 /// is not listed.
-fn workspace_name(entries: &[WorkspaceEntry], id: WorkspaceId) -> Option<&str> {
+fn tab_name(entries: &[TabEntry], id: TabId) -> Option<&str> {
     entries
         .iter()
         .find(|entry| entry.id == id)
@@ -417,19 +414,14 @@ fn label_texts<'a>(
 /// label and close button for whether its tab is displayed, and shows the
 /// close button on the displayed tab and on a hovered one.
 fn style_tabs(
-    mut tabs: Query<(
-        &WorkspaceTab,
-        &mut BackgroundColor,
-        &Children,
-        Has<TabHovered>,
-    )>,
+    mut buttons: Query<(&TabButton, &mut BackgroundColor, &Children, Has<TabHovered>)>,
     mut labels: Query<&mut TextColor, With<TabLabelText>>,
     mut closes: Query<(&mut Node, &mut TextColor), (With<TabClose>, Without<TabLabelText>)>,
-    workspaces: Res<CurrentWorkspaces>,
+    tabs: Res<CurrentTabs>,
     label_boxes: Query<&Children, With<TabLabel>>,
 ) {
-    for (tab, mut background, parts, hovered) in &mut tabs {
-        let displayed = workspaces.active == Some(tab.workspace);
+    for (tab, mut background, parts, hovered) in &mut buttons {
+        let displayed = tabs.active == Some(tab.id);
         let (fill, text, close_text) = if displayed {
             (ACTIVE_BG, ACTIVE_TEXT, ACTIVE_CLOSE)
         } else if hovered {
@@ -460,33 +452,31 @@ fn style_tabs(
     }
 }
 
-/// A primary click on a tab requests that its workspace be displayed, and
+/// A primary click on a tab requests that its tab be displayed, and
 /// a primary double-click starts renaming it instead; a click that ends a
 /// drag of that tab, or lands on a tab being renamed, does nothing.
 fn on_tab_click(
     ev: On<Pointer<Click>>,
     mut commands: Commands,
-    tabs: Query<&WorkspaceTab>,
+    buttons: Query<&TabButton>,
     drag: Res<TabDrag>,
-    rename: Res<WorkspaceRename>,
+    rename: Res<TabRename>,
 ) {
     if ev.button != PointerButton::Primary {
         return;
     }
-    let Ok(tab) = tabs.get(ev.entity) else {
+    let Ok(tab) = buttons.get(ev.entity) else {
         return;
     };
-    if drag.is_dragging(tab.workspace) || rename.workspace() == Some(tab.workspace) {
+    if drag.is_dragging(tab.id) || rename.tab() == Some(tab.id) {
         return;
     }
     if ev.count == 2 {
-        commands.trigger(StartWorkspaceRename {
-            workspace: Some(tab.workspace),
-        });
+        commands.trigger(StartTabRename { tab: Some(tab.id) });
         return;
     }
-    commands.trigger(RequestWorkspaceAction {
-        action: WorkspaceAction::Select(WorkspaceTarget::Id(tab.workspace)),
+    commands.trigger(RequestTabAction {
+        action: TabAction::Select(TabTarget::Id(tab.id)),
     });
 }
 
@@ -496,7 +486,7 @@ fn on_close_click(
     mut ev: On<Pointer<Click>>,
     mut commands: Commands,
     parents: Query<&ChildOf>,
-    tabs: Query<&WorkspaceTab>,
+    buttons: Query<&TabButton>,
     drag: Res<TabDrag>,
 ) {
     ev.propagate(false);
@@ -506,24 +496,22 @@ fn on_close_click(
     let Some(tab) = parents
         .get(ev.entity)
         .ok()
-        .and_then(|parent| tabs.get(parent.parent()).ok())
+        .and_then(|parent| buttons.get(parent.parent()).ok())
     else {
         return;
     };
-    if drag.is_dragging(tab.workspace) {
+    if drag.is_dragging(tab.id) {
         return;
     }
-    commands.trigger(RequestWorkspaceAction {
-        action: WorkspaceAction::Close(CloseTarget::Id(tab.workspace)),
+    commands.trigger(RequestTabAction {
+        action: TabAction::Close(CloseTarget::Id(tab.id)),
     });
 }
 
-/// A primary click on the plus button requests a new workspace.
-fn on_new_workspace_click(ev: On<Pointer<Click>>, mut commands: Commands) {
+/// A primary click on the plus button requests a new tab.
+fn on_new_tab_click(ev: On<Pointer<Click>>, mut commands: Commands) {
     if ev.button == PointerButton::Primary {
-        commands.trigger(PaneSpawnRequest {
-            at: NewPaneAt::Workspace,
-        });
+        commands.trigger(PaneSpawnRequest { at: NewPaneAt::Tab });
     }
 }
 
@@ -561,22 +549,22 @@ fn scroll_strip_vertically(
     }
 }
 
-/// Scrolls the strip so the displayed workspace's tab is fully visible
-/// when the displayed workspace changes; a list change that keeps the same
-/// workspace displayed leaves the scroll position alone.
+/// Scrolls the strip so the displayed tab is fully visible
+/// when the displayed tab changes; a list change that keeps the same
+/// tab displayed leaves the scroll position alone.
 fn scroll_active_tab_into_view(
     mut commands: Commands,
-    mut scrolled_to: Local<Option<WorkspaceId>>,
-    workspaces: Res<CurrentWorkspaces>,
-    tabs: Query<(Entity, &WorkspaceTab)>,
+    mut scrolled_to: Local<Option<TabId>>,
+    tabs: Res<CurrentTabs>,
+    buttons: Query<(Entity, &TabButton)>,
 ) {
-    let Some(active) = workspaces.active else {
+    let Some(active) = tabs.active else {
         return;
     };
     if *scrolled_to == Some(active) {
         return;
     }
-    if let Some((entity, _)) = tabs.iter().find(|(_, tab)| tab.workspace == active) {
+    if let Some((entity, _)) = buttons.iter().find(|(_, tab)| tab.id == active) {
         *scrolled_to = Some(active);
         commands.trigger(ScrollIntoView { entity });
     }
@@ -594,7 +582,7 @@ mod tests {
     use bevy::text::{EditableText, TextCursorStyle};
     use bevy::ui::CalculatedClip;
     use bevy::ui::update::update_clipping_system;
-    use bevy_orzmux::prelude::PendingWorkspaceMove;
+    use bevy_orzmux::prelude::PendingTabMove;
     use orzmux::prelude::CommandSeq;
     use std::fmt::Debug;
     use std::time::Duration;
@@ -602,7 +590,7 @@ mod tests {
     /// A request the tab bar sent, in the order it was sent.
     #[derive(Debug, PartialEq)]
     enum Sent {
-        Workspace(WorkspaceAction),
+        Tab(TabAction),
         Spawn(NewPaneAt),
     }
 
@@ -612,22 +600,22 @@ mod tests {
     fn app_with_tab_bar() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TabBarPlugin))
-            .init_resource::<CurrentWorkspaces>()
+            .init_resource::<CurrentTabs>()
             .init_resource::<InputFocus>();
         app.world_mut().spawn((Node::default(), UiRoot));
         app
     }
 
-    fn set_workspaces(app: &mut App, ids: &[u32], active: u32) {
-        let mut workspaces = app.world_mut().resource_mut::<CurrentWorkspaces>();
-        workspaces.entries = ids
+    fn set_tabs(app: &mut App, ids: &[u32], active: u32) {
+        let mut tabs = app.world_mut().resource_mut::<CurrentTabs>();
+        tabs.entries = ids
             .iter()
-            .map(|id| WorkspaceEntry {
-                id: WorkspaceId(*id),
+            .map(|id| TabEntry {
+                id: TabId(*id),
                 name: None,
             })
             .collect();
-        workspaces.active = Some(WorkspaceId(active));
+        tabs.active = Some(TabId(active));
     }
 
     fn strip_children(app: &mut App) -> Vec<Entity> {
@@ -640,18 +628,18 @@ mod tests {
     }
 
     /// The strip's tabs in child order, each with its label text.
-    fn listed_tabs(app: &mut App) -> Vec<(WorkspaceId, String)> {
+    fn listed_tabs(app: &mut App) -> Vec<(TabId, String)> {
         let children = strip_children(app);
         let world = app.world();
         children
             .iter()
             .filter_map(|child| {
-                let tab = world.get::<WorkspaceTab>(*child)?;
+                let tab = world.get::<TabButton>(*child)?;
                 let label = world
                     .get::<Children>(label_box_in(world, *child))?
                     .iter()
                     .find_map(|text| world.get::<Text>(text))?;
-                Some((tab.workspace, label.0.clone()))
+                Some((tab.id, label.0.clone()))
             })
             .collect()
     }
@@ -679,14 +667,14 @@ mod tests {
         ));
     }
 
-    fn tab_of(app: &mut App, workspace: u32) -> Entity {
+    fn tab_of(app: &mut App, tab: u32) -> Entity {
         let world = app.world_mut();
         world
-            .query::<(Entity, &WorkspaceTab)>()
+            .query::<(Entity, &TabButton)>()
             .iter(world)
-            .find(|(_, tab)| tab.workspace == WorkspaceId(workspace))
+            .find(|(_, button)| button.id == TabId(tab))
             .map(|(entity, _)| entity)
-            .expect("the workspace has a tab")
+            .expect("the tab has a tab")
     }
 
     fn close_button_of(app: &mut App, tab: Entity) -> Entity {
@@ -699,21 +687,19 @@ mod tests {
             .expect("the tab has a close button")
     }
 
-    fn new_workspace_button(app: &mut App) -> Entity {
+    fn new_tab_button(app: &mut App) -> Entity {
         let world = app.world_mut();
         world
-            .query_filtered::<Entity, With<NewWorkspaceButton>>()
+            .query_filtered::<Entity, With<NewTabButton>>()
             .single(world)
-            .expect("exactly one new-workspace button")
+            .expect("exactly one new-tab button")
     }
 
     fn record_requests(app: &mut App) {
         app.init_resource::<SentRequests>()
-            .add_observer(
-                |ev: On<RequestWorkspaceAction>, mut sent: ResMut<SentRequests>| {
-                    sent.0.push(Sent::Workspace(ev.action.clone()));
-                },
-            )
+            .add_observer(|ev: On<RequestTabAction>, mut sent: ResMut<SentRequests>| {
+                sent.0.push(Sent::Tab(ev.action.clone()));
+            })
             .add_observer(|ev: On<PaneSpawnRequest>, mut sent: ResMut<SentRequests>| {
                 sent.0.push(Sent::Spawn(ev.at));
             });
@@ -794,9 +780,9 @@ mod tests {
         pointer_at(entity, x, event)
     }
 
-    fn expected_tabs(tabs: &[(u32, &str)]) -> Vec<(WorkspaceId, String)> {
+    fn expected_tabs(tabs: &[(u32, &str)]) -> Vec<(TabId, String)> {
         tabs.iter()
-            .map(|(id, label)| (WorkspaceId(*id), (*label).to_string()))
+            .map(|(id, label)| (TabId(*id), (*label).to_string()))
             .collect()
     }
 
@@ -814,75 +800,75 @@ mod tests {
         pointer_at(entity, 0.0, event)
     }
 
-    /// Asserts that an unnamed tab shows `Workspace n` by position and a
+    /// Asserts that an unnamed tab shows `Tab n` by position and a
     /// named tab shows its name.
     ///
     /// Case: the user renamed the second of three tabs.
     #[test]
     fn labels_follow_the_position_unless_named() {
-        assert_eq!(tab_label(0, None), "Workspace 1");
+        assert_eq!(tab_label(0, None), "Tab 1");
         assert_eq!(tab_label(1, Some("logs")), "logs");
-        assert_eq!(tab_label(2, None), "Workspace 3");
+        assert_eq!(tab_label(2, None), "Tab 3");
     }
 
-    /// Asserts that one tab per workspace exists in display order, and
-    /// that a closed workspace's tab is removed.
+    /// Asserts that one button per tab exists in display order, and
+    /// that a closed tab is removed.
     ///
-    /// Case: the user opens three workspaces, then closes the middle one.
+    /// Case: the user opens three tabs, then closes the middle one.
     #[test]
-    fn tabs_follow_the_workspace_list() {
+    fn tabs_follow_the_tab_list() {
         let mut app = app_with_tab_bar();
-        set_workspaces(&mut app, &[1, 2, 3], 1);
+        set_tabs(&mut app, &[1, 2, 3], 1);
         app.update();
         app.update();
 
         assert_eq!(
             listed_tabs(&mut app),
             vec![
-                (WorkspaceId(1), "Workspace 1".to_string()),
-                (WorkspaceId(2), "Workspace 2".to_string()),
-                (WorkspaceId(3), "Workspace 3".to_string()),
+                (TabId(1), "Tab 1".to_string()),
+                (TabId(2), "Tab 2".to_string()),
+                (TabId(3), "Tab 3".to_string()),
             ]
         );
-        let plus = new_workspace_button(&mut app);
+        let plus = new_tab_button(&mut app);
         assert_eq!(strip_children(&mut app).last(), Some(&plus));
 
-        set_workspaces(&mut app, &[1, 3], 1);
+        set_tabs(&mut app, &[1, 3], 1);
         app.update();
 
         assert_eq!(
             listed_tabs(&mut app),
             vec![
-                (WorkspaceId(1), "Workspace 1".to_string()),
-                (WorkspaceId(3), "Workspace 2".to_string()),
+                (TabId(1), "Tab 1".to_string()),
+                (TabId(3), "Tab 2".to_string()),
             ]
         );
         assert_eq!(strip_children(&mut app).last(), Some(&plus));
         let world = app.world_mut();
         assert_eq!(
-            world.query::<&WorkspaceTab>().iter(world).count(),
+            world.query::<&TabButton>().iter(world).count(),
             2,
-            "the closed workspace's tab is despawned"
+            "the closed tab is despawned"
         );
     }
 
     /// Asserts that clicking a tab requests its selection, clicking its
     /// close button requests its close without also selecting it, and the
-    /// plus button requests a new workspace.
+    /// plus button requests a new tab.
     ///
     /// Case: the user clicks the second tab, then the first tab's ×, then +.
     #[test]
-    fn clicks_become_workspace_requests() {
+    fn clicks_become_tab_requests() {
         let mut app = app_with_tab_bar();
         record_requests(&mut app);
-        set_workspaces(&mut app, &[1, 2], 1);
+        set_tabs(&mut app, &[1, 2], 1);
         app.update();
         app.update();
 
         let second = tab_of(&mut app, 2);
         let first = tab_of(&mut app, 1);
         let close_first = close_button_of(&mut app, first);
-        let plus = new_workspace_button(&mut app);
+        let plus = new_tab_button(&mut app);
         app.world_mut().trigger(click(second));
         app.world_mut().trigger(click(close_first));
         app.world_mut().trigger(click(plus));
@@ -891,9 +877,9 @@ mod tests {
         assert_eq!(
             app.world().resource::<SentRequests>().0,
             vec![
-                Sent::Workspace(WorkspaceAction::Select(WorkspaceTarget::Id(WorkspaceId(2)))),
-                Sent::Workspace(WorkspaceAction::Close(CloseTarget::Id(WorkspaceId(1)))),
-                Sent::Spawn(NewPaneAt::Workspace),
+                Sent::Tab(TabAction::Select(TabTarget::Id(TabId(2)))),
+                Sent::Tab(TabAction::Close(CloseTarget::Id(TabId(1)))),
+                Sent::Spawn(NewPaneAt::Tab),
             ]
         );
     }
@@ -903,12 +889,12 @@ mod tests {
     /// on the displayed and the hovered tab only, lighter on the displayed
     /// one.
     ///
-    /// Case: three workspaces are open with the first on screen, and the
+    /// Case: three tabs are open with the first on screen, and the
     /// pointer rests on the second tab.
     #[test]
     fn the_displayed_and_hovered_tabs_are_filled_with_a_close() {
         let mut app = app_with_tab_bar();
-        set_workspaces(&mut app, &[1, 2, 3], 1);
+        set_tabs(&mut app, &[1, 2, 3], 1);
         app.update();
         app.update();
         let tabs = [1, 2, 3].map(|id| tab_of(&mut app, id));
@@ -939,17 +925,17 @@ mod tests {
     /// light.
     ///
     /// Case: the pointer rests on the first tab while the user switches to
-    /// the second workspace with a key binding.
+    /// the second tab with a key binding.
     #[test]
     fn the_close_follows_the_displayed_tab() {
         let mut app = app_with_tab_bar();
-        set_workspaces(&mut app, &[1, 2], 1);
+        set_tabs(&mut app, &[1, 2], 1);
         app.update();
         app.update();
         let tabs = [1, 2].map(|id| tab_of(&mut app, id));
         let closes = tabs.map(|tab| close_button_of(&mut app, tab));
         app.world_mut().entity_mut(tabs[0]).insert(TabHovered);
-        set_workspaces(&mut app, &[1, 2], 2);
+        set_tabs(&mut app, &[1, 2], 2);
         app.update();
 
         let world = app.world();
@@ -969,7 +955,7 @@ mod tests {
     fn a_double_click_opens_the_rename_field_in_place_of_the_label() {
         let mut app = app_with_tab_bar();
         record_requests(&mut app);
-        set_workspaces(&mut app, &[1, 2], 2);
+        set_tabs(&mut app, &[1, 2], 2);
         app.update();
         app.update();
         let second = tab_of(&mut app, 2);
@@ -991,7 +977,7 @@ mod tests {
             world
                 .get::<EditableText>(field)
                 .map(|text| text.value().to_string()),
-            Some("Workspace 2".to_string())
+            Some("Tab 2".to_string())
         );
         assert_eq!(parts[1], label_box);
         assert_eq!(
@@ -1004,10 +990,7 @@ mod tests {
             .expect("the rename field draws a caret and a selection");
         assert_eq!(cursor.color, ACTIVE_TEXT);
         assert_ne!(cursor.selection_color, Color::NONE);
-        assert_eq!(
-            world.resource::<WorkspaceRename>().workspace(),
-            Some(WorkspaceId(2))
-        );
+        assert_eq!(world.resource::<TabRename>().tab(), Some(TabId(2)));
         assert!(world.resource::<SentRequests>().0.is_empty());
     }
 
@@ -1018,7 +1001,7 @@ mod tests {
     #[test]
     fn a_drag_inside_the_rename_field_moves_no_tab() {
         let mut app = app_with_tab_bar();
-        set_workspaces(&mut app, &[1, 2], 2);
+        set_tabs(&mut app, &[1, 2], 2);
         app.update();
         app.update();
         lay_out_strip(&mut app, &[1, 2]);
@@ -1034,7 +1017,7 @@ mod tests {
         app.world_mut().trigger(drag_to(field, 190.0, 60.0));
         app.update();
 
-        assert!(!app.world().resource::<TabDrag>().tracks(WorkspaceId(2)));
+        assert!(!app.world().resource::<TabDrag>().tracks(TabId(2)));
     }
 
     /// Asserts that a tab's label text is clipped horizontally at the edges
@@ -1046,7 +1029,7 @@ mod tests {
     #[test]
     fn a_long_label_is_clipped_at_its_label_box() {
         let mut app = app_with_tab_bar();
-        set_workspaces(&mut app, &[1], 1);
+        set_tabs(&mut app, &[1], 1);
         app.update();
         app.update();
         let tab = tab_of(&mut app, 1);
@@ -1098,20 +1081,20 @@ mod tests {
     /// Case: the user drags the first of three tabs onto the last slot.
     #[test]
     fn the_preview_moves_the_dragged_tab() {
-        let entries: Vec<WorkspaceEntry> = [1, 2, 3]
+        let entries: Vec<TabEntry> = [1, 2, 3]
             .into_iter()
-            .map(|id| WorkspaceEntry {
-                id: WorkspaceId(id),
+            .map(|id| TabEntry {
+                id: TabId(id),
                 name: None,
             })
             .collect();
         assert_eq!(
-            tab_order(&entries, Some((WorkspaceId(1), 2))),
-            vec![WorkspaceId(2), WorkspaceId(3), WorkspaceId(1)]
+            tab_order(&entries, Some((TabId(1), 2))),
+            vec![TabId(2), TabId(3), TabId(1)]
         );
         assert_eq!(
             tab_order(&entries, None),
-            vec![WorkspaceId(1), WorkspaceId(2), WorkspaceId(3)]
+            vec![TabId(1), TabId(2), TabId(3)]
         );
     }
 
@@ -1126,14 +1109,13 @@ mod tests {
     fn a_dropped_tab_sends_its_move_and_selects_nothing() {
         let mut app = app_with_tab_bar();
         record_requests(&mut app);
-        app.init_resource::<PendingWorkspaceMove>();
-        set_workspaces(&mut app, &[1, 2, 3], 1);
+        app.init_resource::<PendingTabMove>();
+        set_tabs(&mut app, &[1, 2, 3], 1);
         app.update();
         app.update();
         lay_out_strip(&mut app, &[1, 2, 3]);
         let first = tab_of(&mut app, 1);
-        let previewed =
-            expected_tabs(&[(2, "Workspace 1"), (3, "Workspace 2"), (1, "Workspace 3")]);
+        let previewed = expected_tabs(&[(2, "Tab 1"), (3, "Tab 2"), (1, "Tab 3")]);
 
         app.world_mut().trigger(drag_start(first, 50.0));
         app.world_mut().trigger(drag_to(first, 280.0, 230.0));
@@ -1155,8 +1137,8 @@ mod tests {
 
         assert_eq!(
             app.world().resource::<SentRequests>().0,
-            vec![Sent::Workspace(WorkspaceAction::Move {
-                workspace: WorkspaceId(1),
+            vec![Sent::Tab(TabAction::Move {
+                tab: TabId(1),
                 index: 2,
             })]
         );
@@ -1164,16 +1146,16 @@ mod tests {
             app.world().get::<UiTransform>(first),
             Some(&UiTransform::default())
         );
-        app.world_mut().resource_mut::<PendingWorkspaceMove>().0 = Some(CommandSeq(7));
+        app.world_mut().resource_mut::<PendingTabMove>().0 = Some(CommandSeq(7));
         app.update();
         assert_eq!(listed_tabs(&mut app), previewed);
 
-        app.world_mut().resource_mut::<PendingWorkspaceMove>().0 = None;
+        app.world_mut().resource_mut::<PendingTabMove>().0 = None;
         app.update();
 
         assert_eq!(
             listed_tabs(&mut app),
-            expected_tabs(&[(1, "Workspace 1"), (2, "Workspace 2"), (3, "Workspace 3")])
+            expected_tabs(&[(1, "Tab 1"), (2, "Tab 2"), (3, "Tab 3")])
         );
     }
 
@@ -1186,7 +1168,7 @@ mod tests {
     fn a_drop_in_the_gap_after_a_tab_lands_in_its_slot() {
         let mut app = app_with_tab_bar();
         record_requests(&mut app);
-        set_workspaces(&mut app, &[1, 2, 3], 1);
+        set_tabs(&mut app, &[1, 2, 3], 1);
         app.update();
         app.update();
         lay_out_strip(&mut app, &[1, 2, 3]);
@@ -1199,8 +1181,8 @@ mod tests {
 
         assert_eq!(
             app.world().resource::<SentRequests>().0,
-            vec![Sent::Workspace(WorkspaceAction::Move {
-                workspace: WorkspaceId(1),
+            vec![Sent::Tab(TabAction::Move {
+                tab: TabId(1),
                 index: 1,
             })]
         );
@@ -1215,7 +1197,7 @@ mod tests {
     #[test]
     fn a_dragged_tab_stacks_above_its_neighbours_until_released() {
         let mut app = app_with_tab_bar();
-        set_workspaces(&mut app, &[1, 2, 3], 1);
+        set_tabs(&mut app, &[1, 2, 3], 1);
         app.update();
         app.update();
         lay_out_strip(&mut app, &[1, 2, 3]);
@@ -1259,7 +1241,7 @@ mod tests {
     fn a_nudged_tab_is_selected_and_not_moved() {
         let mut app = app_with_tab_bar();
         record_requests(&mut app);
-        set_workspaces(&mut app, &[1, 2, 3], 1);
+        set_tabs(&mut app, &[1, 2, 3], 1);
         app.update();
         app.update();
         lay_out_strip(&mut app, &[1, 2, 3]);
@@ -1273,18 +1255,16 @@ mod tests {
 
         assert_eq!(
             app.world().resource::<SentRequests>().0,
-            vec![Sent::Workspace(WorkspaceAction::Select(
-                WorkspaceTarget::Id(WorkspaceId(2))
-            ))]
+            vec![Sent::Tab(TabAction::Select(TabTarget::Id(TabId(2))))]
         );
         assert_eq!(
             listed_tabs(&mut app),
-            expected_tabs(&[(1, "Workspace 1"), (2, "Workspace 2"), (3, "Workspace 3")])
+            expected_tabs(&[(1, "Tab 1"), (2, "Tab 2"), (3, "Tab 3")])
         );
     }
 
     /// Asserts that a drag begun on a tab's close button moves the
-    /// workspace and closes nothing.
+    /// tab and closes nothing.
     ///
     /// Case: the user presses the × of the displayed first tab, drags the
     /// tab onto the third slot, and releases it over the ×.
@@ -1292,7 +1272,7 @@ mod tests {
     fn a_drag_from_the_close_button_closes_nothing() {
         let mut app = app_with_tab_bar();
         record_requests(&mut app);
-        set_workspaces(&mut app, &[1, 2, 3], 1);
+        set_tabs(&mut app, &[1, 2, 3], 1);
         app.update();
         app.update();
         lay_out_strip(&mut app, &[1, 2, 3]);
@@ -1307,32 +1287,32 @@ mod tests {
 
         assert_eq!(
             app.world().resource::<SentRequests>().0,
-            vec![Sent::Workspace(WorkspaceAction::Move {
-                workspace: WorkspaceId(1),
+            vec![Sent::Tab(TabAction::Move {
+                tab: TabId(1),
                 index: 2,
             })]
         );
     }
 
     /// Asserts that a tab is scrolled into view when the displayed
-    /// workspace changes, and not when the list changes while the same
-    /// workspace stays displayed.
+    /// tab changes, and not when the list changes while the same
+    /// tab stays displayed.
     ///
-    /// Case: with the second of three workspaces on screen, the user closes
+    /// Case: with the second of three tabs on screen, the user closes
     /// the hidden first one from its tab and then switches to the third.
     #[test]
     fn only_a_display_change_scrolls_a_tab_into_view() {
         let mut app = app_with_tab_bar();
         record_scrolls_into_view(&mut app);
         app.update();
-        set_workspaces(&mut app, &[1, 2, 3], 2);
+        set_tabs(&mut app, &[1, 2, 3], 2);
         app.update();
         let second = tab_of(&mut app, 2);
         let third = tab_of(&mut app, 3);
 
-        set_workspaces(&mut app, &[2, 3], 2);
+        set_tabs(&mut app, &[2, 3], 2);
         app.update();
-        set_workspaces(&mut app, &[2, 3], 3);
+        set_tabs(&mut app, &[2, 3], 3);
         app.update();
 
         assert_eq!(
