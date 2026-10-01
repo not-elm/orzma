@@ -55,9 +55,7 @@ fn request_root_pane(mut commands: Commands, mut requested: Local<bool>) {
         return;
     }
     *requested = true;
-    commands.trigger(PaneSpawnRequest {
-        at: NewPaneAt::Workspace,
-    });
+    commands.trigger(PaneSpawnRequest { at: NewPaneAt::Tab });
 }
 
 /// Despawns the pending entity; a failed first spawn (no pane at all) exits.

@@ -766,7 +766,7 @@ mod tests {
     /// Asserts that a pane absent from the layout is hidden with
     /// `Display::None` and marked, and shown again when it returns.
     ///
-    /// Case: the user switches to another workspace and back.
+    /// Case: the user switches to another tab and back.
     #[test]
     fn panes_absent_from_the_layout_are_hidden_and_restored() {
         let mut app = app();

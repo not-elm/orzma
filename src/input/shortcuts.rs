@@ -6,7 +6,7 @@ use crate::input::InputPhase;
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::keyboard::key_effect::KeyEffect;
 use crate::input::shortcuts::apply::ShortcutsApplyPlugin;
-use crate::ui::tab_bar::rename::WorkspaceRename;
+use crate::ui::tab_bar::rename::TabRename;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::MouseButton;
@@ -56,7 +56,7 @@ impl Plugin for ShortcutsPlugin {
                     reset_leader_phase
                         .run_if(
                             resource_exists_and_changed::<FocusedWebview>
-                                .or_else(resource_exists_and_changed::<WorkspaceRename>),
+                                .or_else(resource_exists_and_changed::<TabRename>),
                         )
                         .before(LeaderGate::Detect),
                 ),
@@ -273,12 +273,12 @@ impl Shortcuts {
                 | Shortcut::SplitPane(_)
                 | Shortcut::KillPane
                 | Shortcut::ResizePane(_)
-                | Shortcut::NewWorkspace
-                | Shortcut::CloseWorkspace
-                | Shortcut::NextWorkspace
-                | Shortcut::PreviousWorkspace
-                | Shortcut::SelectWorkspace(_)
-                | Shortcut::RenameWorkspace => self.direct_chords_over_webview,
+                | Shortcut::NewTab
+                | Shortcut::CloseTab
+                | Shortcut::NextTab
+                | Shortcut::PreviousTab
+                | Shortcut::SelectTab(_)
+                | Shortcut::RenameTab => self.direct_chords_over_webview,
             })
     }
 
@@ -553,7 +553,7 @@ fn detect_modifier_tap(
     mouse: Res<ButtonInput<MouseButton>>,
     time: Res<Time<Real>>,
     shortcuts: Res<Shortcuts>,
-    rename: Option<Res<WorkspaceRename>>,
+    rename: Option<Res<TabRename>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     // `run_if(tap_leader_enabled)` guarantees this is `Some`.
@@ -562,7 +562,7 @@ fn detect_modifier_tap(
     };
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     let mut armed = state.armed;
-    let renaming = rename.as_deref().is_some_and(WorkspaceRename::is_active);
+    let renaming = rename.as_deref().is_some_and(TabRename::is_active);
     if !focused || renaming || mouse.get_just_pressed().next().is_some() {
         // NOTE: a mouse press anywhere this frame (or lost focus, or a tab rename
         // in progress) invalidates the tap gesture — disarm and drain this frame's
@@ -846,7 +846,7 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
 mod tests {
     use super::*;
     use bevy::input::keyboard::Key;
-    use bevy_orzmux::prelude::WorkspaceId;
+    use bevy_orzmux::prelude::TabId;
     use orzma_configs::OrzmaConfigs;
     use orzma_configs::shortcuts::{
         Binding, FontSizeStep, PaneDirection, Shortcuts as ConfigShortcuts,
@@ -1693,7 +1693,7 @@ mod tests {
     #[test]
     fn a_modifier_tap_while_renaming_does_nothing() {
         let mut app = tap_app();
-        app.insert_resource(WorkspaceRename::active_for_test(WorkspaceId(1)));
+        app.insert_resource(TabRename::active_for_test(TabId(1)));
         tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Pressed);
         app.update();
         assert_eq!(app.world().resource::<ModifierTapState>().armed, None);
@@ -1736,20 +1736,20 @@ mod tests {
                 resize_down_pane: None,
                 resize_up_pane: None,
                 resize_right_pane: None,
-                new_workspace: None,
-                close_workspace: None,
-                next_workspace: None,
-                previous_workspace: None,
-                select_workspace_1: None,
-                select_workspace_2: None,
-                select_workspace_3: None,
-                select_workspace_4: None,
-                select_workspace_5: None,
-                select_workspace_6: None,
-                select_workspace_7: None,
-                select_workspace_8: None,
-                select_workspace_9: None,
-                rename_workspace: None,
+                new_tab: None,
+                close_tab: None,
+                next_tab: None,
+                previous_tab: None,
+                select_tab_1: None,
+                select_tab_2: None,
+                select_tab_3: None,
+                select_tab_4: None,
+                select_tab_5: None,
+                select_tab_6: None,
+                select_tab_7: None,
+                select_tab_8: None,
+                select_tab_9: None,
+                rename_tab: None,
                 ..Default::default()
             },
             ..Default::default()

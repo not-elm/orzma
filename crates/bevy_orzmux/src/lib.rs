@@ -16,9 +16,9 @@ mod layout;
 mod registry;
 mod requests;
 mod signals;
+mod tab;
 mod title;
 mod webview;
-mod workspace;
 
 pub mod prelude {
     pub use crate::{
@@ -31,13 +31,13 @@ pub mod prelude {
         registry::PaneRegistry,
         requests::*,
         signals::*,
+        tab::{CurrentTabs, PendingTabMove},
         title::TtyTitle,
         webview::OrzmuxWebviewEvent,
-        workspace::{CurrentWorkspaces, PendingWorkspaceMove},
     };
     pub use orzmux::prelude::{
-        CloseTarget, OrzmuxClient, OrzmuxConfig, SplitId, SplitOrientation, WorkspaceEntry,
-        WorkspaceId, WorkspaceTarget,
+        CloseTarget, OrzmuxClient, OrzmuxConfig, SplitId, SplitOrientation, TabEntry, TabId,
+        TabTarget,
     };
 }
 

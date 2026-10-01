@@ -79,9 +79,8 @@ mod tests {
             .init_resource::<PaneRegistry>()
             .insert_resource(OrzmuxConnection(client));
         app.world_mut().spawn((Node::default(), ShellSurfaceUi));
-        app.world_mut().trigger(PaneSpawnRequest {
-            at: NewPaneAt::Workspace,
-        });
+        app.world_mut()
+            .trigger(PaneSpawnRequest { at: NewPaneAt::Tab });
         app.update();
 
         let registry = app.world().resource::<PaneRegistry>();
@@ -98,7 +97,7 @@ mod tests {
         let [
             OrzmuxCommand::NewPane {
                 request: sent_request,
-                at: NewPaneAt::Workspace,
+                at: NewPaneAt::Tab,
                 cwd: None,
                 env,
             },
@@ -125,9 +124,8 @@ mod tests {
             .init_resource::<PaneRegistry>()
             .insert_resource(OrzmuxConnection(client));
         app.world_mut().spawn((Node::default(), ShellSurfaceUi));
-        app.world_mut().trigger(PaneSpawnRequest {
-            at: NewPaneAt::Workspace,
-        });
+        app.world_mut()
+            .trigger(PaneSpawnRequest { at: NewPaneAt::Tab });
         app.update();
 
         let registry = app.world().resource::<PaneRegistry>();
@@ -152,9 +150,8 @@ mod tests {
             .add_plugins(SpawnPlugin)
             .init_resource::<PaneRegistry>();
         app.world_mut().spawn((Node::default(), ShellSurfaceUi));
-        app.world_mut().trigger(PaneSpawnRequest {
-            at: NewPaneAt::Workspace,
-        });
+        app.world_mut()
+            .trigger(PaneSpawnRequest { at: NewPaneAt::Tab });
         app.update();
 
         assert!(

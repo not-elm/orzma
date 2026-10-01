@@ -5,7 +5,7 @@ use crate::action::vi::mode::ViModeState;
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
 use crate::surface::OrzmaTerminal;
-use crate::ui::tab_bar::rename::{RenameSystems, WorkspaceRename};
+use crate::ui::tab_bar::rename::{RenameSystems, TabRename};
 use bevy::app::{App, Plugin, PostUpdate, Update};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
@@ -54,7 +54,7 @@ impl Plugin for ImePlugin {
                 PostUpdate,
                 reset_ime_after_rename
                     .after(RenameSystems::Finish)
-                    .run_if(resource_exists_and_changed::<WorkspaceRename>),
+                    .run_if(resource_exists_and_changed::<TabRename>),
             )
             .add_observer(apply_ime_commit_to_terminal);
     }
@@ -175,7 +175,7 @@ pub(crate) fn resolve_focused_surface(
 /// positions the candidate window.
 fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
-    rename: Option<Res<WorkspaceRename>>,
+    rename: Option<Res<TabRename>>,
     focused: Query<Entity, With<KeyboardFocused>>,
     vi_modes: Query<(), With<ViModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalView)>,
@@ -189,7 +189,7 @@ fn ime_policy_system(
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
-    if rename.as_deref().is_some_and(WorkspaceRename::is_active) {
+    if rename.as_deref().is_some_and(TabRename::is_active) {
         if !window.ime_enabled {
             window.ime_enabled = true;
         }
@@ -307,12 +307,12 @@ fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
-    rename: Option<Res<WorkspaceRename>>,
+    rename: Option<Res<TabRename>>,
     focused: Query<Entity, With<KeyboardFocused>>,
     focused_webview: Res<FocusedWebview>,
     vi_modes: Query<(), With<ViModeState>>,
 ) {
-    if rename.as_deref().is_some_and(WorkspaceRename::is_active) {
+    if rename.as_deref().is_some_and(TabRename::is_active) {
         events.clear();
         return;
     }
@@ -416,7 +416,7 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_orzma_tty_renderer::prelude::CellMetrics;
-    use bevy_orzmux::prelude::WorkspaceId;
+    use bevy_orzmux::prelude::TabId;
     use orzma_vt::prelude::{Cursor, InstanceId};
     use orzma_webview_host::prelude::MountId;
 
@@ -1051,10 +1051,10 @@ mod tests {
             .init_resource::<ImeState>()
             .add_systems(
                 PostUpdate,
-                reset_ime_after_rename.run_if(resource_exists_and_changed::<WorkspaceRename>),
+                reset_ime_after_rename.run_if(resource_exists_and_changed::<TabRename>),
             );
         app.world_mut().resource_mut::<ImeState>().0 = Composition::try_new("かん".into(), None);
-        app.world_mut().insert_resource(WorkspaceRename::default());
+        app.world_mut().insert_resource(TabRename::default());
         app.update();
         assert!(!app.world().resource::<ImeState>().is_composing());
     }
@@ -1073,7 +1073,7 @@ mod tests {
                     hits.0 += 1;
                 },
             )
-            .insert_resource(WorkspaceRename::active_for_test(WorkspaceId(1)));
+            .insert_resource(TabRename::active_for_test(TabId(1)));
 
         app.world_mut().write_message(Ime::Preedit {
             window: Entity::PLACEHOLDER,
@@ -1101,7 +1101,7 @@ mod tests {
     fn the_ime_policy_yields_to_the_rename_field() {
         let mut app = policy_app_with_focused_terminal();
         app.world_mut()
-            .insert_resource(WorkspaceRename::active_for_test(WorkspaceId(1)));
+            .insert_resource(TabRename::active_for_test(TabId(1)));
         let sentinel = Vec2::new(-7.0, -7.0);
         {
             let mut windows = app

@@ -20,9 +20,9 @@ pub enum OrzmuxError {
     /// No live pane matches the target a command named.
     #[error("no pane matches the target")]
     UnresolvedTarget,
-    /// No workspace matches the target.
-    #[error("no workspace matches the target")]
-    UnresolvedWorkspace,
+    /// No tab matches the target.
+    #[error("no tab matches the target")]
+    UnresolvedTab,
     /// A split was refused because the target is missing, or cannot
     /// hold two minimum leaves and a separator along the split axis.
     #[error("the target pane has too little room to divide")]

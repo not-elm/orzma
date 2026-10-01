@@ -106,7 +106,7 @@ pub(in crate::input) struct WebviewClaimParams<'w, 's> {
 /// `TerminalMouseDisabled`, `WebviewMouseDisabled`, and
 /// `MouseClaimedByWebview` so each marker is present exactly while its
 /// condition holds. The markers apply at the next command flush. A pane
-/// hidden with its workspace gets both mouse gates and never claims the
+/// hidden with its tab gets both mouse gates and never claims the
 /// mouse for a webview.
 pub(in crate::input) fn maintain_input_gates(
     mut commands: Commands,
@@ -690,7 +690,7 @@ mod tests {
     /// the mouse for a webview, so a gesture held in it is cancelled and a
     /// pressed webview in it is released.
     ///
-    /// Case: the user presses the switch-workspace key while dragging a
+    /// Case: the user presses the switch-tab key while dragging a
     /// selection over a page mounted in a pane.
     #[test]
     fn a_hidden_pane_gets_both_mouse_gates() {

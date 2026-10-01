@@ -464,90 +464,90 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_right_pane: Option<Binding>,
-    /// Open a new workspace after the last one and display it.
+    /// Open a new tab after the last one and display it.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub new_workspace: Option<Binding>,
-    /// Close the displayed workspace and every pane in it.
+    pub new_tab: Option<Binding>,
+    /// Close the displayed tab and every pane in it.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub close_workspace: Option<Binding>,
-    /// Display the workspace to the right, wrapping to the first.
+    pub close_tab: Option<Binding>,
+    /// Display the tab to the right, wrapping to the first.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub next_workspace: Option<Binding>,
-    /// Display the workspace to the left, wrapping to the last.
+    pub next_tab: Option<Binding>,
+    /// Display the tab to the left, wrapping to the last.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub previous_workspace: Option<Binding>,
-    /// Display the first workspace.
+    pub previous_tab: Option<Binding>,
+    /// Display the first tab.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub select_workspace_1: Option<Binding>,
-    /// Display the second workspace.
+    pub select_tab_1: Option<Binding>,
+    /// Display the second tab.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub select_workspace_2: Option<Binding>,
-    /// Display the third workspace.
+    pub select_tab_2: Option<Binding>,
+    /// Display the third tab.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub select_workspace_3: Option<Binding>,
-    /// Display the fourth workspace.
+    pub select_tab_3: Option<Binding>,
+    /// Display the fourth tab.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub select_workspace_4: Option<Binding>,
-    /// Display the fifth workspace.
+    pub select_tab_4: Option<Binding>,
+    /// Display the fifth tab.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub select_workspace_5: Option<Binding>,
-    /// Display the sixth workspace.
+    pub select_tab_5: Option<Binding>,
+    /// Display the sixth tab.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub select_workspace_6: Option<Binding>,
-    /// Display the seventh workspace.
+    pub select_tab_6: Option<Binding>,
+    /// Display the seventh tab.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub select_workspace_7: Option<Binding>,
-    /// Display the eighth workspace.
+    pub select_tab_7: Option<Binding>,
+    /// Display the eighth tab.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub select_workspace_8: Option<Binding>,
-    /// Display the ninth workspace.
+    pub select_tab_8: Option<Binding>,
+    /// Display the ninth tab.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub select_workspace_9: Option<Binding>,
-    /// Rename the displayed workspace in its tab.
+    pub select_tab_9: Option<Binding>,
+    /// Rename the displayed tab in place.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub rename_workspace: Option<Binding>,
+    pub rename_tab: Option<Binding>,
     /// Timeout (ms) for a modifier-tap leader: press+release within this window
     /// with no intervening key/mouse press counts as a tap. Default 300; 0 is
     /// normalized to 300.
@@ -590,20 +590,20 @@ impl Default for Shortcuts {
             resize_down_pane: Some(parse_default_binding("r:Alt+Shift+J")),
             resize_up_pane: Some(parse_default_binding("r:Alt+Shift+K")),
             resize_right_pane: Some(parse_default_binding("r:Alt+Shift+L")),
-            new_workspace: Some(parse_default_binding("Alt+c")),
-            close_workspace: Some(parse_default_binding("Alt+Shift+X")),
-            next_workspace: Some(parse_default_binding("Alt+]")),
-            previous_workspace: Some(parse_default_binding("Alt+[")),
-            select_workspace_1: Some(parse_default_binding("Alt+1")),
-            select_workspace_2: Some(parse_default_binding("Alt+2")),
-            select_workspace_3: Some(parse_default_binding("Alt+3")),
-            select_workspace_4: Some(parse_default_binding("Alt+4")),
-            select_workspace_5: Some(parse_default_binding("Alt+5")),
-            select_workspace_6: Some(parse_default_binding("Alt+6")),
-            select_workspace_7: Some(parse_default_binding("Alt+7")),
-            select_workspace_8: Some(parse_default_binding("Alt+8")),
-            select_workspace_9: Some(parse_default_binding("Alt+9")),
-            rename_workspace: Some(parse_default_binding("Alt+r")),
+            new_tab: Some(parse_default_binding("Alt+c")),
+            close_tab: Some(parse_default_binding("Alt+Shift+X")),
+            next_tab: Some(parse_default_binding("Alt+]")),
+            previous_tab: Some(parse_default_binding("Alt+[")),
+            select_tab_1: Some(parse_default_binding("Alt+1")),
+            select_tab_2: Some(parse_default_binding("Alt+2")),
+            select_tab_3: Some(parse_default_binding("Alt+3")),
+            select_tab_4: Some(parse_default_binding("Alt+4")),
+            select_tab_5: Some(parse_default_binding("Alt+5")),
+            select_tab_6: Some(parse_default_binding("Alt+6")),
+            select_tab_7: Some(parse_default_binding("Alt+7")),
+            select_tab_8: Some(parse_default_binding("Alt+8")),
+            select_tab_9: Some(parse_default_binding("Alt+9")),
+            rename_tab: Some(parse_default_binding("Alt+r")),
             leader_tap_timeout_ms: 300,
             repeat_time_ms: 500,
             direct_chords_over_webview: true,
@@ -692,72 +692,20 @@ impl Shortcuts {
                 &self.resize_right_pane,
                 Shortcut::ResizePane(PaneDirection::Right),
             ),
-            ("new-workspace", &self.new_workspace, Shortcut::NewWorkspace),
-            (
-                "close-workspace",
-                &self.close_workspace,
-                Shortcut::CloseWorkspace,
-            ),
-            (
-                "next-workspace",
-                &self.next_workspace,
-                Shortcut::NextWorkspace,
-            ),
-            (
-                "previous-workspace",
-                &self.previous_workspace,
-                Shortcut::PreviousWorkspace,
-            ),
-            (
-                "select-workspace-1",
-                &self.select_workspace_1,
-                Shortcut::SelectWorkspace(1),
-            ),
-            (
-                "select-workspace-2",
-                &self.select_workspace_2,
-                Shortcut::SelectWorkspace(2),
-            ),
-            (
-                "select-workspace-3",
-                &self.select_workspace_3,
-                Shortcut::SelectWorkspace(3),
-            ),
-            (
-                "select-workspace-4",
-                &self.select_workspace_4,
-                Shortcut::SelectWorkspace(4),
-            ),
-            (
-                "select-workspace-5",
-                &self.select_workspace_5,
-                Shortcut::SelectWorkspace(5),
-            ),
-            (
-                "select-workspace-6",
-                &self.select_workspace_6,
-                Shortcut::SelectWorkspace(6),
-            ),
-            (
-                "select-workspace-7",
-                &self.select_workspace_7,
-                Shortcut::SelectWorkspace(7),
-            ),
-            (
-                "select-workspace-8",
-                &self.select_workspace_8,
-                Shortcut::SelectWorkspace(8),
-            ),
-            (
-                "select-workspace-9",
-                &self.select_workspace_9,
-                Shortcut::SelectWorkspace(9),
-            ),
-            (
-                "rename-workspace",
-                &self.rename_workspace,
-                Shortcut::RenameWorkspace,
-            ),
+            ("new-tab", &self.new_tab, Shortcut::NewTab),
+            ("close-tab", &self.close_tab, Shortcut::CloseTab),
+            ("next-tab", &self.next_tab, Shortcut::NextTab),
+            ("previous-tab", &self.previous_tab, Shortcut::PreviousTab),
+            ("select-tab-1", &self.select_tab_1, Shortcut::SelectTab(1)),
+            ("select-tab-2", &self.select_tab_2, Shortcut::SelectTab(2)),
+            ("select-tab-3", &self.select_tab_3, Shortcut::SelectTab(3)),
+            ("select-tab-4", &self.select_tab_4, Shortcut::SelectTab(4)),
+            ("select-tab-5", &self.select_tab_5, Shortcut::SelectTab(5)),
+            ("select-tab-6", &self.select_tab_6, Shortcut::SelectTab(6)),
+            ("select-tab-7", &self.select_tab_7, Shortcut::SelectTab(7)),
+            ("select-tab-8", &self.select_tab_8, Shortcut::SelectTab(8)),
+            ("select-tab-9", &self.select_tab_9, Shortcut::SelectTab(9)),
+            ("rename-tab", &self.rename_tab, Shortcut::RenameTab),
         ]
         .into_iter()
     }
@@ -862,18 +810,18 @@ pub enum Shortcut {
     KillPane,
     /// Moves a divider of the active pane in the given direction.
     ResizePane(PaneDirection),
-    /// Opens a new workspace after the last one and displays it.
-    NewWorkspace,
-    /// Closes the displayed workspace.
-    CloseWorkspace,
-    /// Displays the workspace to the right, wrapping to the first.
-    NextWorkspace,
-    /// Displays the workspace to the left, wrapping to the last.
-    PreviousWorkspace,
-    /// Displays the workspace with this 1-based tab number.
-    SelectWorkspace(u8),
-    /// Renames the displayed workspace in its tab.
-    RenameWorkspace,
+    /// Opens a new tab after the last one and displays it.
+    NewTab,
+    /// Closes the displayed tab.
+    CloseTab,
+    /// Displays the tab to the right, wrapping to the first.
+    NextTab,
+    /// Displays the tab to the left, wrapping to the last.
+    PreviousTab,
+    /// Displays the tab with this 1-based tab number.
+    SelectTab(u8),
+    /// Renames the displayed tab in place.
+    RenameTab,
 }
 
 /// Strips a leading, case-insensitive `token`, returning the text after it,
@@ -1515,13 +1463,13 @@ mod tests {
         }
     }
 
-    /// Asserts the stock workspace bindings: `Alt` direct chords on every
+    /// Asserts the stock tab bindings: `Alt` direct chords on every
     /// platform.
     ///
-    /// Case: a new user opens a second workspace, cycles, jumps to the third
+    /// Case: a new user opens a second tab, cycles, jumps to the third
     /// tab, and renames it without editing the config.
     #[test]
-    fn workspace_bindings_default_to_alt_chords() {
+    fn tab_bindings_default_to_alt_chords() {
         let s = Shortcuts::default();
         let binding_of = |shortcut| {
             s.bindings_iter()
@@ -1529,12 +1477,12 @@ mod tests {
                 .and_then(|(_, binding, _)| binding.clone())
         };
         for (shortcut, chord) in [
-            (Shortcut::NewWorkspace, "Alt+c"),
-            (Shortcut::CloseWorkspace, "Alt+Shift+X"),
-            (Shortcut::NextWorkspace, "Alt+]"),
-            (Shortcut::PreviousWorkspace, "Alt+["),
-            (Shortcut::SelectWorkspace(3), "Alt+3"),
-            (Shortcut::RenameWorkspace, "Alt+r"),
+            (Shortcut::NewTab, "Alt+c"),
+            (Shortcut::CloseTab, "Alt+Shift+X"),
+            (Shortcut::NextTab, "Alt+]"),
+            (Shortcut::PreviousTab, "Alt+["),
+            (Shortcut::SelectTab(3), "Alt+3"),
+            (Shortcut::RenameTab, "Alt+r"),
         ] {
             assert_eq!(
                 binding_of(shortcut),
@@ -1707,7 +1655,7 @@ kill-pane = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"r:Cmd+Plus","decrease-font-size":"r:Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"Alt+S","select-left-pane":"Alt+H","select-down-pane":"Alt+J","select-up-pane":"Alt+K","select-right-pane":"Alt+L","split-vertical-pane":"Alt+I","split-horizontal-pane":"Alt+O","kill-pane":"Alt+P","resize-left-pane":"r:Alt+Shift+H","resize-down-pane":"r:Alt+Shift+J","resize-up-pane":"r:Alt+Shift+K","resize-right-pane":"r:Alt+Shift+L","new-workspace":"Alt+C","close-workspace":"Alt+Shift+X","next-workspace":"Alt+]","previous-workspace":"Alt+[","select-workspace-1":"Alt+1","select-workspace-2":"Alt+2","select-workspace-3":"Alt+3","select-workspace-4":"Alt+4","select-workspace-5":"Alt+5","select-workspace-6":"Alt+6","select-workspace-7":"Alt+7","select-workspace-8":"Alt+8","select-workspace-9":"Alt+9","rename-workspace":"Alt+R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","increase-font-size":"r:Cmd+Plus","decrease-font-size":"r:Cmd+-","reset-font-size":"Cmd+0","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"Alt+S","select-left-pane":"Alt+H","select-down-pane":"Alt+J","select-up-pane":"Alt+K","select-right-pane":"Alt+L","split-vertical-pane":"Alt+I","split-horizontal-pane":"Alt+O","kill-pane":"Alt+P","resize-left-pane":"r:Alt+Shift+H","resize-down-pane":"r:Alt+Shift+J","resize-up-pane":"r:Alt+Shift+K","resize-right-pane":"r:Alt+Shift+L","new-tab":"Alt+C","close-tab":"Alt+Shift+X","next-tab":"Alt+]","previous-tab":"Alt+[","select-tab-1":"Alt+1","select-tab-2":"Alt+2","select-tab-3":"Alt+3","select-tab-4":"Alt+4","select-tab-5":"Alt+5","select-tab-6":"Alt+6","select-tab-7":"Alt+7","select-tab-8":"Alt+8","select-tab-9":"Alt+9","rename-tab":"Alt+R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
         assert_eq!(json, expected);
     }
 
@@ -1720,7 +1668,7 @@ kill-pane = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"r:Ctrl+Plus","decrease-font-size":"r:Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"Alt+S","select-left-pane":"Alt+H","select-down-pane":"Alt+J","select-up-pane":"Alt+K","select-right-pane":"Alt+L","split-vertical-pane":"Alt+I","split-horizontal-pane":"Alt+O","kill-pane":"Alt+P","resize-left-pane":"r:Alt+Shift+H","resize-down-pane":"r:Alt+Shift+J","resize-up-pane":"r:Alt+Shift+K","resize-right-pane":"r:Alt+Shift+L","new-workspace":"Alt+C","close-workspace":"Alt+Shift+X","next-workspace":"Alt+]","previous-workspace":"Alt+[","select-workspace-1":"Alt+1","select-workspace-2":"Alt+2","select-workspace-3":"Alt+3","select-workspace-4":"Alt+4","select-workspace-5":"Alt+5","select-workspace-6":"Alt+6","select-workspace-7":"Alt+7","select-workspace-8":"Alt+8","select-workspace-9":"Alt+9","rename-workspace":"Alt+R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
+        let expected = r#"{"leader":"Alt","paste":"Ctrl+V","copy":"Ctrl+C","increase-font-size":"r:Ctrl+Plus","decrease-font-size":"r:Ctrl+-","reset-font-size":"Ctrl+0","release-webview-focus":"<Leader>U","quit":"","enter-vi-mode":"Alt+S","select-left-pane":"Alt+H","select-down-pane":"Alt+J","select-up-pane":"Alt+K","select-right-pane":"Alt+L","split-vertical-pane":"Alt+I","split-horizontal-pane":"Alt+O","kill-pane":"Alt+P","resize-left-pane":"r:Alt+Shift+H","resize-down-pane":"r:Alt+Shift+J","resize-up-pane":"r:Alt+Shift+K","resize-right-pane":"r:Alt+Shift+L","new-tab":"Alt+C","close-tab":"Alt+Shift+X","next-tab":"Alt+]","previous-tab":"Alt+[","select-tab-1":"Alt+1","select-tab-2":"Alt+2","select-tab-3":"Alt+3","select-tab-4":"Alt+4","select-tab-5":"Alt+5","select-tab-6":"Alt+6","select-tab-7":"Alt+7","select-tab-8":"Alt+8","select-tab-9":"Alt+9","rename-tab":"Alt+R","leader-tap-timeout-ms":300,"repeat-time-ms":500,"direct-chords-over-webview":true}"#;
         assert_eq!(json, expected);
     }
 

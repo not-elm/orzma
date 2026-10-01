@@ -1,9 +1,9 @@
-//! Renaming a workspace in its tab: the session, the text field, and the
+//! Renaming a tab in place: the session, the text field, and the
 //! rules that turn the field's text into a name.
 
 use crate::font::TerminalUiFont;
 use crate::input::bindings::OrzmaMouseConfig;
-use crate::ui::tab_bar::{ACTIVE_TEXT, TabLabel, TabLabelText, WorkspaceTab, tab_font, tab_label};
+use crate::ui::tab_bar::{ACTIVE_TEXT, TabButton, TabLabel, TabLabelText, tab_font, tab_label};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input_focus::{AutoFocus, FocusedInput, InputFocus};
@@ -14,26 +14,24 @@ use bevy::ui::widget::measure_text_system;
 use bevy::ui_widgets::SelectAllOnFocus;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_webview::RequestWebviewFocus;
-use bevy_orzmux::prelude::{
-    CurrentWorkspaces, OrzmuxSystems, RequestWorkspaceAction, WorkspaceAction, WorkspaceId,
-};
-use orzmux::prelude::Workspace;
+use bevy_orzmux::prelude::{CurrentTabs, OrzmuxSystems, RequestTabAction, TabAction, TabId};
+use orzmux::prelude::Tab;
 use std::time::Duration;
 
 /// The rename in progress, if any.
 #[derive(Resource, Default, Debug)]
-pub(crate) struct WorkspaceRename(Option<RenameSession>);
+pub(crate) struct TabRename(Option<RenameSession>);
 
-impl WorkspaceRename {
+impl TabRename {
     /// Whether a rename is in progress, including one asked to end this
     /// frame.
     pub fn is_active(&self) -> bool {
         self.0.is_some()
     }
 
-    /// The workspace being renamed.
-    pub fn workspace(&self) -> Option<WorkspaceId> {
-        self.0.as_ref().map(|session| session.workspace)
+    /// The tab being renamed.
+    pub fn tab(&self) -> Option<TabId> {
+        self.0.as_ref().map(|session| session.tab)
     }
 
     fn field(&self) -> Option<Entity> {
@@ -60,33 +58,28 @@ impl WorkspaceRename {
 }
 
 #[cfg(test)]
-impl WorkspaceRename {
-    /// A session renaming `workspace` that is still editing.
-    pub fn active_for_test(workspace: WorkspaceId) -> Self {
+impl TabRename {
+    /// A session renaming `tab` that is still editing.
+    pub fn active_for_test(tab: TabId) -> Self {
         Self(Some(RenameSession {
-            workspace,
+            tab,
             field: Entity::PLACEHOLDER,
             label: Entity::PLACEHOLDER,
             name: None,
-            auto_label: "Workspace 1".into(),
+            auto_label: "Tab 1".into(),
             ending: None,
         }))
     }
 
-    /// A session renaming `workspace` through `field` in place of `label`,
+    /// A session renaming `tab` through `field` in place of `label`,
     /// already asked to end with `commit`.
-    pub fn ending_for_test(
-        workspace: WorkspaceId,
-        field: Entity,
-        label: Entity,
-        commit: bool,
-    ) -> Self {
+    pub fn ending_for_test(tab: TabId, field: Entity, label: Entity, commit: bool) -> Self {
         Self(Some(RenameSession {
-            workspace,
+            tab,
             field,
             label,
             name: None,
-            auto_label: "Workspace 1".into(),
+            auto_label: "Tab 1".into(),
             ending: Some(commit),
         }))
     }
@@ -101,12 +94,12 @@ pub(crate) enum RenameSystems {
     Finish,
 }
 
-/// Starts renaming a workspace in its tab, unless a rename is already in
+/// Starts renaming a tab in place, unless a rename is already in
 /// progress.
 #[derive(Event, Debug, Clone, Copy)]
-pub(crate) struct StartWorkspaceRename {
-    /// The workspace to rename; `None` names the displayed one.
-    pub workspace: Option<WorkspaceId>,
+pub(crate) struct StartTabRename {
+    /// The tab to rename; `None` names the displayed one.
+    pub tab: Option<TabId>,
 }
 
 /// The rename ending a key asks for.
@@ -133,7 +126,7 @@ impl RenameKey {
     }
 }
 
-/// What committing the field's text does to the workspace's name.
+/// What committing the field's text does to the tab's name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RenameOutcome {
     /// The name stays as it is.
@@ -143,7 +136,7 @@ pub(crate) enum RenameOutcome {
 }
 
 impl RenameOutcome {
-    /// Decides the outcome of committing `input` for a workspace named
+    /// Decides the outcome of committing `input` for a tab named
     /// `name` (`None` when automatic) whose automatic label is
     /// `auto_label`. Surrounding whitespace in `input` is ignored.
     pub fn decide(input: &str, name: Option<&str>, auto_label: &str) -> Self {
@@ -167,13 +160,13 @@ impl RenameOutcome {
     }
 }
 
-/// Lets a workspace be renamed in its tab, and gives a tab double-click the
+/// Lets a tab be renamed in place, and gives a tab double-click the
 /// terminal's double-click interval.
 pub(crate) struct TabRenamePlugin;
 
 impl Plugin for TabRenamePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorkspaceRename>()
+        app.init_resource::<TabRename>()
             .configure_sets(
                 PostUpdate,
                 RenameSystems::Finish
@@ -185,9 +178,9 @@ impl Plugin for TabRenamePlugin {
             .add_systems(
                 Update,
                 (
-                    drop_rename_of_closed_workspace
+                    drop_rename_of_closed_tab
                         .after(OrzmuxSystems::Drain)
-                        .run_if(resource_exists_and_changed::<CurrentWorkspaces>),
+                        .run_if(resource_exists_and_changed::<CurrentTabs>),
                     commit_on_webview_focus
                         .after(OrzmuxSystems::Drain)
                         .run_if(resource_exists_and_changed::<FocusedWebview>),
@@ -209,11 +202,11 @@ const STEADY_CARET: Duration = Duration::from_secs(3600);
 /// The background of the rename field's selected text.
 const SELECTION_BG: Color = Color::srgb_u8(0x4c, 0x1d, 0x95);
 
-/// One rename: the workspace, its field, the label the field replaces, the
-/// name and automatic label the workspace had, and how the rename ends.
+/// One rename: the tab, its field, the label the field replaces, the
+/// name and automatic label the tab had, and how the rename ends.
 #[derive(Debug, Clone)]
 struct RenameSession {
-    workspace: WorkspaceId,
+    tab: TabId,
     field: Entity,
     label: Entity,
     name: Option<String>,
@@ -227,28 +220,28 @@ struct RenameSession {
 /// all of it selected, and draws a caret in the label's text color and a
 /// highlight behind the selection; releases webview focus.
 fn start_rename(
-    ev: On<StartWorkspaceRename>,
+    ev: On<StartTabRename>,
     mut commands: Commands,
-    mut rename: ResMut<WorkspaceRename>,
+    mut rename: ResMut<TabRename>,
     mut labels: Query<&mut Node, With<TabLabel>>,
-    workspaces: Res<CurrentWorkspaces>,
-    tabs: Query<(Entity, &WorkspaceTab, &Children)>,
+    tabs: Res<CurrentTabs>,
+    buttons: Query<(Entity, &TabButton, &Children)>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     if rename.is_active() {
         return;
     }
-    let Some(workspace) = ev.workspace.or(workspaces.active) else {
+    let Some(tab) = ev.tab.or(tabs.active) else {
         return;
     };
-    let Some(position) = workspaces.position_of(workspace) else {
+    let Some(position) = tabs.position_of(tab) else {
         return;
     };
-    let name = workspaces
+    let name = tabs
         .entries
         .get(position)
         .and_then(|entry| entry.name.clone());
-    let Some((tab, _, parts)) = tabs.iter().find(|(_, tab, _)| tab.workspace == workspace) else {
+    let Some((button, _, parts)) = buttons.iter().find(|(_, button, _)| button.id == tab) else {
         return;
     };
     let Some((slot, label)) = parts
@@ -266,7 +259,7 @@ fn start_rename(
     let field = commands
         .spawn((
             EditableText {
-                max_characters: Some(Workspace::MAX_NAME_CHARS),
+                max_characters: Some(Tab::MAX_NAME_CHARS),
                 allow_newlines: false,
                 cursor_blink_period: STEADY_CARET,
                 ..EditableText::new(tab_label(position, name.as_deref()))
@@ -291,10 +284,10 @@ fn start_rename(
         ))
         .observe(on_field_key)
         .id();
-    commands.entity(tab).insert_children(slot, &[field]);
+    commands.entity(button).insert_children(slot, &[field]);
     commands.trigger(RequestWebviewFocus::new(None));
     rename.0 = Some(RenameSession {
-        workspace,
+        tab,
         field,
         label,
         name,
@@ -306,7 +299,7 @@ fn start_rename(
 /// Asks to commit on Enter and to cancel on Esc, outside IME compositions.
 fn on_field_key(
     ev: On<FocusedInput<KeyboardInput>>,
-    mut rename: ResMut<WorkspaceRename>,
+    mut rename: ResMut<TabRename>,
     fields: Query<&EditableText>,
 ) {
     let composing = fields
@@ -321,7 +314,7 @@ fn on_field_key(
 }
 
 /// Asks to commit when a press lands anywhere but the field.
-fn commit_on_outside_press(ev: On<Pointer<Press>>, mut rename: ResMut<WorkspaceRename>) {
+fn commit_on_outside_press(ev: On<Pointer<Press>>, mut rename: ResMut<TabRename>) {
     let origin = ev.original_event_target();
     if ev.entity != origin || rename.field() == Some(origin) || !rename.can_end() {
         return;
@@ -330,7 +323,7 @@ fn commit_on_outside_press(ev: On<Pointer<Press>>, mut rename: ResMut<WorkspaceR
 }
 
 /// Asks to commit when a webview takes the keyboard focus.
-fn commit_on_webview_focus(mut rename: ResMut<WorkspaceRename>, focused: Res<FocusedWebview>) {
+fn commit_on_webview_focus(mut rename: ResMut<TabRename>, focused: Res<FocusedWebview>) {
     if focused.0.is_some() && rename.can_end() {
         rename.request_end(true);
     }
@@ -341,7 +334,7 @@ fn commit_on_webview_focus(mut rename: ResMut<WorkspaceRename>, focused: Res<Foc
 /// into the label at once, before the backend answers the rename.
 fn finish_rename(
     mut commands: Commands,
-    mut rename: ResMut<WorkspaceRename>,
+    mut rename: ResMut<TabRename>,
     mut input_focus: ResMut<InputFocus>,
     mut labels: Query<(&mut Node, Option<&Children>), With<TabLabel>>,
     mut label_texts: Query<&mut Text, With<TabLabelText>>,
@@ -380,9 +373,9 @@ fn finish_rename(
         }
     }
     if let Some(name) = committed {
-        commands.trigger(RequestWorkspaceAction {
-            action: WorkspaceAction::Rename {
-                workspace: session.workspace,
+        commands.trigger(RequestTabAction {
+            action: TabAction::Rename {
+                tab: session.tab,
                 name,
             },
         });
@@ -394,21 +387,21 @@ fn finish_rename(
 }
 
 /// Whether a rename waits to be finished.
-fn rename_is_ending(rename: Res<WorkspaceRename>) -> bool {
+fn rename_is_ending(rename: Res<TabRename>) -> bool {
     rename.is_ending()
 }
 
-/// Drops, without a request, a rename whose workspace closed, and takes
+/// Drops, without a request, a rename whose tab closed, and takes
 /// the keyboard focus off its field.
-fn drop_rename_of_closed_workspace(
-    mut rename: ResMut<WorkspaceRename>,
+fn drop_rename_of_closed_tab(
+    mut rename: ResMut<TabRename>,
     mut input_focus: ResMut<InputFocus>,
-    workspaces: Res<CurrentWorkspaces>,
+    tabs: Res<CurrentTabs>,
 ) {
-    let Some(workspace) = rename.workspace() else {
+    let Some(tab) = rename.tab() else {
         return;
     };
-    if workspaces.position_of(workspace).is_some() {
+    if tabs.position_of(tab).is_some() {
         return;
     }
     let field = rename.field();
@@ -431,7 +424,7 @@ mod tests {
     use bevy::camera::NormalizedRenderTarget;
     use bevy::picking::backend::HitData;
     use bevy::picking::pointer::{Location, PointerId};
-    use bevy_orzmux::prelude::WorkspaceEntry;
+    use bevy_orzmux::prelude::TabEntry;
 
     /// Asserts the commit rules: blank restores the automatic name, the
     /// untouched automatic label or the same name keeps things as they
@@ -442,23 +435,23 @@ mod tests {
     #[test]
     fn the_commit_rules_decide_the_name() {
         assert_eq!(
-            RenameOutcome::decide("  ", Some("logs"), "Workspace 2"),
+            RenameOutcome::decide("  ", Some("logs"), "Tab 2"),
             RenameOutcome::Set(None)
         );
         assert_eq!(
-            RenameOutcome::decide("", None, "Workspace 2"),
+            RenameOutcome::decide("", None, "Tab 2"),
             RenameOutcome::Keep
         );
         assert_eq!(
-            RenameOutcome::decide("Workspace 2", None, "Workspace 2"),
+            RenameOutcome::decide("Tab 2", None, "Tab 2"),
             RenameOutcome::Keep
         );
         assert_eq!(
-            RenameOutcome::decide("logs", Some("logs"), "Workspace 2"),
+            RenameOutcome::decide("logs", Some("logs"), "Tab 2"),
             RenameOutcome::Keep
         );
         assert_eq!(
-            RenameOutcome::decide(" build ", None, "Workspace 2"),
+            RenameOutcome::decide(" build ", None, "Tab 2"),
             RenameOutcome::Set(Some("build".into()))
         );
     }
@@ -509,7 +502,7 @@ mod tests {
     }
 
     #[derive(Resource, Default)]
-    struct Requested(Vec<WorkspaceAction>);
+    struct Requested(Vec<TabAction>);
 
     fn labelled(app: &mut App, shown: &str) -> (Entity, Entity) {
         let label = app
@@ -533,18 +526,13 @@ mod tests {
     /// label in the same update that restores the label, before any answer
     /// from the backend.
     ///
-    /// Case: the user renames "Workspace 1" to "logs" and presses Enter.
+    /// Case: the user renames "Tab 1" to "logs" and presses Enter.
     #[test]
     fn a_committed_name_is_in_the_label_at_once() {
         let mut app = finish_app();
-        let (label, text) = labelled(&mut app, "Workspace 1");
+        let (label, text) = labelled(&mut app, "Tab 1");
         let field = app.world_mut().spawn(EditableText::new("logs")).id();
-        app.insert_resource(WorkspaceRename::ending_for_test(
-            WorkspaceId(1),
-            field,
-            label,
-            true,
-        ));
+        app.insert_resource(TabRename::ending_for_test(TabId(1), field, label, true));
         app.update();
         assert_eq!(
             app.world().get::<Text>(text).map(|t| t.0.as_str()),
@@ -562,18 +550,13 @@ mod tests {
     #[test]
     fn a_cancelled_rename_keeps_the_label_text() {
         let mut app = finish_app();
-        let (label, text) = labelled(&mut app, "Workspace 1");
+        let (label, text) = labelled(&mut app, "Tab 1");
         let field = app.world_mut().spawn(EditableText::new("logs")).id();
-        app.insert_resource(WorkspaceRename::ending_for_test(
-            WorkspaceId(1),
-            field,
-            label,
-            false,
-        ));
+        app.insert_resource(TabRename::ending_for_test(TabId(1), field, label, false));
         app.update();
         assert_eq!(
             app.world().get::<Text>(text).map(|t| t.0.as_str()),
-            Some("Workspace 1")
+            Some("Tab 1")
         );
     }
 
@@ -582,11 +565,9 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<InputFocus>()
             .init_resource::<Requested>()
-            .add_observer(
-                |ev: On<RequestWorkspaceAction>, mut seen: ResMut<Requested>| {
-                    seen.0.push(ev.action.clone());
-                },
-            )
+            .add_observer(|ev: On<RequestTabAction>, mut seen: ResMut<Requested>| {
+                seen.0.push(ev.action.clone());
+            })
             .add_systems(PostUpdate, finish_rename.run_if(rename_is_ending));
         app
     }
@@ -625,21 +606,16 @@ mod tests {
             ))
             .id();
         let field = app.world_mut().spawn(EditableText::new("logs")).id();
-        app.insert_resource(WorkspaceRename::ending_for_test(
-            WorkspaceId(1),
-            field,
-            label,
-            true,
-        ));
+        app.insert_resource(TabRename::ending_for_test(TabId(1), field, label, true));
         app.update();
         assert_eq!(
             app.world().resource::<Requested>().0,
-            vec![WorkspaceAction::Rename {
-                workspace: WorkspaceId(1),
+            vec![TabAction::Rename {
+                tab: TabId(1),
                 name: Some("logs".into())
             }]
         );
-        assert!(!app.world().resource::<WorkspaceRename>().is_active());
+        assert!(!app.world().resource::<TabRename>().is_active());
         assert!(app.world().get_entity(field).is_err());
         assert_eq!(
             app.world().get::<Node>(label).map(|n| n.display),
@@ -665,15 +641,10 @@ mod tests {
             ))
             .id();
         let field = app.world_mut().spawn(EditableText::new("logs")).id();
-        app.insert_resource(WorkspaceRename::ending_for_test(
-            WorkspaceId(1),
-            field,
-            label,
-            false,
-        ));
+        app.insert_resource(TabRename::ending_for_test(TabId(1), field, label, false));
         app.update();
         assert!(app.world().resource::<Requested>().0.is_empty());
-        assert!(!app.world().resource::<WorkspaceRename>().is_active());
+        assert!(!app.world().resource::<TabRename>().is_active());
     }
 
     /// Asserts that a press whose original target is not the rename field
@@ -693,56 +664,55 @@ mod tests {
             .spawn((EditableText::new("build"), ChildOf(tab)))
             .id();
         let pane = app.world_mut().spawn_empty().id();
-        app.insert_resource(WorkspaceRename(Some(RenameSession {
-            workspace: WorkspaceId(1),
+        app.insert_resource(TabRename(Some(RenameSession {
+            tab: TabId(1),
             field,
             label: Entity::PLACEHOLDER,
             name: None,
-            auto_label: "Workspace 1".into(),
+            auto_label: "Tab 1".into(),
             ending: None,
         })));
 
         app.world_mut().trigger(press_on(field));
         app.update();
 
-        assert!(app.world().resource::<WorkspaceRename>().is_active());
+        assert!(app.world().resource::<TabRename>().is_active());
         assert!(app.world().resource::<Requested>().0.is_empty());
 
         app.world_mut().trigger(press_on(pane));
         app.update();
 
-        assert!(!app.world().resource::<WorkspaceRename>().is_active());
+        assert!(!app.world().resource::<TabRename>().is_active());
         assert_eq!(
             app.world().resource::<Requested>().0,
-            vec![WorkspaceAction::Rename {
-                workspace: WorkspaceId(1),
+            vec![TabAction::Rename {
+                tab: TabId(1),
                 name: Some("build".into())
             }]
         );
     }
 
-    /// Asserts that a rename of a workspace that closes meanwhile is
+    /// Asserts that a rename of a tab that closes meanwhile is
     /// dropped without a request.
     ///
     /// Case: the renamed tab's last shell exits while the user types.
     #[test]
-    fn a_rename_of_a_closed_workspace_is_dropped() {
+    fn a_rename_of_a_closed_tab_is_dropped() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<InputFocus>()
-            .init_resource::<CurrentWorkspaces>()
-            .insert_resource(WorkspaceRename::active_for_test(WorkspaceId(1)))
+            .init_resource::<CurrentTabs>()
+            .insert_resource(TabRename::active_for_test(TabId(1)))
             .add_systems(
                 Update,
-                drop_rename_of_closed_workspace
-                    .run_if(resource_exists_and_changed::<CurrentWorkspaces>),
+                drop_rename_of_closed_tab.run_if(resource_exists_and_changed::<CurrentTabs>),
             );
-        app.world_mut().resource_mut::<CurrentWorkspaces>().entries = vec![WorkspaceEntry {
-            id: WorkspaceId(2),
+        app.world_mut().resource_mut::<CurrentTabs>().entries = vec![TabEntry {
+            id: TabId(2),
             name: None,
         }];
         app.update();
-        assert!(!app.world().resource::<WorkspaceRename>().is_active());
+        assert!(!app.world().resource::<TabRename>().is_active());
     }
 
     /// Asserts that a webview taking the keyboard focus commits the
@@ -755,8 +725,8 @@ mod tests {
     #[test]
     fn a_webview_taking_focus_commits_the_rename() {
         let mut app = finish_app();
-        app.init_resource::<WorkspaceRename>()
-            .init_resource::<CurrentWorkspaces>()
+        app.init_resource::<TabRename>()
+            .init_resource::<CurrentTabs>()
             .init_resource::<FocusedWebview>()
             .add_observer(start_rename)
             .add_observer(
@@ -769,34 +739,28 @@ mod tests {
                 commit_on_webview_focus.run_if(resource_exists_and_changed::<FocusedWebview>),
             );
         {
-            let mut workspaces = app.world_mut().resource_mut::<CurrentWorkspaces>();
-            workspaces.entries = vec![WorkspaceEntry {
-                id: WorkspaceId(1),
+            let mut tabs = app.world_mut().resource_mut::<CurrentTabs>();
+            tabs.entries = vec![TabEntry {
+                id: TabId(1),
                 name: None,
             }];
-            workspaces.active = Some(WorkspaceId(1));
+            tabs.active = Some(TabId(1));
         }
-        let tab = app
-            .world_mut()
-            .spawn(WorkspaceTab {
-                workspace: WorkspaceId(1),
-            })
-            .id();
+        let tab = app.world_mut().spawn(TabButton { id: TabId(1) }).id();
         app.world_mut()
             .spawn((TabLabel, Node::default(), ChildOf(tab)));
         let page = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
         app.update();
 
-        app.world_mut()
-            .trigger(StartWorkspaceRename { workspace: None });
+        app.world_mut().trigger(StartTabRename { tab: None });
         app.update();
 
         assert_eq!(app.world().resource::<FocusedWebview>().0, None);
-        assert!(app.world().resource::<WorkspaceRename>().can_end());
+        assert!(app.world().resource::<TabRename>().can_end());
         let field = app
             .world()
-            .resource::<WorkspaceRename>()
+            .resource::<TabRename>()
             .field()
             .expect("the rename has a field");
         app.world_mut()
@@ -806,11 +770,11 @@ mod tests {
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
         app.update();
 
-        assert!(!app.world().resource::<WorkspaceRename>().is_active());
+        assert!(!app.world().resource::<TabRename>().is_active());
         assert_eq!(
             app.world().resource::<Requested>().0,
-            vec![WorkspaceAction::Rename {
-                workspace: WorkspaceId(1),
+            vec![TabAction::Rename {
+                tab: TabId(1),
                 name: Some("build".into())
             }]
         );
