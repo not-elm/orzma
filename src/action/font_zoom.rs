@@ -26,6 +26,14 @@ impl Default for FontZoom {
 }
 
 impl FontZoom {
+    /// The zoom factors, in ascending order. `FACTORS[BASE]` is the unzoomed 1.0.
+    const FACTORS: [f32; 12] = [
+        0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
+    ];
+
+    /// The index of the unzoomed factor in [`Self::FACTORS`].
+    const BASE: usize = 4;
+
     /// The factor the current step multiplies the configured font size by.
     pub fn factor(&self) -> f32 {
         Self::FACTORS.get(self.index).copied().unwrap_or(1.0)
@@ -49,14 +57,6 @@ impl FontZoom {
         };
         (index != self.index && index < Self::FACTORS.len()).then_some(index)
     }
-
-    /// The zoom factors, in ascending order. `FACTORS[BASE]` is the unzoomed 1.0.
-    const FACTORS: [f32; 12] = [
-        0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0,
-    ];
-
-    /// The index of the unzoomed factor in [`Self::FACTORS`].
-    const BASE: usize = 4;
 }
 
 /// Adds the font-size zoom pipeline.

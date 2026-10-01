@@ -289,6 +289,14 @@ pub enum Binding {
 }
 
 impl Binding {
+    /// The token that marks a binding value as leader-scoped (`<Leader>x`).
+    /// Matched case-insensitively, after any `r:`, only.
+    const LEADER_TOKEN: &'static str = "<Leader>";
+
+    /// The token that marks a binding value as repeatable (`r:x`). Matched
+    /// case-insensitively at the start of the value only.
+    const REPEAT_TOKEN: &'static str = "r:";
+
     /// The chord to match: the direct chord, or the second-key chord for a
     /// leader-scoped binding.
     pub fn chord(&self) -> &KeyChord {
@@ -328,14 +336,6 @@ impl Binding {
             },
         })
     }
-
-    /// The token that marks a binding value as leader-scoped (`<Leader>x`).
-    /// Matched case-insensitively, after any `r:`, only.
-    const LEADER_TOKEN: &'static str = "<Leader>";
-
-    /// The token that marks a binding value as repeatable (`r:x`). Matched
-    /// case-insensitively at the start of the value only.
-    const REPEAT_TOKEN: &'static str = "r:";
 }
 
 /// User-facing shortcut configuration: the leader chord plus one flat binding

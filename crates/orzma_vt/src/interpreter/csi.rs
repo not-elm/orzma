@@ -12,6 +12,10 @@ pub(crate) struct CsiParams<'a> {
 }
 
 impl<'a> CsiParams<'a> {
+    /// How many intermediate bytes the view holds, matching the cap the
+    /// parser collects to.
+    const MAX_INTERMEDIATES: usize = 2;
+
     /// Splits one `csi_dispatch` slice into its marker, values, and
     /// intermediates.
     pub fn parse(params: &'a [CsiParam]) -> Self {
@@ -82,10 +86,6 @@ impl<'a> CsiParams<'a> {
         let listed = (!self.values.is_empty()).then(|| self.groups());
         listed.into_iter().flatten().map(Self::first_value)
     }
-
-    /// How many intermediate bytes the view holds, matching the cap the
-    /// parser collects to.
-    const MAX_INTERMEDIATES: usize = 2;
 
     /// The saturating `u16` a slot's first integer reads as; `None` for
     /// a slot that carries none.

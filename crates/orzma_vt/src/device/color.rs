@@ -135,6 +135,16 @@ impl Palette {
     /// ramp from 8 to 238 in steps of 10.
     const XTERM_INDEXED: [Rgb; 256] = build_xterm_indexed();
 
+    /// The built-in default foreground.
+    const DEFAULT_FOREGROUND: Rgb = Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
+
+    /// The built-in default background.
+    const DEFAULT_BACKGROUND: Rgb = Rgb { r: 0, g: 0, b: 0 };
+
     /// Resolves a symbolic cell color against this table.
     ///
     /// [`Color::DefaultBackground`] resolves to [`Palette::background`]
@@ -234,16 +244,6 @@ impl Palette {
     pub fn reset(&mut self) -> bool {
         Self::assign(self, Self::default())
     }
-
-    /// The built-in default foreground.
-    const DEFAULT_FOREGROUND: Rgb = Rgb {
-        r: 255,
-        g: 255,
-        b: 255,
-    };
-
-    /// The built-in default background.
-    const DEFAULT_BACKGROUND: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
     /// Writes `value` into `slot`; returns whether the slot changed.
     fn assign<T: PartialEq>(slot: &mut T, value: T) -> bool {

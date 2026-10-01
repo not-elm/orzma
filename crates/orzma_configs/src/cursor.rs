@@ -59,6 +59,9 @@ impl Default for CursorConfig {
 }
 
 impl CursorConfig {
+    /// The default caret thickness, as a fraction of the cell width.
+    const DEFAULT_THICKNESS: f32 = 0.15;
+
     /// The interval between blink phases; `None` when the caret does
     /// not blink. A value below 10 ms is raised to 10 ms.
     pub fn blink_interval(&self) -> Option<Duration> {
@@ -93,9 +96,6 @@ impl CursorConfig {
     pub fn thickness(&self) -> f32 {
         norm_unit(self.thickness, Self::DEFAULT_THICKNESS)
     }
-
-    /// The default caret thickness, as a fraction of the cell width.
-    const DEFAULT_THICKNESS: f32 = 0.15;
 }
 
 #[cfg(test)]

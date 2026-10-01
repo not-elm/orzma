@@ -87,6 +87,9 @@ impl TryFrom<RegisterKind> for ValidatedRegistration {
 }
 
 impl ValidatedRegistration {
+    /// Upper bound on a single inline HTML document (4 MiB).
+    const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
+
     /// The spec a mount of this content under `handle`, over a rect of
     /// `size` cells, needs.
     pub(crate) fn mount_spec(&self, handle: &HandleId, size: PlacementSize) -> MountSpec {
@@ -137,9 +140,6 @@ impl ValidatedRegistration {
     pub(crate) fn set_forward_keys(&mut self, keys: Vec<ForwardChord>) {
         self.forward_keys = keys;
     }
-
-    /// Upper bound on a single inline HTML document (4 MiB).
-    const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
 }
 
 /// Validates a URL a program asked to load: parses it, requires an `http`

@@ -23,6 +23,9 @@ pub(crate) enum WebviewApcRequest {
 }
 
 impl WebviewApcRequest {
+    /// The longest payload, in bytes, [`Self::parse`] reads.
+    const MAX_LEN: usize = 1024;
+
     /// Parses an orzma APC payload into the verb it names, or `None`
     /// when the payload is not a well-formed orzma webview verb.
     pub(crate) fn parse(bytes: &[u8]) -> Option<Self> {
@@ -49,9 +52,6 @@ impl WebviewApcRequest {
             _ => None,
         }
     }
-
-    /// The longest payload, in bytes, [`Self::parse`] reads.
-    const MAX_LEN: usize = 1024;
 }
 
 fn parse_mount_action(payload: &str) -> Option<WebviewApcRequest> {

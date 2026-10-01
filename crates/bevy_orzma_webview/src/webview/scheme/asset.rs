@@ -14,6 +14,9 @@ pub(crate) struct StaticAsset {
 }
 
 impl StaticAsset {
+    /// Upper bound on a single static asset (64 MiB).
+    const MAX_LEN: u64 = 64 * 1024 * 1024;
+
     /// Resolves `raw_path` (a percent-encoded, slash-separated relative URL
     /// path) under `root` and reads the file.
     ///
@@ -57,9 +60,6 @@ impl StaticAsset {
     pub fn into_body(self) -> Vec<u8> {
         self.body
     }
-
-    /// Upper bound on a single static asset (64 MiB).
-    const MAX_LEN: u64 = 64 * 1024 * 1024;
 }
 
 fn exceeds_limit(len: u64) -> bool {

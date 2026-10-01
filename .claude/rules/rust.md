@@ -448,6 +448,24 @@ Required — a constant that belongs to a type is an associated const:
 - An associated const used only inside the type's own `impl` stays
   private; a wider one follows "Visibility — don't restate a type's own
   ceiling on its members".
+- Associated consts are declared at the top of the `impl` block, above
+  every method, whatever their visibility: a private const still comes
+  before a `pub fn`. Among themselves they keep the descending
+  visibility order of "Item ordering — private items last".
+
+```rust
+impl QueueSampler {
+    /// The shortest time between two handed-out samples.
+    pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+
+    /// The depth a wake implies on its own.
+    const BACKLOG_FLOOR: usize = 1;
+
+    /// A sampler with no peaks whose first sample is due one interval
+    /// after `now`.
+    pub fn new(now: Instant) -> Self { ... }
+}
+```
 
 | Instead of                                                                   | Use                                                         |
 | ---------------------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -460,6 +478,7 @@ Forbidden:
 | -------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | A module-level `const` that exactly one function names               | Claims a module-wide reach the constant does not have             |
 | A module-level `const` that states a property of one type            | The constant is discoverable only by grep, not from the type      |
+| An associated const declared below a method in the same `impl`       | The values the methods read are not visible before the methods    |
 
 Counting uses:
 
@@ -563,6 +582,11 @@ Required:
   `impl` block or module.
 - Within the private group, keep related helpers together; order them
   for readability (roughly call order).
+- Associated consts are the exception: every associated const of an
+  `impl` block, private ones included, is declared above its methods
+  (see "Constants — declare each `const` in the narrowest scope that
+  holds its uses"). The visibility order then applies within the consts
+  and within the methods separately.
 
 Not constrained:
 
@@ -987,14 +1011,14 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - "No blank lines between import groups"
 - `#[expect]` preference over `#[allow]`
 - Visibility — in an `impl` on a type that is not itself externally `pub`, associated items are spelled `pub`, not `pub(crate)` / `pub(super)` / `pub(in path)`; private items stay private (see "Visibility — don't restate a type's own ceiling on its members")
-- Item ordering — private (no-modifier) items declared after `pub` / exported ones (see "Item ordering — private items last")
+- Item ordering — private (no-modifier) items declared after `pub` / exported ones, except that associated consts come above every method of their `impl` (see "Item ordering — private items last")
 - Parameter ordering — mutable parameters declared before immutable ones in function signatures (see "Parameter ordering — mutable parameters first")
 - System optimization — whole-system resource change/added guards expressed as in-body early returns must be `run_if` run conditions instead (see "System optimization — gate with `run_if`, not in-body change checks")
 - Change detection — no manual `set_changed()` / `bypass_change_detection()`-then-`set_changed()` notification; mutate conditionally so normal `DerefMut` drives change detection (see "Change detection — let mutation drive it, don't force it manually")
 - Imports — no inline fully-qualified paths in signatures, bodies, or type parameters; add a `use` at the top instead (see "Imports — import, don't inline")
 - Naming — `Query` parameters must not use a `_q` suffix; use a descriptive singular or plural noun (see "Naming — Query parameters")
 - Constructors — a function that builds a value of a local struct/enum must be an associated function on that type (`T::build`), not a free `fn build_t(…) -> T`, and a constructor taking no argument is a `Default` impl, not an inherent `fn new()` (see "Constructors — type-building functions are associated functions")
-- Constants — a `const` that exactly one function names is local to that function, and a `const` that states a property of one type is an associated const on it (`Tab::MAX_NAME_CHARS`); module scope is the fallback (see "Constants — declare each `const` in the narrowest scope that holds its uses")
+- Constants — a `const` that exactly one function names is local to that function, and a `const` that states a property of one type is an associated const on it (`Tab::MAX_NAME_CHARS`), declared above the methods of its `impl` whatever its visibility; module scope is the fallback (see "Constants — declare each `const` in the narrowest scope that holds its uses")
 - System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, hand off across the seam via an `EntityEvent`+observer or a `Message` (`MessageWriter`/`MessageReader`) — never inline sequencing — bulky inline blocks extracted to helpers, and each system body kept within ~150 lines (see "System composition — keep systems focused; split by responsibility")
 - Protocol purity — the types that cross the GUI channels (`orzmux::backend`'s `OrzmuxEvent` and its payloads, `orzmux::event_loop`'s `OrzmuxCommand`) carry no `Entity` / bevy types / GPU handles, so the multiplexer backend stays a Bevy-free thread and the channel types can later cross a socket boundary unchanged
 - Error handling — no `debug_assert!`, `unwrap`, `expect`, `panic!` or `assert!` in non-test code to enforce a precondition or reject an input; failures are returned as `Result` with `thiserror` enums and handled at the boundary that cannot recover (see "Error handling — return `Result`, don't assert or unwrap"). Enabling `clippy::unwrap_used` / `clippy::expect_used` workspace-wide would move the unwrap / expect half to the tool-enforced list
