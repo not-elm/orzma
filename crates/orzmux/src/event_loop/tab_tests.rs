@@ -279,7 +279,7 @@ fn a_resize_split_of_a_hidden_tab_does_nothing() {
             .get(hidden)
             .expect("the hidden tab")
             .tree
-            .solve(window)
+            .tile(window)
             .panes
             .iter()
             .map(|rect| rect.cols)

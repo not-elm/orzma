@@ -744,7 +744,7 @@ mod tests {
     }
 
     /// Asserts the `PaneOpened → Layout` order for the first pane, with
-    /// the pane spawned at the solved window size.
+    /// the pane spawned at the size the tiling gives it.
     ///
     /// Case: the app starts and opens its first shell in an 80×24 window.
     #[test]
@@ -885,7 +885,7 @@ mod tests {
         assert_eq!(h.last_spawn_size(), Some(GridSize { cols: 39, rows: 24 }));
     }
 
-    /// Asserts that a window resize re-solves every pane and bundles the
+    /// Asserts that a window resize re-tiles every tab and bundles the
     /// changed panes' frames with the layout.
     ///
     /// Case: the user drags the window wider with two panes open.
@@ -976,7 +976,7 @@ mod tests {
         let (_root, _pane) = h.open_root();
         split_active(&mut h, 2);
         let window = GridSize::new(80, 24).expect("a valid size");
-        let split = displayed_tree(&h).solve(window).separators[0].split;
+        let split = displayed_tree(&h).tile(window).separators[0].split;
         for position in [50, 55, 60] {
             h.queue(OrzmuxCommand::ResizeSplit { split, position });
         }

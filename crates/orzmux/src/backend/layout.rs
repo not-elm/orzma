@@ -1,5 +1,5 @@
 //! The cell-unit pane layout: a binary split tree whose leaves are
-//! panes, solved into whole-window rectangles with one-cell separators.
+//! panes, tiled into whole-window rectangles with one-cell separators.
 
 use crate::backend::{PaneDirection, PaneId, PaneRect, Separator, SplitId, SplitOrientation};
 use crate::error::{OrzmuxError, OrzmuxResult};
@@ -16,9 +16,9 @@ const LEAF_MIN: GridSize = GridSize {
 const MIN_DRAG_COLS: u16 = 4;
 const MIN_DRAG_ROWS: u16 = 2;
 
-/// The solved geometry of every pane and separator.
+/// The geometry of every pane and separator of a tiled tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Solved {
+pub struct Tiling {
     /// The extent the panes tile: the window, widened per axis to the
     /// tree's minimum when the window is smaller.
     pub size: GridSize,
@@ -28,7 +28,7 @@ pub struct Solved {
     pub separators: Vec<Separator>,
 }
 
-impl Solved {
+impl Tiling {
     /// The rectangle of `pane`, when it is in the tree.
     pub fn rect_of(&self, pane: PaneId) -> Option<PaneRect> {
         self.panes.iter().find(|r| r.pane == pane).copied()
@@ -170,7 +170,7 @@ impl LayoutTree {
         window: GridSize,
     ) -> OrzmuxResult {
         let rect = self
-            .solve(window)
+            .tile(window)
             .rect_of(target)
             .ok_or(OrzmuxError::SplitRefused)?;
         let (along, needed) = match orientation {
@@ -240,11 +240,11 @@ impl LayoutTree {
     /// Returns whether the active pane changed.
     pub fn select_direction(&mut self, direction: PaneDirection, window: GridSize) -> bool {
         let active = self.active;
-        let solved = self.solve(window);
-        let Some(from) = solved.rect_of(active) else {
+        let tiling = self.tile(window);
+        let Some(from) = tiling.rect_of(active) else {
             return false;
         };
-        let best = solved
+        let best = tiling
             .panes
             .iter()
             .filter(|r| r.pane != active && adjacent(&from, r, direction))
@@ -259,12 +259,12 @@ impl LayoutTree {
         }
     }
 
-    /// Solves the tree against `window`, using `max(window, minimum)`
-    /// per axis so every pane keeps at least one cell; the caller clips
-    /// what overflows.
-    pub fn solve(&self, window: GridSize) -> Solved {
+    /// Tiles `window` with the tree's panes and separators, using
+    /// `max(window, minimum)` per axis so every pane keeps at least one
+    /// cell; the caller clips what overflows.
+    pub fn tile(&self, window: GridSize) -> Tiling {
         let rect = self.root_rect(window);
-        let mut solved = Solved {
+        let mut tiling = Tiling {
             size: GridSize {
                 cols: rect.cols,
                 rows: rect.rows,
@@ -272,8 +272,8 @@ impl LayoutTree {
             panes: Vec::new(),
             separators: Vec::new(),
         };
-        self.root.solve_into(&mut solved, rect);
-        solved
+        self.root.tile_into(&mut tiling, rect);
+        tiling
     }
 
     /// Moves `split`'s divider to `position`, a whole-window cell
@@ -390,8 +390,8 @@ impl LayoutTree {
         }
     }
 
-    /// The split with `id` and the rectangle it divides when the tree is
-    /// solved against `window`, or `None` when it is not in the tree.
+    /// The split with `id` and the rectangle it divides when the tree
+    /// tiles `window`, or `None` when it is not in the tree.
     fn split_mut(&mut self, id: SplitId, window: GridSize) -> Option<(&mut Split, Rect)> {
         let root_rect = self.root_rect(window);
         self.root.find_split_mut(id, root_rect)
@@ -478,7 +478,7 @@ impl Node {
         }
     }
 
-    fn solve_into(&self, out: &mut Solved, rect: Rect) {
+    fn tile_into(&self, out: &mut Tiling, rect: Rect) {
         match self {
             Node::Leaf(id) => out.panes.push(PaneRect {
                 pane: *id,
@@ -489,9 +489,9 @@ impl Node {
             }),
             Node::Split(s) => {
                 let (first_rect, separator, second_rect) = s.subdivide(rect);
-                s.first.solve_into(out, first_rect);
+                s.first.tile_into(out, first_rect);
                 out.separators.push(separator);
-                s.second.solve_into(out, second_rect);
+                s.second.tile_into(out, second_rect);
             }
         }
     }

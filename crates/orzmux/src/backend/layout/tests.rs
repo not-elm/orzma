@@ -6,13 +6,13 @@ mod remove;
 mod resize_direction;
 mod resize_split;
 mod select_direction;
-mod solve;
 mod split;
+mod tile;
 
 const W: GridSize = GridSize { cols: 80, rows: 24 };
 
-fn rect_of(solved: &Solved, pane: PaneId) -> PaneRect {
-    solved.rect_of(pane).expect("pane rect")
+fn rect_of(tiling: &Tiling, pane: PaneId) -> PaneRect {
+    tiling.rect_of(pane).expect("pane rect")
 }
 
 fn two_side_by_side(ids: &mut SplitIds) -> LayoutTree {

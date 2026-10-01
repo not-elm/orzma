@@ -55,7 +55,7 @@ fn the_drag_minimum_composes_through_nested_splits() {
 }
 
 /// Asserts that moving a divider puts it on the requested
-/// whole-window cell and that solving again reports it there, so the
+/// whole-window cell and that tiling again reports it there, so the
 /// cell → ratio → cell round trip is exact.
 ///
 /// Case: the user drags the divider of a two-pane 80×24 window from
@@ -64,14 +64,14 @@ fn the_drag_minimum_composes_through_nested_splits() {
 fn a_resize_puts_the_divider_on_the_requested_cell() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
-    let split = tree.solve(W).separators[0].split;
+    let split = tree.tile(W).separators[0].split;
 
     assert!(tree.resize_split(split, 60, W));
 
-    let solved = tree.solve(W);
-    assert_eq!(solved.separators[0].x, 60);
-    assert_eq!(rect_of(&solved, PaneId(1)).cols, 60);
-    assert_eq!(rect_of(&solved, PaneId(2)).cols, 19);
+    let tiling = tree.tile(W);
+    assert_eq!(tiling.separators[0].x, 60);
+    assert_eq!(rect_of(&tiling, PaneId(1)).cols, 60);
+    assert_eq!(rect_of(&tiling, PaneId(2)).cols, 19);
 }
 
 /// Asserts that a divider dragged past either end stops at the drag
@@ -83,13 +83,13 @@ fn a_resize_puts_the_divider_on_the_requested_cell() {
 fn a_resize_clamps_to_the_drag_minimum_on_both_sides() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
-    let split = tree.solve(W).separators[0].split;
+    let split = tree.tile(W).separators[0].split;
 
     assert!(tree.resize_split(split, 0, W));
-    assert_eq!(tree.solve(W).separators[0].x, 4);
+    assert_eq!(tree.tile(W).separators[0].x, 4);
 
     assert!(tree.resize_split(split, 79, W));
-    assert_eq!(tree.solve(W).separators[0].x, 75);
+    assert_eq!(tree.tile(W).separators[0].x, 75);
 }
 
 /// Asserts that a divider dragged past either end of a stacked pair
@@ -109,13 +109,13 @@ fn a_horizontal_resize_clamps_to_the_drag_minimum_on_both_sides() {
         W,
     )
     .unwrap();
-    let split = tree.solve(W).separators[0].split;
+    let split = tree.tile(W).separators[0].split;
 
     assert!(tree.resize_split(split, 0, W));
-    assert_eq!(tree.solve(W).separators[0].y, 2);
+    assert_eq!(tree.tile(W).separators[0].y, 2);
 
     assert!(tree.resize_split(split, 23, W));
-    assert_eq!(tree.solve(W).separators[0].y, 21);
+    assert_eq!(tree.tile(W).separators[0].y, 21);
 }
 
 /// Asserts that a resize addressed to an id no longer in the tree is
@@ -127,11 +127,11 @@ fn a_horizontal_resize_clamps_to_the_drag_minimum_on_both_sides() {
 fn a_resize_of_an_unknown_split_is_refused() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
-    let before = tree.solve(W);
+    let before = tree.tile(W);
 
     assert!(!tree.resize_split(SplitId(999), 60, W));
 
-    assert_eq!(tree.solve(W), before);
+    assert_eq!(tree.tile(W), before);
 }
 
 /// Asserts that a position left of the split's own origin saturates
@@ -159,12 +159,12 @@ fn a_position_before_the_split_origin_saturates() {
         W,
     )
     .unwrap();
-    let inner = tree.solve(W).separators[1].split;
+    let inner = tree.tile(W).separators[1].split;
 
     assert!(tree.resize_split(inner, 0, W));
 
-    let solved = tree.solve(W);
-    assert_eq!(solved.separators[1].x, 45);
+    let tiling = tree.tile(W);
+    assert_eq!(tiling.separators[1].x, 45);
 }
 
 /// Asserts that resizing an inner split leaves the outer divider
@@ -192,14 +192,14 @@ fn resizing_an_inner_split_leaves_the_outer_divider() {
         W,
     )
     .unwrap();
-    let outer_x = tree.solve(W).separators[0].x;
-    let inner = tree.solve(W).separators[1].split;
+    let outer_x = tree.tile(W).separators[0].x;
+    let inner = tree.tile(W).separators[1].split;
 
     assert!(tree.resize_split(inner, 6, W));
 
-    let solved = tree.solve(W);
-    assert_eq!(solved.separators[0].x, outer_x);
-    assert_eq!(solved.separators[1].y, 6);
+    let tiling = tree.tile(W);
+    assert_eq!(tiling.separators[0].x, outer_x);
+    assert_eq!(tiling.separators[1].y, 6);
 }
 
 /// Asserts that a window too narrow to honour the drag minimum on
@@ -221,16 +221,16 @@ fn a_cramped_window_falls_back_to_the_tree_minimum() {
         narrow,
     )
     .unwrap();
-    let split = tree.solve(narrow).separators[0].split;
+    let split = tree.tile(narrow).separators[0].split;
 
     assert!(tree.resize_split(split, 1, narrow));
 
-    assert_eq!(tree.solve(narrow).separators[0].x, 2);
+    assert_eq!(tree.tile(narrow).separators[0].x, 2);
 }
 
 /// Asserts that resizing against a window smaller than the one the
 /// layout was built for neither panics nor leaves the divider
-/// outside the solved extent.
+/// outside the tiled extent.
 ///
 /// Case: the user drags a divider while dragging the window's own
 /// resize corner, so a smaller window arrives mid-drag.
@@ -238,13 +238,13 @@ fn a_cramped_window_falls_back_to_the_tree_minimum() {
 fn a_resize_against_a_shrunken_window_is_clamped() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
-    let split = tree.solve(W).separators[0].split;
+    let split = tree.tile(W).separators[0].split;
     let shrunk = GridSize { cols: 20, rows: 10 };
 
     assert!(tree.resize_split(split, 18, shrunk));
 
-    let solved = tree.solve(shrunk);
-    assert_eq!(solved.separators[0].x, 15);
+    let tiling = tree.tile(shrunk);
+    assert_eq!(tiling.separators[0].x, 15);
 }
 
 /// Asserts that a column deeper than the window's drag minimum still
@@ -268,10 +268,10 @@ fn a_deep_column_below_the_drag_minimum_still_resizes() {
         )
         .unwrap();
     }
-    let split = tree.solve(narrow).separators[0].split;
+    let split = tree.tile(narrow).separators[0].split;
 
     assert!(tree.resize_split(split, 14, narrow));
 
-    let solved = tree.solve(narrow);
-    assert_eq!(solved.separators[0].x, 7);
+    let tiling = tree.tile(narrow);
+    assert_eq!(tiling.separators[0].x, 7);
 }

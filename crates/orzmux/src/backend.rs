@@ -2,7 +2,7 @@
 //! trees they tile, and the webview host, applies the operations the event
 //! loop dispatches, and queues the events the GUI receives.
 
-use crate::backend::layout::Solved;
+use crate::backend::layout::Tiling;
 use crate::backend::pane::{Pane, PaneFactory};
 use crate::backend::queue_sample::ChunkDepth;
 use crate::backend::tab::{PaneRemoval, Tabs};
@@ -397,8 +397,8 @@ impl Backend {
     /// reported its size, [`OrzmuxError::UnresolvedTarget`] when the
     /// split target is gone or not in the displayed tab,
     /// [`OrzmuxError::SplitRefused`] when the tree refuses the
-    /// insertion, [`OrzmuxError::Unsolved`] or [`OrzmuxError::Vt`] when
-    /// the solved layout gives the new pane no valid rectangle, and
+    /// insertion, [`OrzmuxError::NoPaneRect`] or [`OrzmuxError::Vt`] when
+    /// the tiling gives the new pane no valid rectangle, and
     /// whatever the pane factory returns when the shell will not start.
     /// The tabs are left as they were in every case: a tab
     /// created for the pane is removed again.
@@ -916,12 +916,12 @@ impl Backend {
         }
     }
 
-    /// Spawns the terminal for `new` at the size the solved layout of
-    /// `tab` gives it.
+    /// Spawns the terminal for `new` at the size the tiling of `tab`
+    /// gives it.
     ///
     /// # Errors
     ///
-    /// Returns [`OrzmuxError::Unsolved`] when `tab` is gone or its
+    /// Returns [`OrzmuxError::NoPaneRect`] when `tab` is gone or its
     /// tree does not place the pane, [`OrzmuxError::Vt`] when its
     /// rectangle is not a valid size, and [`OrzmuxError::SpawnShell`]
     /// when the shell refuses to start.
@@ -936,17 +936,17 @@ impl Backend {
         let rect = self
             .tabs
             .get(tab)
-            .ok_or(OrzmuxError::Unsolved)?
+            .ok_or(OrzmuxError::NoPaneRect)?
             .tree
-            .solve(geometry.size)
+            .tile(geometry.size)
             .rect_of(new)
-            .ok_or(OrzmuxError::Unsolved)?;
+            .ok_or(OrzmuxError::NoPaneRect)?;
         let size = GridSize::new(rect.cols, rect.rows)?;
         let tty = self.factory.spawn(size, geometry.cell_px, cwd, env)?;
         Ok((tty, size))
     }
 
-    /// Tells every pane whether it holds focus, then re-solves every
+    /// Tells every pane whether it holds focus, then re-tiles every
     /// tab's tree, resizes every pane whose applied geometry differs
     /// (displayed or not), flushes those panes, and emits their signals
     /// followed by one `Layout` of the displayed tab carrying all
@@ -961,13 +961,13 @@ impl Backend {
             self.sync_webview_active();
             return;
         };
-        let solved: Vec<(TabId, Solved)> = self
+        let tilings: Vec<(TabId, Tiling)> = self
             .tabs
             .iter()
-            .map(|w| (w.id, w.tree.solve(geometry.size)))
+            .map(|w| (w.id, w.tree.tile(geometry.size)))
             .collect();
         let mut frames: Vec<(PaneId, Frame)> = Vec::new();
-        for rect in solved.iter().flat_map(|(_, s)| &s.panes) {
+        for rect in tilings.iter().flat_map(|(_, s)| &s.panes) {
             let Some(pane) = self.panes.get_mut(&rect.pane) else {
                 continue;
             };
@@ -993,13 +993,13 @@ impl Backend {
             self.forward_items(Some(&mut frames), rect.pane, flushed.items);
         }
         let displayed = self.tabs.active_id();
-        let layout = match solved.into_iter().find(|(id, _)| Some(*id) == displayed) {
-            Some((_, solved)) => Layout {
+        let layout = match tilings.into_iter().find(|(id, _)| Some(*id) == displayed) {
+            Some((_, tiling)) => Layout {
                 seq: self.processed,
-                size: solved.size,
+                size: tiling.size,
                 active: self.visible_active(),
-                panes: solved.panes,
-                separators: solved.separators,
+                panes: tiling.panes,
+                separators: tiling.separators,
             },
             None => Layout {
                 seq: self.processed,
