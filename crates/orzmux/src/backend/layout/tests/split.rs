@@ -66,14 +66,8 @@ fn a_vertical_split_halves_the_width_around_a_separator() {
 fn a_horizontal_split_stacks_the_new_pane_below() {
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Horizontal,
-        PaneId(2),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Horizontal, PaneId(2))
+        .unwrap();
     let tiling = tree.tile(W);
     assert_eq!(rect_of(&tiling, PaneId(1)).rows, 12);
     assert_eq!(
@@ -88,35 +82,21 @@ fn a_horizontal_split_stacks_the_new_pane_below() {
     );
 }
 
-/// Asserts that a leaf too narrow to hold two minimum leaves and a
-/// separator along the split axis refuses to split.
+/// Asserts that splitting a pane the tree does not hold is refused and
+/// leaves the tree as it was.
 ///
-/// Case: the user keeps splitting a pane until it is two columns wide.
+/// Case: a stale split request names a pane that already closed.
 #[test]
-fn a_split_needs_room_for_two_minimum_leaves_and_a_separator() {
+fn splitting_an_absent_pane_is_refused() {
     let mut ids = SplitIds::default();
-    let mut tree = LayoutTree::with_root(PaneId(1));
-    let narrow = GridSize { cols: 2, rows: 24 };
-    assert!(
-        tree.split(
-            &mut ids,
-            PaneId(1),
-            SplitOrientation::Vertical,
-            PaneId(2),
-            narrow
-        )
-        .is_err()
-    );
-    assert!(
-        tree.split(
-            &mut ids,
-            PaneId(1),
-            SplitOrientation::Horizontal,
-            PaneId(2),
-            narrow
-        )
-        .is_ok()
-    );
+    let mut tree = two_side_by_side(&mut ids);
+    let before = tree.tile(W);
+    assert!(matches!(
+        tree.split(&mut ids, PaneId(9), SplitOrientation::Vertical, PaneId(3)),
+        Err(OrzmuxError::UnresolvedTarget)
+    ));
+    assert_eq!(tree.tile(W), before);
+    assert_eq!(tree.active(), PaneId(2));
 }
 
 /// Asserts that two trees splitting through one `SplitIds` never
@@ -129,22 +109,10 @@ fn trees_sharing_split_ids_never_reuse_an_id() {
     let mut ids = SplitIds::default();
     let mut a = LayoutTree::with_root(PaneId(1));
     let mut b = LayoutTree::with_root(PaneId(3));
-    a.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(2),
-        W,
-    )
-    .expect("an 80-column pane splits");
-    b.split(
-        &mut ids,
-        PaneId(3),
-        SplitOrientation::Vertical,
-        PaneId(4),
-        W,
-    )
-    .expect("an 80-column pane splits");
+    a.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(2))
+        .expect("an 80-column pane splits");
+    b.split(&mut ids, PaneId(3), SplitOrientation::Vertical, PaneId(4))
+        .expect("an 80-column pane splits");
     assert_ne!(a.tile(W).separators[0].split, b.tile(W).separators[0].split);
 }
 
@@ -157,26 +125,14 @@ fn trees_sharing_split_ids_never_reuse_an_id() {
 fn a_split_id_is_never_reused() {
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(2),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(2))
+        .unwrap();
     let first = tree.tile(W).separators[0].split;
 
     let mut tree = removed(tree, PaneId(2));
     assert!(tree.tile(W).separators.is_empty());
 
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(3),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(3))
+        .unwrap();
     assert_ne!(tree.tile(W).separators[0].split, first);
 }

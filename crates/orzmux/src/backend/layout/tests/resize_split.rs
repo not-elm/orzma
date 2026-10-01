@@ -19,7 +19,6 @@ fn the_drag_minimum_composes_through_nested_splits() {
             PaneId(1),
             SplitOrientation::Vertical,
             PaneId(2),
-            W,
         )
         .unwrap();
     columns
@@ -28,7 +27,6 @@ fn the_drag_minimum_composes_through_nested_splits() {
             PaneId(2),
             SplitOrientation::Vertical,
             PaneId(3),
-            W,
         )
         .unwrap();
     assert_eq!(columns.min_size_for_drag().cols, 14);
@@ -40,7 +38,6 @@ fn the_drag_minimum_composes_through_nested_splits() {
         PaneId(1),
         SplitOrientation::Horizontal,
         PaneId(2),
-        W,
     )
     .unwrap();
     rows.split(
@@ -48,7 +45,6 @@ fn the_drag_minimum_composes_through_nested_splits() {
         PaneId(2),
         SplitOrientation::Horizontal,
         PaneId(3),
-        W,
     )
     .unwrap();
     assert_eq!(rows.min_size_for_drag().rows, 8);
@@ -101,14 +97,8 @@ fn a_resize_clamps_to_the_drag_minimum_on_both_sides() {
 fn a_horizontal_resize_clamps_to_the_drag_minimum_on_both_sides() {
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Horizontal,
-        PaneId(2),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Horizontal, PaneId(2))
+        .unwrap();
     let split = tree.tile(W).separators[0].split;
 
     assert!(tree.resize_split(split, 0, W));
@@ -143,22 +133,10 @@ fn a_resize_of_an_unknown_split_is_refused() {
 fn a_position_before_the_split_origin_saturates() {
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(2),
-        W,
-    )
-    .unwrap();
-    tree.split(
-        &mut ids,
-        PaneId(2),
-        SplitOrientation::Vertical,
-        PaneId(3),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(2))
+        .unwrap();
+    tree.split(&mut ids, PaneId(2), SplitOrientation::Vertical, PaneId(3))
+        .unwrap();
     let inner = tree.tile(W).separators[1].split;
 
     assert!(tree.resize_split(inner, 0, W));
@@ -176,22 +154,10 @@ fn a_position_before_the_split_origin_saturates() {
 fn resizing_an_inner_split_leaves_the_outer_divider() {
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(2),
-        W,
-    )
-    .unwrap();
-    tree.split(
-        &mut ids,
-        PaneId(2),
-        SplitOrientation::Horizontal,
-        PaneId(3),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(2))
+        .unwrap();
+    tree.split(&mut ids, PaneId(2), SplitOrientation::Horizontal, PaneId(3))
+        .unwrap();
     let outer_x = tree.tile(W).separators[0].x;
     let inner = tree.tile(W).separators[1].split;
 
@@ -213,14 +179,8 @@ fn a_cramped_window_falls_back_to_the_tree_minimum() {
     let narrow = GridSize { cols: 8, rows: 24 };
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(2),
-        narrow,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(2))
+        .unwrap();
     let split = tree.tile(narrow).separators[0].split;
 
     assert!(tree.resize_split(split, 1, narrow));
@@ -254,7 +214,6 @@ fn a_resize_against_a_shrunken_window_is_clamped() {
 /// the per-leaf drag minimum no longer fits, then drags a divider.
 #[test]
 fn a_deep_column_below_the_drag_minimum_still_resizes() {
-    let wide = GridSize { cols: 23, rows: 24 };
     let narrow = GridSize { cols: 16, rows: 24 };
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
@@ -264,7 +223,6 @@ fn a_deep_column_below_the_drag_minimum_still_resizes() {
             PaneId(target),
             SplitOrientation::Vertical,
             PaneId(new),
-            wide,
         )
         .unwrap();
     }

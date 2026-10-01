@@ -42,14 +42,8 @@ fn removing_an_absent_pane_changes_nothing() {
 fn a_removed_active_pane_without_history_falls_to_the_first_pane() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
-    tree.split(
-        &mut ids,
-        PaneId(2),
-        SplitOrientation::Horizontal,
-        PaneId(3),
-        W,
-    )
-    .expect("an 80-column pane splits");
+    tree.split(&mut ids, PaneId(2), SplitOrientation::Horizontal, PaneId(3))
+        .expect("an 80-column pane splits");
     tree.clear_history_for_test();
     let tree = removed(tree, PaneId(3));
     assert_eq!(tree.active(), PaneId(1));
@@ -83,22 +77,10 @@ fn removing_a_leaf_can_resize_a_pane_outside_its_subtree() {
     let window = GridSize { cols: 11, rows: 5 };
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(3),
-        window,
-    )
-    .unwrap();
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(2),
-        window,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(3))
+        .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(2))
+        .unwrap();
     tree.set_root_ratio_for_test(0.1);
     let before = tree.tile(window);
     assert_eq!(rect_of(&before, PaneId(3)).cols, 5);
@@ -118,30 +100,12 @@ fn removing_a_leaf_can_resize_a_pane_outside_its_subtree() {
 fn an_ancestor_split_keeps_its_id_when_a_descendant_collapses() {
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(2),
-        W,
-    )
-    .unwrap();
-    tree.split(
-        &mut ids,
-        PaneId(2),
-        SplitOrientation::Horizontal,
-        PaneId(3),
-        W,
-    )
-    .unwrap();
-    tree.split(
-        &mut ids,
-        PaneId(3),
-        SplitOrientation::Horizontal,
-        PaneId(4),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(2))
+        .unwrap();
+    tree.split(&mut ids, PaneId(2), SplitOrientation::Horizontal, PaneId(3))
+        .unwrap();
+    tree.split(&mut ids, PaneId(3), SplitOrientation::Horizontal, PaneId(4))
+        .unwrap();
     let before: Vec<SplitId> = tree.tile(W).separators.iter().map(|s| s.split).collect();
     assert_eq!(before.len(), 3);
 

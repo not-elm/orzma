@@ -33,6 +33,16 @@ impl Tiling {
     pub fn rect_of(&self, pane: PaneId) -> Option<PaneRect> {
         self.panes.iter().find(|r| r.pane == pane).copied()
     }
+
+    /// Whether `pane`'s rectangle can hold two minimum leaves and a
+    /// separator along the axis a split of `orientation` divides. It is
+    /// `false` for a pane that is not in the tiling.
+    pub fn can_split(&self, pane: PaneId, orientation: SplitOrientation) -> bool {
+        self.rect_of(pane).is_some_and(|rect| match orientation {
+            SplitOrientation::Vertical => rect.cols > 2 * LEAF_MIN.cols,
+            SplitOrientation::Horizontal => rect.rows > 2 * LEAF_MIN.rows,
+        })
+    }
 }
 
 /// Mints split ids that stay unique across every tree it serves.
@@ -158,30 +168,17 @@ impl LayoutTree {
     ///
     /// # Errors
     ///
-    /// Returns [`OrzmuxError::SplitRefused`] when `target` is missing
-    /// or, along the axis in `window`, cannot hold two minimum leaves
-    /// and a separator.
+    /// Returns [`OrzmuxError::UnresolvedTarget`] when `target` is not in
+    /// the tree.
     pub fn split(
         &mut self,
         ids: &mut SplitIds,
         target: PaneId,
         orientation: SplitOrientation,
         new: PaneId,
-        window: GridSize,
     ) -> OrzmuxResult {
-        let rect = self
-            .tile(window)
-            .rect_of(target)
-            .ok_or(OrzmuxError::SplitRefused)?;
-        let (along, needed) = match orientation {
-            SplitOrientation::Vertical => (rect.cols, 2 * LEAF_MIN.cols + 1),
-            SplitOrientation::Horizontal => (rect.rows, 2 * LEAF_MIN.rows + 1),
-        };
-        if along < needed {
-            return Err(OrzmuxError::SplitRefused);
-        }
         if !self.root.split_leaf(target, orientation, new, ids.mint()) {
-            return Err(OrzmuxError::SplitRefused);
+            return Err(OrzmuxError::UnresolvedTarget);
         }
         self.activate(new);
         Ok(())

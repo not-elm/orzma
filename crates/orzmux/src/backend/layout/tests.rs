@@ -2,6 +2,7 @@
 
 use super::*;
 
+mod can_split;
 mod remove;
 mod resize_direction;
 mod resize_split;
@@ -17,7 +18,7 @@ fn rect_of(tiling: &Tiling, pane: PaneId) -> PaneRect {
 
 fn two_side_by_side(ids: &mut SplitIds) -> LayoutTree {
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(ids, PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
+    tree.split(ids, PaneId(1), SplitOrientation::Vertical, PaneId(2))
         .expect("an 80-column pane splits");
     tree
 }

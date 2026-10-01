@@ -23,8 +23,8 @@ pub enum OrzmuxError {
     /// No tab matches the target.
     #[error("no tab matches the target")]
     UnresolvedTab,
-    /// A split was refused because the target is missing, or cannot
-    /// hold two minimum leaves and a separator along the split axis.
+    /// A split was refused because the target cannot hold two minimum
+    /// leaves and a separator along the split axis.
     #[error("the target pane has too little room to divide")]
     SplitRefused,
     /// The new pane has no rectangle: its tab is gone, or the tab's tree

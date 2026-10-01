@@ -7,7 +7,7 @@ use super::*;
 /// divider sits at x = 40 and the B|C divider at x = 60.
 fn three_columns(ids: &mut SplitIds) -> LayoutTree {
     let mut tree = two_side_by_side(ids);
-    tree.split(ids, PaneId(2), SplitOrientation::Vertical, PaneId(3), W)
+    tree.split(ids, PaneId(2), SplitOrientation::Vertical, PaneId(3))
         .unwrap();
     tree
 }
@@ -17,9 +17,9 @@ fn three_columns(ids: &mut SplitIds) -> LayoutTree {
 /// divider at x = 40.
 fn nested_run(ids: &mut SplitIds) -> LayoutTree {
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(ids, PaneId(1), SplitOrientation::Vertical, PaneId(3), W)
+    tree.split(ids, PaneId(1), SplitOrientation::Vertical, PaneId(3))
         .unwrap();
-    tree.split(ids, PaneId(1), SplitOrientation::Vertical, PaneId(2), W)
+    tree.split(ids, PaneId(1), SplitOrientation::Vertical, PaneId(2))
         .unwrap();
     tree
 }
@@ -72,14 +72,8 @@ fn the_last_pane_of_a_row_moves_its_left_border() {
 fn stacked_panes_move_the_horizontal_divider() {
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Horizontal,
-        PaneId(2),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Horizontal, PaneId(2))
+        .unwrap();
     tree.select(PaneId(1));
 
     assert!(tree.resize_direction(PaneDirection::Down, 5, W));
@@ -136,14 +130,8 @@ fn the_first_pane_of_a_nested_run_moves_the_nearest_divider() {
 fn a_stacked_pane_moves_the_column_divider_beside_it() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
-    tree.split(
-        &mut ids,
-        PaneId(2),
-        SplitOrientation::Horizontal,
-        PaneId(3),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(2), SplitOrientation::Horizontal, PaneId(3))
+        .unwrap();
 
     assert!(tree.resize_direction(PaneDirection::Left, 5, W));
 
@@ -160,30 +148,12 @@ fn a_stacked_pane_moves_the_column_divider_beside_it() {
 fn the_run_stops_at_a_split_of_the_other_orientation() {
     let mut ids = SplitIds::default();
     let mut tree = LayoutTree::with_root(PaneId(1));
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Vertical,
-        PaneId(4),
-        W,
-    )
-    .unwrap();
-    tree.split(
-        &mut ids,
-        PaneId(1),
-        SplitOrientation::Horizontal,
-        PaneId(2),
-        W,
-    )
-    .unwrap();
-    tree.split(
-        &mut ids,
-        PaneId(2),
-        SplitOrientation::Vertical,
-        PaneId(3),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Vertical, PaneId(4))
+        .unwrap();
+    tree.split(&mut ids, PaneId(1), SplitOrientation::Horizontal, PaneId(2))
+        .unwrap();
+    tree.split(&mut ids, PaneId(2), SplitOrientation::Vertical, PaneId(3))
+        .unwrap();
 
     assert!(tree.resize_direction(PaneDirection::Left, 5, W));
 

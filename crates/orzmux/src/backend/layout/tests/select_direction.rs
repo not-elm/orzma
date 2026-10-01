@@ -30,14 +30,8 @@ fn select_direction_moves_to_the_adjacent_pane_and_stops_at_the_edge() {
 fn select_direction_prefers_the_most_recently_active_candidate() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
-    tree.split(
-        &mut ids,
-        PaneId(2),
-        SplitOrientation::Horizontal,
-        PaneId(3),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(2), SplitOrientation::Horizontal, PaneId(3))
+        .unwrap();
     tree.select(PaneId(1));
     assert!(tree.select_direction(PaneDirection::Right, W));
     assert_eq!(tree.active(), PaneId(3), "pane 3 was active most recently");
@@ -50,7 +44,6 @@ fn select_direction_prefers_the_most_recently_active_candidate() {
             PaneId(2),
             SplitOrientation::Horizontal,
             PaneId(3),
-            W,
         )
         .unwrap();
     fresh.clear_history_for_test();
@@ -73,14 +66,8 @@ fn select_direction_prefers_the_most_recently_active_candidate() {
 fn select_direction_does_not_skip_neighbours_when_clipped() {
     let mut ids = SplitIds::default();
     let mut tree = two_side_by_side(&mut ids);
-    tree.split(
-        &mut ids,
-        PaneId(2),
-        SplitOrientation::Vertical,
-        PaneId(3),
-        W,
-    )
-    .unwrap();
+    tree.split(&mut ids, PaneId(2), SplitOrientation::Vertical, PaneId(3))
+        .unwrap();
     tree.select(PaneId(1));
     let tiny = GridSize { cols: 2, rows: 1 };
     assert!(tree.select_direction(PaneDirection::Right, tiny));
