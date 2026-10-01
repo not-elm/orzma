@@ -5,15 +5,16 @@ use crate::font::TerminalUiFont;
 use crate::session::spawn::PaneSpawnRequest;
 use crate::ui::UiRoot;
 use crate::ui::tab_bar::drag::{TabDrag, TabDragPlugin};
-use crate::ui::tab_bar::rename::{StartTabRename, TabRename, TabRenamePlugin};
+use crate::ui::tab_bar::rename::{RenameSystems, StartTabRename, TabRename, TabRenamePlugin};
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
+use bevy::ui::widget::measure_text_system;
 use bevy::ui_widgets::{ScrollArea, ScrollIntoView};
 use bevy::window::{PrimaryWindow, WindowScaleFactorChanged};
 use bevy_orzmux::prelude::{
-    CloseTarget, CurrentTabs, OrzmuxSystems, RequestTabAction, TabAction, TabEntry, TabId,
-    TabTarget,
+    CloseTarget, CurrentTabs, OrzmuxSystems, PaneRegistry, PendingTabRename, RequestTabAction,
+    TabAction, TabEntry, TabId, TabTarget, TtyTitle,
 };
 use orzmux::prelude::NewPaneAt;
 use std::collections::HashMap;
@@ -87,6 +88,19 @@ impl Plugin for TabBarPlugin {
             )
             .add_systems(
                 PostUpdate,
+                label_tabs
+                    .after(RenameSystems::Finish)
+                    .before(measure_text_system)
+                    .run_if(
+                        resource_exists_and_changed::<CurrentTabs>
+                            .or_eager(resource_exists_and_changed::<PendingTabRename>)
+                            .or_eager(resource_exists_and_changed::<TabDrag>)
+                            .or_eager(any_match_filter::<Added<TabButton>>)
+                            .or_eager(any_match_filter::<Changed<TtyTitle>>),
+                    ),
+            )
+            .add_systems(
+                PostUpdate,
                 scroll_active_tab_into_view
                     .after(UiSystems::Layout)
                     .run_if(resource_exists_and_changed::<CurrentTabs>),
@@ -99,11 +113,11 @@ pub(crate) fn tab_bar_height_phys(scale_factor: f32) -> u32 {
     (TAB_BAR_HEIGHT_PX * scale_factor).round().max(0.0) as u32
 }
 
-/// The text a tab shows at zero-based `position`: its name, or
-/// `Tab {position + 1}`.
-pub(crate) fn tab_label(position: usize, name: Option<&str>) -> String {
-    match name {
-        Some(name) => name.to_string(),
+/// The text a tab shows at zero-based `position`: its name, else its
+/// active pane's title, else `Tab {position + 1}`.
+pub(crate) fn tab_label(position: usize, name: Option<&str>, title: Option<&str>) -> String {
+    match name.or(title) {
+        Some(text) => text.to_string(),
         None => format!("Tab {}", position + 1),
     }
 }
@@ -265,16 +279,15 @@ fn size_tab_bar(
 }
 
 /// Spawns a button for each new tab, despawns the buttons of closed ones,
-/// and orders the strip's children and numbers the labels as `tab_order`
-/// says with the drag's preview, keeping the new-tab button last.
+/// and orders the strip's children as `tab_order` says with the drag's
+/// preview, keeping the new-tab button last. Labels are left to
+/// `label_tabs`.
 fn reconcile_tabs(
     mut commands: Commands,
-    mut labels: Query<&mut Text, With<TabLabelText>>,
     tabs: Res<CurrentTabs>,
     drag: Res<TabDrag>,
     ui_font: Option<Res<TerminalUiFont>>,
-    buttons: Query<(Entity, &TabButton, Option<&Children>)>,
-    label_boxes: Query<&Children, With<TabLabel>>,
+    buttons: Query<(Entity, &TabButton)>,
     strip: Query<(Entity, Option<&Children>), With<TabStrip>>,
     plus: Query<Entity, With<NewTabButton>>,
 ) {
@@ -283,31 +296,19 @@ fn reconcile_tabs(
     };
     let order = tab_order(&tabs.entries, drag.preview());
     let mut by_id: HashMap<TabId, Entity> = HashMap::new();
-    for (entity, tab, parts) in &buttons {
-        let Some(position) = order.iter().position(|id| *id == tab.id) else {
+    for (entity, button) in &buttons {
+        if !order.contains(&button.id) {
             commands.entity(entity).despawn();
             continue;
-        };
-        let label = tab_label(position, tab_name(&tabs.entries, tab.id));
-        let texts = parts
-            .into_iter()
-            .flat_map(|parts| label_texts(parts, &label_boxes));
-        for text in texts {
-            if let Ok(mut text) = labels.get_mut(text)
-                && text.0 != label
-            {
-                text.0.clone_from(&label);
-            }
         }
-        by_id.insert(tab.id, entity);
+        by_id.insert(button.id, entity);
     }
     let font = tab_font(ui_font.as_deref());
-    for (position, id) in order.iter().enumerate() {
+    for id in order.iter() {
         if by_id.contains_key(id) {
             continue;
         }
-        let label = tab_label(position, tab_name(&tabs.entries, *id));
-        let tab = spawn_tab(&mut commands, strip, *id, label, &font);
+        let tab = spawn_tab(&mut commands, strip, *id, &font);
         by_id.insert(*id, tab);
     }
     let mut ordered: Vec<Entity> = order
@@ -322,13 +323,7 @@ fn reconcile_tabs(
 
 /// Spawns one rounded tab, shorter than the bar and centred in it, with
 /// its label and close button under `strip`, and returns it.
-fn spawn_tab(
-    commands: &mut Commands,
-    strip: Entity,
-    tab: TabId,
-    label: String,
-    font: &TextFont,
-) -> Entity {
+fn spawn_tab(commands: &mut Commands, strip: Entity, tab: TabId, font: &TextFont) -> Entity {
     /// The narrowest a tab gets before the strip scrolls, in logical px.
     const TAB_MIN_WIDTH_PX: f32 = 80.0;
     /// The widest a tab gets, in logical px.
@@ -369,7 +364,7 @@ fn spawn_tab(
         ))
         .with_child((
             TabLabelText,
-            Text::new(label),
+            Text::new(""),
             font.clone(),
             TextColor(INACTIVE_TEXT),
             TextLayout::no_wrap(),
@@ -388,15 +383,6 @@ fn spawn_tab(
         ))
         .observe(on_close_click);
     tab
-}
-
-/// The name of tab `id` among `entries`; `None` when it has none or
-/// is not listed.
-fn tab_name(entries: &[TabEntry], id: TabId) -> Option<&str> {
-    entries
-        .iter()
-        .find(|entry| entry.id == id)
-        .and_then(|entry| entry.name.as_deref())
 }
 
 /// The text entities inside the `TabLabel` among a tab's `parts`.
@@ -448,6 +434,44 @@ fn style_tabs(
                 node.display = close;
             }
             color.set_if_neq(TextColor(close_text));
+        }
+    }
+}
+
+/// Writes each tab's label, numbered in the order the tabs show with the
+/// drag's preview: a rename in flight wins over the name the backend
+/// reported, and an unnamed tab shows its active pane's title, else
+/// `Tab n`. A label is written only when its text differs.
+fn label_tabs(
+    mut texts: Query<&mut Text, With<TabLabelText>>,
+    tabs: Res<CurrentTabs>,
+    pending: Res<PendingTabRename>,
+    drag: Res<TabDrag>,
+    registry: Res<PaneRegistry>,
+    titles: Query<&TtyTitle>,
+    buttons: Query<(&TabButton, &Children)>,
+    label_boxes: Query<&Children, With<TabLabel>>,
+) {
+    let order = tab_order(&tabs.entries, drag.preview());
+    for (button, parts) in &buttons {
+        let Some(position) = order.iter().position(|id| *id == button.id) else {
+            continue;
+        };
+        let Some(entry) = tabs.entries.iter().find(|entry| entry.id == button.id) else {
+            continue;
+        };
+        let name = pending.name_for(button.id).unwrap_or(entry.name.as_deref());
+        let title = registry
+            .entity_of(entry.active_pane)
+            .and_then(|pane| titles.get(pane).ok())
+            .and_then(|title| title.0.as_deref());
+        let label = tab_label(position, name, title);
+        for text in label_texts(parts, &label_boxes) {
+            if let Ok(mut text) = texts.get_mut(text)
+                && text.0 != label
+            {
+                text.0.clone_from(&label);
+            }
         }
     }
 }
@@ -583,6 +607,7 @@ mod tests {
     use bevy::ui::CalculatedClip;
     use bevy::ui::update::update_clipping_system;
     use bevy_orzmux::prelude::PendingTabMove;
+    use bevy_orzmux::prelude::{PaneRegistry, PendingTabRename, RenameInFlight, TtyTitle};
     use orzmux::prelude::CommandSeq;
     use orzmux::prelude::PaneId;
     use std::fmt::Debug;
@@ -602,9 +627,32 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TabBarPlugin))
             .init_resource::<CurrentTabs>()
+            .init_resource::<PendingTabRename>()
+            .init_resource::<PaneRegistry>()
             .init_resource::<InputFocus>();
         app.world_mut().spawn((Node::default(), UiRoot));
         app
+    }
+
+    /// Gives pane `pane` a terminal entity whose title is `title`.
+    fn set_title(app: &mut App, pane: u32, title: Option<&str>) {
+        let existing = app
+            .world()
+            .resource::<PaneRegistry>()
+            .entity_of(PaneId(pane));
+        let title = TtyTitle(title.map(str::to_owned));
+        match existing {
+            Some(entity) => {
+                app.world_mut().entity_mut(entity).insert(title);
+            }
+            None => {
+                let entity = app.world_mut().spawn(title).id();
+                app.world_mut()
+                    .resource_mut::<PaneRegistry>()
+                    .panes
+                    .insert(PaneId(pane), entity);
+            }
+        }
     }
 
     fn set_tabs(app: &mut App, ids: &[u32], active: u32) {
@@ -802,15 +850,143 @@ mod tests {
         pointer_at(entity, 0.0, event)
     }
 
-    /// Asserts that an unnamed tab shows `Tab n` by position and a
-    /// named tab shows its name.
+    /// Asserts the label rule: a name wins, then the active pane's title,
+    /// then `Tab n` by position.
     ///
-    /// Case: the user renamed the second of three tabs.
+    /// Case: three tabs where the user named the second and vim runs in
+    /// the third.
     #[test]
-    fn labels_follow_the_position_unless_named() {
-        assert_eq!(tab_label(0, None), "Tab 1");
-        assert_eq!(tab_label(1, Some("logs")), "logs");
-        assert_eq!(tab_label(2, None), "Tab 3");
+    fn a_label_is_the_name_else_the_title_else_the_position() {
+        assert_eq!(tab_label(0, None, None), "Tab 1");
+        assert_eq!(tab_label(1, Some("logs"), Some("zsh")), "logs");
+        assert_eq!(tab_label(2, None, Some("vim")), "vim");
+    }
+
+    /// Asserts that a hidden tab's label follows its active pane's title.
+    ///
+    /// Case: htop in a background tab sets its title while the user works
+    /// in the first tab.
+    #[test]
+    fn a_hidden_tabs_label_follows_its_active_panes_title() {
+        let mut app = app_with_tab_bar();
+        set_tabs(&mut app, &[1, 2], 1);
+        app.update();
+        app.update();
+        set_title(&mut app, 2, Some("htop"));
+        app.update();
+        assert_eq!(
+            listed_tabs(&mut app),
+            expected_tabs(&[(1, "Tab 1"), (2, "htop")])
+        );
+        set_title(&mut app, 2, None);
+        app.update();
+        assert_eq!(
+            listed_tabs(&mut app),
+            expected_tabs(&[(1, "Tab 1"), (2, "Tab 2")])
+        );
+    }
+
+    /// Asserts that a label switches to the title of the pane that becomes
+    /// active, and ignores the title of a pane that is not active.
+    ///
+    /// Case: the user split the tab, the right pane runs vim, and the user
+    /// moves between the panes.
+    #[test]
+    fn the_label_follows_a_change_of_active_pane() {
+        let mut app = app_with_tab_bar();
+        set_tabs(&mut app, &[1], 1);
+        set_title(&mut app, 1, Some("zsh"));
+        set_title(&mut app, 7, Some("vim"));
+        app.update();
+        app.update();
+        assert_eq!(listed_tabs(&mut app), expected_tabs(&[(1, "zsh")]));
+        app.world_mut().resource_mut::<CurrentTabs>().entries[0].active_pane = PaneId(7);
+        app.update();
+        assert_eq!(listed_tabs(&mut app), expected_tabs(&[(1, "vim")]));
+        set_title(&mut app, 1, Some("make"));
+        app.update();
+        assert_eq!(listed_tabs(&mut app), expected_tabs(&[(1, "vim")]));
+    }
+
+    /// Asserts that a rename in flight shows at once and stays on screen
+    /// when the title changes before the backend answers.
+    ///
+    /// Case: the user renames a tab running vim to "edit", and vim updates
+    /// its title before the rename is answered.
+    #[test]
+    fn a_rename_in_flight_wins_over_a_title_until_answered() {
+        let mut app = app_with_tab_bar();
+        set_tabs(&mut app, &[1], 1);
+        set_title(&mut app, 1, Some("vim"));
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<PendingTabRename>().0.insert(
+            TabId(1),
+            RenameInFlight {
+                seq: CommandSeq(5),
+                name: Some("edit".into()),
+            },
+        );
+        app.update();
+        assert_eq!(listed_tabs(&mut app), expected_tabs(&[(1, "edit")]));
+        set_title(&mut app, 1, Some("vim - file.rs"));
+        app.update();
+        assert_eq!(listed_tabs(&mut app), expected_tabs(&[(1, "edit")]));
+    }
+
+    /// Asserts that during a drag only the unnamed, untitled tabs are
+    /// renumbered by the preview.
+    ///
+    /// Case: three tabs, the second running vim, and the user drags the
+    /// first tab onto the last slot.
+    #[test]
+    fn the_drag_preview_renumbers_only_untitled_tabs() {
+        let mut app = app_with_tab_bar();
+        set_tabs(&mut app, &[1, 2, 3], 1);
+        set_title(&mut app, 2, Some("vim"));
+        app.update();
+        app.update();
+        {
+            let mut drag = app.world_mut().resource_mut::<TabDrag>();
+            drag.start(TabId(1), 0, 0.0);
+            drag.update(500.0, 2);
+        }
+        app.update();
+        assert_eq!(
+            listed_tabs(&mut app),
+            expected_tabs(&[(2, "vim"), (3, "Tab 2"), (1, "Tab 3")])
+        );
+    }
+
+    /// Asserts that a committed rename shows in the label in the same
+    /// update, before the backend answers.
+    ///
+    /// Case: the user renames the first tab to "logs" and presses Enter.
+    #[test]
+    fn a_committed_rename_shows_in_the_same_update() {
+        let mut app = app_with_tab_bar();
+        app.add_observer(
+            |ev: On<RequestTabAction>, mut pending: ResMut<PendingTabRename>| {
+                if let TabAction::Rename { tab, name } = &ev.action {
+                    pending.0.insert(
+                        *tab,
+                        RenameInFlight {
+                            seq: CommandSeq(1),
+                            name: name.clone(),
+                        },
+                    );
+                }
+            },
+        );
+        set_tabs(&mut app, &[1], 1);
+        app.update();
+        app.update();
+        let tab = tab_of(&mut app, 1);
+        let label = label_box_in(app.world(), tab);
+        let field = app.world_mut().spawn(EditableText::new("logs")).id();
+        app.insert_resource(TabRename::ending_for_test(TabId(1), field, label, true));
+        app.update();
+        assert_eq!(listed_tabs(&mut app), expected_tabs(&[(1, "logs")]));
     }
 
     /// Asserts that one button per tab exists in display order, and

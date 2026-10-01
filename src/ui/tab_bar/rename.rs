@@ -262,7 +262,7 @@ fn start_rename(
                 max_characters: Some(Tab::MAX_NAME_CHARS),
                 allow_newlines: false,
                 cursor_blink_period: STEADY_CARET,
-                ..EditableText::new(tab_label(position, name.as_deref()))
+                ..EditableText::new(tab_label(position, name.as_deref(), None))
             },
             EditableTextFilter::new(|c| !c.is_control()),
             SelectAllOnFocus,
@@ -291,7 +291,7 @@ fn start_rename(
         field,
         label,
         name,
-        auto_label: tab_label(position, None),
+        auto_label: tab_label(position, None, None),
         ending: None,
     });
 }
