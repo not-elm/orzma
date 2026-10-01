@@ -182,7 +182,7 @@ pub enum OrzmuxCommand {
     },
     /// Name a tab, or restore its automatic name with `None`. The
     /// name loses its control characters and surrounding whitespace and is
-    /// cut to 64 characters.
+    /// cut to 64 characters. Always answered with exactly one `Tabs`, even when the name is unchanged or the tab is gone.
     RenameTab {
         /// The tab to name.
         tab: TabId,
@@ -1439,7 +1439,7 @@ mod tests {
         h.send(OrzmuxCommand::KillPane {
             pane: PaneTarget::Id(new),
         });
-        let events: Vec<OrzmuxEvent> = h.drain().into_iter().collect();
+        let events: Vec<OrzmuxEvent> = h.drain_skipping_tabs().into_iter().collect();
         let closed_at = events
             .iter()
             .position(|e| matches!(e, OrzmuxEvent::PaneClosed { pane, .. } if *pane == new))
@@ -2011,7 +2011,7 @@ mod tests {
             cwd: None,
             env: vec![],
         });
-        let mut opened = h.drain();
+        let mut opened = h.drain_skipping_tabs();
         let Some(OrzmuxEvent::Layout { layout, .. }) = opened.pop_back() else {
             panic!("expected a Layout after the split");
         };

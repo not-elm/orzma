@@ -240,8 +240,22 @@ impl Tabs {
             .map(|w| TabEntry {
                 id: w.id,
                 name: w.name.clone(),
+                active_pane: w.tree.active(),
             })
             .collect()
+    }
+
+    /// Whether `entries` and `active` describe the tabs as they are now:
+    /// the same tabs in the same order, with the same names and active
+    /// panes, and the same displayed tab.
+    pub fn lists_as(&self, entries: &[TabEntry], active: Option<TabId>) -> bool {
+        self.active == active
+            && self.order.len() == entries.len()
+            && self.order.iter().zip(entries).all(|(tab, entry)| {
+                tab.id == entry.id
+                    && tab.name == entry.name
+                    && tab.tree.active() == entry.active_pane
+            })
     }
 
     fn index_of(&self, id: TabId) -> Option<usize> {

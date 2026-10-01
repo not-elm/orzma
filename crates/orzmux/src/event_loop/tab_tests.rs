@@ -37,6 +37,36 @@ fn last_layout_panes(events: &VecDeque<OrzmuxEvent>) -> Vec<PaneId> {
         .unwrap_or_default()
 }
 
+fn active_panes_of(events: &VecDeque<OrzmuxEvent>) -> Vec<Vec<PaneId>> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            OrzmuxEvent::Tabs { entries, .. } => {
+                Some(entries.iter().map(|t| t.active_pane).collect())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Splits `pane` vertically and returns the new pane, draining the events.
+fn split(h: &mut Harness, pane: PaneId, request: u64) -> (PaneId, VecDeque<OrzmuxEvent>) {
+    h.send(OrzmuxCommand::NewPane {
+        request: RequestId(request),
+        at: NewPaneAt::Split {
+            pane: PaneTarget::Id(pane),
+            orientation: SplitOrientation::Vertical,
+        },
+        cwd: None,
+        env: vec![],
+    });
+    let events = h.drain();
+    let Some(OrzmuxEvent::PaneOpened { pane: new, .. }) = events.front() else {
+        panic!("expected PaneOpened, got {events:?}");
+    };
+    (*new, events)
+}
+
 /// Asserts that the first pane opens the first tab and announces it
 /// between `PaneOpened` and `Layout`.
 ///
@@ -57,6 +87,10 @@ fn the_first_pane_opens_the_first_tab() {
     assert!(matches!(events[1], OrzmuxEvent::Tabs { .. }));
     assert!(matches!(events[2], OrzmuxEvent::Layout { .. }));
     assert_eq!(tabs_of(&events), vec![(vec![TabId(1)], Some(TabId(1)))]);
+    let Some(OrzmuxEvent::PaneOpened { pane, .. }) = events.front() else {
+        panic!("expected PaneOpened, got {events:?}");
+    };
+    assert_eq!(active_panes_of(&events), vec![vec![*pane]]);
 }
 
 /// Asserts that a new tab with no explicit directory starts in the
@@ -262,7 +296,7 @@ fn a_resize_split_of_a_hidden_tab_does_nothing() {
         cwd: None,
         env: vec![],
     });
-    let mut split_events = h.drain();
+    let mut split_events = h.drain_skipping_tabs();
     let Some(OrzmuxEvent::Layout { layout, .. }) = split_events.pop_back() else {
         panic!("expected a Layout after the split, got {split_events:?}");
     };
@@ -425,29 +459,92 @@ fn closing_a_tab_kills_its_panes_and_shows_the_neighbour() {
     assert_eq!(last_layout_panes(&events), vec![a]);
 }
 
-/// Asserts that a rename is sanitized and announced only when it changes
-/// the name.
+/// Asserts that a split and a pane selection each announce the tab's new
+/// active pane after the layout, and that selecting the active pane again
+/// announces nothing.
 ///
-/// Case: the user renames a tab, then confirms the same name again.
+/// Case: the user splits the window, clicks back into the left pane, and
+/// clicks it once more.
 #[test]
-fn a_rename_is_announced_only_on_change() {
+fn a_change_of_active_pane_is_announced_after_the_layout() {
+    let mut h = Harness::new();
+    let (root, _p) = h.open_root();
+    let (new, events) = split(&mut h, root, 2);
+    let layout = events
+        .iter()
+        .position(|e| matches!(e, OrzmuxEvent::Layout { .. }));
+    let tabs = events
+        .iter()
+        .position(|e| matches!(e, OrzmuxEvent::Tabs { .. }));
+    assert!(
+        layout.is_some() && tabs.is_some() && layout < tabs,
+        "{events:?}"
+    );
+    assert_eq!(active_panes_of(&events), vec![vec![new]]);
+
+    h.send(OrzmuxCommand::SelectPane { pane: root });
+    assert_eq!(active_panes_of(&h.drain()), vec![vec![root]]);
+
+    h.send(OrzmuxCommand::SelectPane { pane: root });
+    assert!(active_panes_of(&h.drain()).is_empty());
+}
+
+/// Asserts that a hidden tab whose active pane exits announces the pane
+/// that takes over.
+///
+/// Case: the user split the first tab, opened a second tab, and the
+/// first tab's active shell exits in the background.
+#[test]
+fn a_hidden_tabs_active_pane_change_is_announced() {
+    let mut h = Harness::new();
+    let (root, _pr) = h.open_root();
+    let (new, _) = split(&mut h, root, 2);
+    let new_pane = h.spawned_pane().expect("the split's pane");
+    let (shown, _ps) = h.open_tab(RequestId(3));
+    new_pane.exit(Some(0));
+    h.pump_pane(new);
+    let events = h.drain();
+    assert_eq!(active_panes_of(&events).last(), Some(&vec![root, shown]));
+}
+
+/// Asserts that every `RenameTab`, including one that changes nothing and
+/// one naming a closed tab, is answered with exactly one `Tabs` carrying
+/// its sequence, and that the name is sanitized.
+///
+/// Case: the user renames a tab, confirms the same name again, and a
+/// rename races the close of its tab.
+#[test]
+fn rename_tab_always_answers_with_tabs() {
     let mut h = Harness::new();
     let (_a, _pa) = h.open_root();
-    let id = TabId(1);
-    h.send(OrzmuxCommand::RenameTab {
-        tab: id,
+    let seq = h.send(OrzmuxCommand::RenameTab {
+        tab: TabId(1),
         name: Some(" logs\n".into()),
     });
     let events = h.drain();
-    let Some(OrzmuxEvent::Tabs { entries, .. }) = events.front() else {
+    assert_eq!(events.len(), 1);
+    let OrzmuxEvent::Tabs {
+        seq: answered,
+        entries,
+        ..
+    } = &events[0]
+    else {
         panic!("expected Tabs, got {events:?}");
     };
+    assert_eq!(*answered, seq);
     assert_eq!(entries[0].name.as_deref(), Some("logs"));
-    h.send(OrzmuxCommand::RenameTab {
-        tab: id,
-        name: Some("logs".into()),
-    });
-    assert!(h.drain().is_empty());
+    for tab in [TabId(1), TabId(9)] {
+        let seq = h.send(OrzmuxCommand::RenameTab {
+            tab,
+            name: Some("logs".into()),
+        });
+        let events = h.drain();
+        assert_eq!(events.len(), 1, "one answer for {tab:?}");
+        assert!(matches!(
+            events[0],
+            OrzmuxEvent::Tabs { seq: answered, .. } if answered == seq
+        ));
+    }
 }
 
 /// Asserts that every `MoveTab`, including a no-op and one naming a

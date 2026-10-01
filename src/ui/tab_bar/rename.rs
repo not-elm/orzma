@@ -425,6 +425,7 @@ mod tests {
     use bevy::picking::backend::HitData;
     use bevy::picking::pointer::{Location, PointerId};
     use bevy_orzmux::prelude::TabEntry;
+    use orzmux::prelude::PaneId;
 
     /// Asserts the commit rules: blank restores the automatic name, the
     /// untouched automatic label or the same name keeps things as they
@@ -710,6 +711,7 @@ mod tests {
         app.world_mut().resource_mut::<CurrentTabs>().entries = vec![TabEntry {
             id: TabId(2),
             name: None,
+            active_pane: PaneId(1),
         }];
         app.update();
         assert!(!app.world().resource::<TabRename>().is_active());
@@ -743,6 +745,7 @@ mod tests {
             tabs.entries = vec![TabEntry {
                 id: TabId(1),
                 name: None,
+                active_pane: PaneId(1),
             }];
             tabs.active = Some(TabId(1));
         }

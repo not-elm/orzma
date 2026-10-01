@@ -584,6 +584,7 @@ mod tests {
     use bevy::ui::update::update_clipping_system;
     use bevy_orzmux::prelude::PendingTabMove;
     use orzmux::prelude::CommandSeq;
+    use orzmux::prelude::PaneId;
     use std::fmt::Debug;
     use std::time::Duration;
 
@@ -613,6 +614,7 @@ mod tests {
             .map(|id| TabEntry {
                 id: TabId(*id),
                 name: None,
+                active_pane: PaneId(*id),
             })
             .collect();
         tabs.active = Some(TabId(active));
@@ -1086,6 +1088,7 @@ mod tests {
             .map(|id| TabEntry {
                 id: TabId(id),
                 name: None,
+                active_pane: PaneId(id),
             })
             .collect();
         assert_eq!(

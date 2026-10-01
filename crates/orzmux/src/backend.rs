@@ -91,6 +91,8 @@ pub struct TabEntry {
     pub id: TabId,
     /// The name the user gave it, or `None` for the automatic name.
     pub name: Option<String>,
+    /// The tab's active pane.
+    pub active_pane: PaneId,
 }
 
 /// The position of a command in the GUI's send order; `Layout.seq`
@@ -295,9 +297,7 @@ pub enum OrzmuxEvent {
         /// The last processed GUI command.
         seq: CommandSeq,
     },
-    /// The tab list changed: a tab opened, closed, moved, was
-    /// renamed, or was displayed. Also the answer to every
-    /// `MoveTab`.
+    /// The tab list changed: a tab opened, closed, moved, was renamed, or was displayed, or a tab's active pane changed. Also the answer to every `MoveTab` and `RenameTab`.
     Tabs {
         /// The last command the backend processed before building this.
         seq: CommandSeq,
@@ -323,6 +323,10 @@ pub(crate) struct Backend {
     processed: CommandSeq,
     /// The wheel-routing policy handed to every pane's terminal.
     wheel: WheelConfig,
+    /// The entries of the last `Tabs` sent.
+    sent_tabs: Vec<TabEntry>,
+    /// The displayed tab of the last `Tabs` sent.
+    sent_active: Option<TabId>,
     /// Events generated since the last drain, in generation order.
     outbox: Vec<OrzmuxEvent>,
     /// Every client's webview state and the rules over it.
@@ -346,6 +350,8 @@ impl Backend {
             next_pane_id: 1,
             processed: CommandSeq::default(),
             wheel,
+            sent_tabs: Vec::new(),
+            sent_active: None,
             outbox: Vec::new(),
             webview,
         }
@@ -449,7 +455,7 @@ impl Backend {
                 self.emit(OrzmuxEvent::PaneOpened { pane: new, request });
                 if placement.created {
                     self.tabs.activate(placement.tab);
-                    self.emit_tabs();
+                    self.sync_tabs();
                 }
                 self.publish_layout();
                 Ok(())
@@ -488,7 +494,7 @@ impl Backend {
             .resolve(target)
             .ok_or(OrzmuxError::UnresolvedTab)?;
         if self.tabs.activate(id) {
-            self.emit_tabs();
+            self.sync_tabs();
             self.publish_layout();
         }
         Ok(())
@@ -518,16 +524,16 @@ impl Backend {
         Ok(())
     }
 
-    /// Names tab `id`, publishing `Tabs` when the name changed.
+    /// Names tab `id` and always publishes one `Tabs`.
     ///
     /// # Errors
     ///
-    /// Returns [`OrzmuxError::UnresolvedTab`] for an unknown id.
+    /// Returns [`OrzmuxError::UnresolvedTab`] for an unknown id; the
+    /// `Tabs` is still published.
     pub fn rename_tab(&mut self, id: TabId, name: Option<String>) -> OrzmuxResult {
-        if self.tabs.rename(id, name)? {
-            self.emit_tabs();
-        }
-        Ok(())
+        let renamed = self.tabs.rename(id, name);
+        self.answer_tabs();
+        renamed.map(|_| ())
     }
 
     /// Moves tab `id` to `index` and always publishes one
@@ -539,7 +545,7 @@ impl Backend {
     /// `Tabs` is still published.
     pub fn move_tab(&mut self, id: TabId, index: u16) -> OrzmuxResult {
         let moved = self.tabs.move_to(id, index);
-        self.emit_tabs();
+        self.answer_tabs();
         moved.map(|_| ())
     }
 
@@ -962,11 +968,12 @@ impl Backend {
     /// so the release of a webview focus held in another pane follows the
     /// `Layout`. Without geometry, only the first and last steps run. A
     /// pane whose resize is refused keeps its old size while the remaining
-    /// panes are still resized and the `Layout` still publishes.
+    /// panes are still resized and the `Layout` still publishes. Last of all, it sends `Tabs` when the tab list or a tab's active pane changed.
     fn publish_layout(&mut self) {
         self.refresh_focus();
         let Some(geometry) = self.geometry else {
             self.sync_webview_active();
+            self.sync_tabs();
             return;
         };
         let solved: Vec<(TabId, Solved)> = self
@@ -1017,6 +1024,7 @@ impl Backend {
         };
         self.emit(OrzmuxEvent::Layout { layout, frames });
         self.sync_webview_active();
+        self.sync_tabs();
     }
 
     /// Tells every pane whether it holds focus: the displayed tab's
@@ -1104,7 +1112,7 @@ impl Backend {
         self.apply_webview(output);
         self.emit(OrzmuxEvent::PaneClosed { pane: id, reason });
         if matches!(removal, PaneRemoval::TabClosed(_)) {
-            self.emit_tabs();
+            self.sync_tabs();
         }
     }
 
@@ -1214,13 +1222,25 @@ impl Backend {
         }
     }
 
-    /// Queues a `Tabs` snapshot stamped with the last processed
-    /// command.
-    fn emit_tabs(&mut self) {
+    /// Queues a `Tabs` snapshot when the tab list, a name, a tab's active
+    /// pane, or the displayed tab differs from the last snapshot sent.
+    fn sync_tabs(&mut self) {
+        if !self.tabs.lists_as(&self.sent_tabs, self.sent_active) {
+            self.answer_tabs();
+        }
+    }
+
+    /// Queues a `Tabs` snapshot stamped with the last processed command,
+    /// whether or not it changed, and remembers it as the last one sent.
+    fn answer_tabs(&mut self) {
+        let entries = self.tabs.entries();
+        let active = self.tabs.active_id();
+        self.sent_tabs.clone_from(&entries);
+        self.sent_active = active;
         self.emit(OrzmuxEvent::Tabs {
             seq: self.processed,
-            entries: self.tabs.entries(),
-            active: self.tabs.active_id(),
+            entries,
+            active,
         });
     }
 
