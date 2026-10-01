@@ -1172,6 +1172,32 @@ mod tests {
         assert!(world.resource::<SentRequests>().0.is_empty());
     }
 
+    /// Asserts that the rename field of an unnamed tab starts with the
+    /// title the tab shows.
+    ///
+    /// Case: the user double-clicks a tab running vim.
+    #[test]
+    fn the_rename_field_starts_with_the_shown_title() {
+        let mut app = app_with_tab_bar();
+        set_tabs(&mut app, &[1], 1);
+        set_title(&mut app, 1, Some("vim"));
+        app.update();
+        app.update();
+        let first = tab_of(&mut app, 1);
+        app.world_mut().trigger(clicks(first, 2));
+        app.update();
+        let field = app
+            .world()
+            .get::<Children>(first)
+            .expect("the tab has parts")[0];
+        assert_eq!(
+            app.world()
+                .get::<EditableText>(field)
+                .map(|text| text.value().to_string()),
+            Some("vim".to_string())
+        );
+    }
+
     /// Asserts that a drag begun inside a rename field follows no tab.
     ///
     /// Case: the user drags across the text in the rename field to select

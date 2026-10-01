@@ -66,7 +66,7 @@ impl TabRename {
             field: Entity::PLACEHOLDER,
             label: Entity::PLACEHOLDER,
             name: None,
-            auto_label: "Tab 1".into(),
+            initial: "Tab 1".into(),
             ending: None,
         }))
     }
@@ -79,7 +79,7 @@ impl TabRename {
             field,
             label,
             name: None,
-            auto_label: "Tab 1".into(),
+            initial: "Tab 1".into(),
             ending: Some(commit),
         }))
     }
@@ -136,10 +136,10 @@ pub(crate) enum RenameOutcome {
 }
 
 impl RenameOutcome {
-    /// Decides the outcome of committing `input` for a tab named
-    /// `name` (`None` when automatic) whose automatic label is
-    /// `auto_label`. Surrounding whitespace in `input` is ignored.
-    pub fn decide(input: &str, name: Option<&str>, auto_label: &str) -> Self {
+    /// Decides the outcome of committing `input` for a tab named `name`
+    /// (`None` when unnamed) whose field started as `initial`. Surrounding
+    /// whitespace in `input` is ignored.
+    pub fn decide(input: &str, name: Option<&str>, initial: &str) -> Self {
         let input = input.trim();
         if input.is_empty() {
             return if name.is_none() {
@@ -150,7 +150,7 @@ impl RenameOutcome {
         }
         let unchanged = match name {
             Some(name) => input == name,
-            None => input == auto_label,
+            None => input == initial,
         };
         if unchanged {
             Self::Keep
@@ -203,27 +203,30 @@ const STEADY_CARET: Duration = Duration::from_secs(3600);
 const SELECTION_BG: Color = Color::srgb_u8(0x4c, 0x1d, 0x95);
 
 /// One rename: the tab, its field, the label the field replaces, the
-/// name and automatic label the tab had, and how the rename ends.
+/// name the tab had, the text the field started with, and how the rename ends.
 #[derive(Debug, Clone)]
 struct RenameSession {
     tab: TabId,
     field: Entity,
     label: Entity,
     name: Option<String>,
-    auto_label: String,
+    /// The text the field started with.
+    initial: String,
     /// `Some(true)` to commit and `Some(false)` to discard at the next
     /// [`RenameSystems::Finish`]; `None` while editing.
     ending: Option<bool>,
 }
 
-/// Replaces the tab's label with a focused text field that holds the label,
-/// all of it selected, and draws a caret in the label's text color and a
-/// highlight behind the selection; releases webview focus.
+/// Replaces the tab's label with a focused text field that holds the tab's
+/// name, or the label it shows when it has none, all of it selected, and
+/// draws a caret in the label's text color and a highlight behind the
+/// selection; releases webview focus.
 fn start_rename(
     ev: On<StartTabRename>,
     mut commands: Commands,
     mut rename: ResMut<TabRename>,
-    mut labels: Query<&mut Node, With<TabLabel>>,
+    mut labels: Query<(&mut Node, Option<&Children>), With<TabLabel>>,
+    texts: Query<&Text, With<TabLabelText>>,
     tabs: Res<CurrentTabs>,
     buttons: Query<(Entity, &TabButton, &Children)>,
     ui_font: Option<Res<TerminalUiFont>>,
@@ -251,7 +254,18 @@ fn start_rename(
     else {
         return;
     };
-    if let Ok(mut node) = labels.get_mut(label)
+    let shown = labels
+        .get(label)
+        .ok()
+        .and_then(|(_, children)| children)
+        .and_then(|children| children.iter().find_map(|text| texts.get(text).ok()))
+        .map(|text| text.0.clone())
+        .filter(|text| !text.is_empty());
+    let initial = name
+        .clone()
+        .or(shown)
+        .unwrap_or_else(|| tab_label(position, None, None));
+    if let Ok((mut node, _)) = labels.get_mut(label)
         && node.display != Display::None
     {
         node.display = Display::None;
@@ -262,7 +276,7 @@ fn start_rename(
                 max_characters: Some(Tab::MAX_NAME_CHARS),
                 allow_newlines: false,
                 cursor_blink_period: STEADY_CARET,
-                ..EditableText::new(tab_label(position, name.as_deref(), None))
+                ..EditableText::new(initial.clone())
             },
             EditableTextFilter::new(|c| !c.is_control()),
             SelectAllOnFocus,
@@ -291,7 +305,7 @@ fn start_rename(
         field,
         label,
         name,
-        auto_label: tab_label(position, None, None),
+        initial,
         ending: None,
     });
 }
@@ -330,14 +344,13 @@ fn commit_on_webview_focus(mut rename: ResMut<TabRename>, focused: Res<FocusedWe
 }
 
 /// Commits or discards the ending rename, restores the label, removes the
-/// field, and takes the keyboard focus off it. A committed name is written
-/// into the label at once, before the backend answers the rename.
+/// field, and takes the keyboard focus off it. A committed name is sent as
+/// a rename request; the tab bar shows it in the same frame.
 fn finish_rename(
     mut commands: Commands,
     mut rename: ResMut<TabRename>,
     mut input_focus: ResMut<InputFocus>,
-    mut labels: Query<(&mut Node, Option<&Children>), With<TabLabel>>,
-    mut label_texts: Query<&mut Text, With<TabLabelText>>,
+    mut labels: Query<&mut Node, With<TabLabel>>,
     fields: Query<&EditableText>,
 ) {
     let Some(session) = rename.0.take() else {
@@ -351,26 +364,16 @@ fn finish_rename(
             match RenameOutcome::decide(
                 &field.value().to_string(),
                 session.name.as_deref(),
-                &session.auto_label,
+                &session.initial,
             ) {
                 RenameOutcome::Set(name) => Some(name),
                 RenameOutcome::Keep => None,
             }
         });
-    if let Ok((mut node, parts)) = labels.get_mut(session.label) {
-        if let Some(name) = &committed {
-            let shown = name.as_deref().unwrap_or(&session.auto_label);
-            for part in parts.into_iter().flatten() {
-                if let Ok(mut text) = label_texts.get_mut(*part)
-                    && text.0 != shown
-                {
-                    text.0 = shown.to_string();
-                }
-            }
-        }
-        if node.display == Display::None {
-            node.display = Display::Flex;
-        }
+    if let Ok(mut node) = labels.get_mut(session.label)
+        && node.display == Display::None
+    {
+        node.display = Display::Flex;
     }
     if let Some(name) = committed {
         commands.trigger(RequestTabAction {
@@ -457,6 +460,33 @@ mod tests {
         );
     }
 
+    /// Asserts that an unnamed tab stays unnamed when its field is
+    /// committed as it started, whether it started as `Tab n` or as a
+    /// title, even one longer than a name may be.
+    ///
+    /// Case: the user opens the rename field on a tab showing vim's long
+    /// title and presses Enter without typing.
+    #[test]
+    fn an_untitled_or_titled_field_left_untouched_keeps_the_tab_unnamed() {
+        assert_eq!(
+            RenameOutcome::decide("Tab 2", None, "Tab 2"),
+            RenameOutcome::Keep
+        );
+        assert_eq!(
+            RenameOutcome::decide("vim", None, "vim"),
+            RenameOutcome::Keep
+        );
+        let long = "x".repeat(Tab::MAX_NAME_CHARS + 10);
+        assert_eq!(
+            RenameOutcome::decide(&long, None, &long),
+            RenameOutcome::Keep
+        );
+        assert_eq!(
+            RenameOutcome::decide("vim", Some("logs"), "logs"),
+            RenameOutcome::Set(Some("vim".into()))
+        );
+    }
+
     fn key(logical_key: Key, state: ButtonState) -> KeyboardInput {
         KeyboardInput {
             key_code: KeyCode::Enter,
@@ -521,28 +551,6 @@ mod tests {
             .spawn((TabLabelText, Text::new(shown), ChildOf(label)))
             .id();
         (label, text)
-    }
-
-    /// Asserts that a committed rename writes the new name into the tab's
-    /// label in the same update that restores the label, before any answer
-    /// from the backend.
-    ///
-    /// Case: the user renames "Tab 1" to "logs" and presses Enter.
-    #[test]
-    fn a_committed_name_is_in_the_label_at_once() {
-        let mut app = finish_app();
-        let (label, text) = labelled(&mut app, "Tab 1");
-        let field = app.world_mut().spawn(EditableText::new("logs")).id();
-        app.insert_resource(TabRename::ending_for_test(TabId(1), field, label, true));
-        app.update();
-        assert_eq!(
-            app.world().get::<Text>(text).map(|t| t.0.as_str()),
-            Some("logs")
-        );
-        assert_eq!(
-            app.world().get::<Node>(label).map(|n| n.display),
-            Some(Display::Flex)
-        );
     }
 
     /// Asserts that a cancelled rename leaves the label's text as it was.
@@ -670,7 +678,7 @@ mod tests {
             field,
             label: Entity::PLACEHOLDER,
             name: None,
-            auto_label: "Tab 1".into(),
+            initial: "Tab 1".into(),
             ending: None,
         })));
 
