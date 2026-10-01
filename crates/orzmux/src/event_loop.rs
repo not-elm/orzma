@@ -1024,14 +1024,13 @@ mod tests {
             .map(|event| match event {
                 OrzmuxEvent::Signal { .. } => "signal",
                 OrzmuxEvent::Frame { .. } => "frame",
+                OrzmuxEvent::PaneTitle { .. } => "title",
                 _ => "other",
             })
             .collect()
     }
 
-    /// Asserts that the frame a closed synchronized update yields
-    /// reaches the GUI between the signals raised before and after the
-    /// close.
+    /// Asserts that the frame a closed synchronized update yields reaches the GUI between the bell raised before the close and the title set after it.
     ///
     /// Case: a program rings the bell inside a synchronized update,
     /// closes it, and sets the window title right behind it in the same
@@ -1045,7 +1044,7 @@ mod tests {
         thread::sleep(OrzmaTty::<OrzmaVt>::SYNC_EMIT_INTERVAL);
         pane.print(b"\x1b[?2026h\x07a\x1b[?2026l\x1b]2;t\x07");
         h.pump_pane(root);
-        assert_eq!(event_kinds(&h.drain()), ["signal", "frame", "signal"]);
+        assert_eq!(event_kinds(&h.drain()), ["signal", "frame", "title"]);
     }
 
     /// Asserts that a pane with an open synchronized update is not
@@ -2085,3 +2084,6 @@ mod webview_tests;
 
 #[cfg(test)]
 mod tab_tests;
+
+#[cfg(test)]
+mod title_tests;

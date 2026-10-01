@@ -15,19 +15,16 @@ pub struct TtyBellSignal {
     pub terminal: Entity,
 }
 
-/// Fired when the OSC terminal title changes.
+/// Fired when a terminal's title changes: the title its application set
+/// through OSC 0 / OSC 2, trimmed, or `None` when it set a blank one or the
+/// terminal reset it.
 #[derive(EntityEvent, Debug, Clone)]
-pub struct TtyTitleChangedSignal {
+pub struct TtyTitleSignal {
+    /// The terminal whose title changed.
     #[event_target]
     pub terminal: Entity,
-    pub title: String,
-}
-
-/// Fired when the OSC terminal title resets.
-#[derive(EntityEvent, Debug, Clone)]
-pub struct TtyTitleResetSignal {
-    #[event_target]
-    pub terminal: Entity,
+    /// Its new title.
+    pub title: Option<String>,
 }
 
 /// Fired when the application copies data to the system clipboard via
@@ -89,8 +86,12 @@ pub struct TtySelectionTextSignal {
 pub(crate) fn trigger_vt_signal(commands: &mut Commands, terminal: Entity, signal: VtSignal) {
     match signal {
         VtSignal::Bell => commands.trigger(TtyBellSignal { terminal }),
-        VtSignal::Title(title) => commands.trigger(TtyTitleChangedSignal { terminal, title }),
-        VtSignal::ResetTitle => commands.trigger(TtyTitleResetSignal { terminal }),
+        VtSignal::Title(_) | VtSignal::ResetTitle => {
+            tracing::debug!(
+                ?terminal,
+                "raw title signal dropped; titles arrive as PaneTitle"
+            );
+        }
         VtSignal::Clipboard { content } => {
             commands.trigger(TtyClipboardStoreSignal { terminal, content })
         }

@@ -4,7 +4,7 @@
 use crate::layout::CurrentLayout;
 use crate::registry::PaneRegistry;
 use crate::signals::{
-    TtyChildExitSignal, TtyFrameSignal, TtySelectionTextSignal, trigger_vt_signal,
+    TtyChildExitSignal, TtyFrameSignal, TtySelectionTextSignal, TtyTitleSignal, trigger_vt_signal,
 };
 use crate::tab::{CurrentTabs, PendingTabMove};
 use crate::webview::trigger_webview_event;
@@ -106,6 +106,10 @@ fn apply_event(
             Some(terminal) => trigger_vt_signal(commands, terminal, signal),
             None => tracing::debug!(?pane, "signal for an unknown pane dropped"),
         },
+        OrzmuxEvent::PaneTitle { pane, title } => match registry.entity_of(pane) {
+            Some(terminal) => commands.trigger(TtyTitleSignal { terminal, title }),
+            None => tracing::debug!(?pane, "title for an unknown pane dropped"),
+        },
         OrzmuxEvent::SelectionText { text } => commands.trigger(TtySelectionTextSignal { text }),
         OrzmuxEvent::SelectionCopied { text } => {
             commands.trigger(TtySelectionTextSignal { text: Some(text) });
@@ -151,6 +155,7 @@ mod tests {
     use super::*;
     use crate::requests::test_support::app_with_channels;
     use crate::signals::TtyFrameSignal;
+    use crate::title::{TtyTitle, TtyTitlePlugin};
     use crossbeam_channel::Sender;
     use orzma_vt::prelude::{Cursor, DisplayOffset, GridSize};
     use orzmux::prelude::{CloseReason, CommandSeq, Layout, PaneRect, RequestId, TabEntry, TabId};
@@ -411,6 +416,46 @@ mod tests {
         assert!(app.world().get_entity(entity).is_err());
         assert!(app.world().get_entity(child).is_err());
         assert!(app.world().resource::<PaneRegistry>().panes.is_empty());
+    }
+
+    /// Asserts that a `PaneTitle` in the same drain as its pane's
+    /// `PaneOpened` reaches the new pane's `TtyTitle`, and that a title for
+    /// a pane with no entity is dropped.
+    ///
+    /// Case: the shell's startup file sets the title right as the backend
+    /// answers the spawn, while a title races the close of another pane.
+    #[test]
+    fn a_pane_title_in_the_opening_drain_reaches_the_new_pane() {
+        let (mut app, events) = app();
+        app.add_plugins(TtyTitlePlugin);
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<PaneRegistry>()
+            .pending_spawns
+            .insert(RequestId(1), entity);
+        events
+            .send(OrzmuxEvent::PaneOpened {
+                pane: PaneId(7),
+                request: RequestId(1),
+            })
+            .unwrap();
+        events
+            .send(OrzmuxEvent::PaneTitle {
+                pane: PaneId(7),
+                title: Some("zsh".into()),
+            })
+            .unwrap();
+        events
+            .send(OrzmuxEvent::PaneTitle {
+                pane: PaneId(9),
+                title: Some("gone".into()),
+            })
+            .unwrap();
+        app.update();
+        assert_eq!(
+            app.world().get::<TtyTitle>(entity),
+            Some(&TtyTitle(Some("zsh".into())))
+        );
     }
 
     /// Asserts that `SelectionText` is forwarded as

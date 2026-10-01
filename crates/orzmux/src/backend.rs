@@ -252,13 +252,21 @@ pub enum OrzmuxEvent {
         /// The pane's new frame.
         frame: Frame,
     },
-    /// A pane's VT emitted a signal the GUI must act on. Webview placement
-    /// signals go to the webview host instead.
+    /// A pane's VT emitted a signal the GUI must act on. Webview placement signals go to the webview host, and title signals become `PaneTitle`.
     Signal {
         /// The pane the signal came from.
         pane: PaneId,
         /// The signal itself.
         signal: VtSignal,
+    },
+    /// A pane's title changed: the title its application set through
+    /// OSC 0 / OSC 2, trimmed, or `None` when it set a blank one or the
+    /// terminal reset it. Sent only on a real change.
+    PaneTitle {
+        /// The pane whose title changed.
+        pane: PaneId,
+        /// Its new title.
+        title: Option<String>,
     },
     /// Exactly one per `CopySelection`; `text` is `None` when the target
     /// could not be resolved or had no selection.
@@ -1034,7 +1042,7 @@ impl Backend {
     }
 
     /// Forwards a pump's items in order: each placement signal to the
-    /// webview host, every other signal as a `Signal` event, each frame as
+    /// webview host, each title signal into the pane's title, every other signal as a `Signal` event, each frame as
     /// a `Frame` event, or into `layout_frames` when the caller publishes
     /// the frames itself. Returns `Some(code)` when the items carried
     /// `ChildExit`.
@@ -1054,6 +1062,8 @@ impl Backend {
                             let output = self.webview.placement_signal(id, placement);
                             self.apply_webview(output);
                         }
+                        Err(VtSignal::Title(title)) => self.set_pane_title(id, Some(&title)),
+                        Err(VtSignal::ResetTitle) => self.set_pane_title(id, None),
                         Err(signal) => {
                             if let VtSignal::CurrentDir(path) = &signal
                                 && let Some(pane) = self.panes.get_mut(&id)
@@ -1190,6 +1200,18 @@ impl Backend {
     /// The displayed tab's active pane.
     fn visible_active(&self) -> Option<PaneId> {
         self.tabs.active().map(|t| t.tree.active())
+    }
+
+    /// Records `title` as `id`'s title and queues `PaneTitle` when it
+    /// changed; a pane that is gone is ignored.
+    fn set_pane_title(&mut self, id: PaneId, title: Option<&str>) {
+        let Some(pane) = self.panes.get_mut(&id) else {
+            return;
+        };
+        if pane.set_title(title) {
+            let title = pane.title().map(str::to_owned);
+            self.emit(OrzmuxEvent::PaneTitle { pane: id, title });
+        }
     }
 
     /// Queues a `Tabs` snapshot stamped with the last processed
