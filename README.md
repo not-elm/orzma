@@ -7,7 +7,22 @@ orzma is a terminal emulator that can render web pages inside the terminal. A
 program running in an orzma pane can place a live web page among its own text
 and exchange messages with it.
 
-![thumbnail](./docs/book/src/images/thumbnail.gif)
+![A program placing a live web page in an orzma pane](./docs/book/src/images/thumbnail.gif)
+
+## Companion apps
+
+The [webview protocol](https://not-elm.github.io/orzma/protocol-reference.html)
+extends what a terminal program can do. Every install includes two apps built
+on it, orzmd (left) and orzbrowser (right), and each runs inside an orzma pane.
+
+![orzmd rendering a Markdown file beside orzbrowser showing a website](./docs/book/src/images/thumbnail2.png)
+
+| Name                                                          | Description               |
+| ------------------------------------------------------------- | ------------------------- |
+| [orzmd](https://not-elm.github.io/orzma/orzmd.html)           | A rich Markdown viewer    |
+| [orzbrowser](https://not-elm.github.io/orzma/orzbrowser.html) | A keyboard-driven browser |
+
+To build your own, see [SDK](#sdk).
 
 ## Documentation
 
@@ -43,13 +58,6 @@ Debian, or the tarball for other distributions, from the
 [latest release](https://github.com/not-elm/orzma/releases/latest).
 
 See [Installation](https://not-elm.github.io/orzma/installation.html) for details.
-
-## Companion apps
-
-| Name                                                          | Description               |
-| ------------------------------------------------------------- | ------------------------- |
-| [orzmd](https://not-elm.github.io/orzma/orzmd.html)           | A rich Markdown viewer    |
-| [orzbrowser](https://not-elm.github.io/orzma/orzbrowser.html) | A keyboard-driven browser |
 
 ## SDK
 
