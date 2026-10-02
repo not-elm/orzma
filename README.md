@@ -7,7 +7,7 @@ orzma is a terminal emulator that can render web pages inside the terminal. A
 program running in an orzma pane can place a live web page among its own text
 and exchange messages with it.
 
-![thumbnail](./docs/book/src/images/thumbnail.png)
+![thumbnail](./docs/book/src/images/thumbnail.gif)
 
 ## Documentation
 
@@ -46,9 +46,9 @@ See [Installation](https://not-elm.github.io/orzma/installation.html) for detail
 
 ## Companion apps
 
-| Name | Description |
-| --- | --- |
-| [orzmd](https://not-elm.github.io/orzma/orzmd.html) | A rich Markdown viewer |
+| Name                                                          | Description               |
+| ------------------------------------------------------------- | ------------------------- |
+| [orzmd](https://not-elm.github.io/orzma/orzmd.html)           | A rich Markdown viewer    |
 | [orzbrowser](https://not-elm.github.io/orzma/orzbrowser.html) | A keyboard-driven browser |
 
 ## SDK

@@ -9,7 +9,7 @@ and exchange messages with it, so a terminal app can show rendered Markdown,
 diagrams, or a website without leaving the terminal. orzma also splits its
 window into panes, so you do not need a separate terminal multiplexer.
 
-![orzma with a Markdown viewer and a browser in split panes](images/thumbnail.png)
+![orzma with a Markdown viewer and a browser in split panes](images/thumbnail.gif)
 
 This guide describes orzma {{#include ../../../VERSION}}.
 
