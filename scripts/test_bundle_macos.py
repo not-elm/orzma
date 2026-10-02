@@ -83,6 +83,11 @@ class CaskTemplate(unittest.TestCase):
             tmpl,
         )
 
+    def test_template_declares_macos_without_a_version_string(self):
+        tmpl = (bm.REPO_ROOT / "build" / "macos" / "homebrew" / "orzma.rb.tmpl").read_text()
+        self.assertIn("  depends_on :macos\n", tmpl)
+        self.assertNotIn("depends_on macos:", tmpl)
+
 
 class PlistLogic(unittest.TestCase):
     def test_merge_cef_keys_into_empty(self):
