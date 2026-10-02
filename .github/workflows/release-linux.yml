@@ -170,9 +170,7 @@ jobs:
           overwrite: true
           path: |
             target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz
-            target/dist/orzma-${{ steps.ver.outputs.version }}-x86_64-linux.tar.gz.sha256
             target/dist/orzma_${{ steps.ver.outputs.version }}_amd64.deb
-            target/dist/orzma_${{ steps.ver.outputs.version }}_amd64.deb.sha256
 
   verify-deb:
     needs: build
@@ -194,9 +192,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: orzma-linux-${{ needs.build.outputs.version }}
-
-      - name: Verify the checksum
-        run: sha256sum -c "$DEB.sha256"
 
       # --no-install-recommends proves the Depends field alone is enough.
       - name: Install the package

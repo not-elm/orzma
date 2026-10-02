@@ -265,7 +265,6 @@ class PackageDmg(unittest.TestCase):
             sign_identity="-", no_sign=False, notarize=False,
         )
         self.dmg = self.out / "orzma-9.9.9-arm64.dmg"
-        self.sidecar = self.out / "orzma-9.9.9-arm64.dmg.sha256"
         self.staged = []
         self.calls = []
 
@@ -295,14 +294,12 @@ class PackageDmg(unittest.TestCase):
 
         return fake_run
 
-    def test_package_replaces_stale_files_with_a_dmg_and_its_sidecar(self):
+    def test_package_replaces_a_stale_dmg(self):
         self.dmg.write_bytes(b"old dmg")
-        self.sidecar.write_text("stale\n")
         with mock.patch.object(bm, "run", self._fake_run()):
             digest = bm.package(self.cfg)
         self.assertEqual(digest, bm.compute_sha256(self.dmg))
         self.assertEqual(self.dmg.read_bytes(), b"new dmg")
-        self.assertEqual(self.sidecar.read_text(), f"{digest}  orzma-9.9.9-arm64.dmg\n")
         staging = Path(self.calls[0][-1]).parent
         self.assertEqual(staging.parent, self.out)
         self.assertEqual(self.calls, [
@@ -314,18 +311,17 @@ class PackageDmg(unittest.TestCase):
             self.staged,
             [{"entries": ["Applications", "orzma.app"], "link": "/Applications", "mode": 0o755}],
         )
-        self.assertEqual(sorted(os.listdir(self.out)), [self.dmg.name, self.sidecar.name])
+        self.assertEqual(os.listdir(self.out), [self.dmg.name])
 
-    def test_a_transient_verify_failure_keeps_the_dmg_and_its_sidecar(self):
+    def test_a_transient_verify_failure_keeps_the_dmg(self):
         fake = self._fake_run(fail_on=["hdiutil", "verify"], times=1)
         with mock.patch.object(bm, "run", fake), mock.patch.object(bm.time, "sleep"):
             digest = bm.package(self.cfg)
         self.assertEqual(self.calls.count(bm.hdiutil_verify_argv(self.dmg)), 2)
-        self.assertEqual(self.sidecar.read_text(), f"{digest}  orzma-9.9.9-arm64.dmg\n")
-        self.assertEqual(sorted(os.listdir(self.out)), [self.dmg.name, self.sidecar.name])
+        self.assertEqual(digest, bm.compute_sha256(self.dmg))
+        self.assertEqual(os.listdir(self.out), [self.dmg.name])
 
-    def test_a_verify_that_fails_every_attempt_leaves_neither_dmg_nor_sidecar(self):
-        self.sidecar.write_text("stale\n")
+    def test_a_verify_that_fails_every_attempt_leaves_no_dmg(self):
         with mock.patch.object(bm, "run", self._fake_run(fail_on=["hdiutil", "verify"])), \
                 mock.patch.object(bm.time, "sleep"):
             with self.assertRaises(subprocess.CalledProcessError):
@@ -334,18 +330,15 @@ class PackageDmg(unittest.TestCase):
             self.calls.count(bm.hdiutil_verify_argv(self.dmg)), bm.HDIUTIL_ATTEMPTS
         )
         self.assertFalse(self.dmg.exists())
-        self.assertFalse(self.sidecar.exists())
         self.assertEqual(os.listdir(self.out), [])
 
-    def test_a_create_that_fails_every_attempt_leaves_neither_dmg_nor_sidecar(self):
-        self.sidecar.write_text("stale\n")
+    def test_a_create_that_fails_every_attempt_leaves_no_dmg(self):
         with mock.patch.object(bm, "run", self._fake_run(fail_on=["hdiutil", "create"])), \
                 mock.patch.object(bm.time, "sleep"):
             with self.assertRaises(subprocess.CalledProcessError):
                 bm.package(self.cfg)
         self.assertEqual(len(self.staged), bm.HDIUTIL_ATTEMPTS)
         self.assertFalse(self.dmg.exists())
-        self.assertFalse(self.sidecar.exists())
         self.assertEqual(os.listdir(self.out), [])
 
     def test_an_interrupted_create_removes_the_partial_dmg(self):
@@ -354,7 +347,6 @@ class PackageDmg(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 bm.package(self.cfg)
         self.assertFalse(self.dmg.exists())
-        self.assertFalse(self.sidecar.exists())
         self.assertEqual(os.listdir(self.out), [])
 
 
@@ -753,16 +745,7 @@ class EndToEnd(unittest.TestCase):
             ])
             dmg_path = out / "orzma-9.9.9-arm64.dmg"
             self.assertTrue(dmg_path.is_file())
-            sha_file = out / "orzma-9.9.9-arm64.dmg.sha256"
-            self.assertTrue(sha_file.is_file())
-            self.assertEqual(
-                sha_file.read_text(),
-                f"{bm.compute_sha256(dmg_path)}  orzma-9.9.9-arm64.dmg\n",
-            )
-            self.assertEqual(
-                sorted(os.listdir(out)),
-                ["orzma-9.9.9-arm64.dmg", "orzma-9.9.9-arm64.dmg.sha256", "orzma.app"],
-            )
+            self.assertEqual(sorted(os.listdir(out)), ["orzma-9.9.9-arm64.dmg", "orzma.app"])
             resources = out / "orzma.app" / "Contents" / "Resources"
             self.assertTrue((resources / "orzbrowser").is_file())
             self.assertTrue((resources / "orzmd").is_file())

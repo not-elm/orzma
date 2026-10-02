@@ -138,10 +138,10 @@ Maintainers cut a release from `main`:
    `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. Wait for the `release` workflow run to succeed. It builds every platform and
    leaves a draft release, linked from the run's summary. Nothing is public yet.
-4. Open the draft, check that it holds the four packages and their `.sha256`
-   files, write a description above the generated notes, and publish it with
-   "Set as the latest release" checked. Do not attach other files: the
-   `post-release` check accepts exactly those eight.
+4. Open the draft, check that it holds the four packages, write a description
+   above the generated notes, and publish it with "Set as the latest release"
+   checked. Do not attach other files: the `post-release` check accepts exactly
+   those four.
 5. Publishing starts the `post-release` workflow, which bumps the Homebrew
    cask, publishes the SDK to npm and crates.io, and deploys the user guide.
 

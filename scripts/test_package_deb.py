@@ -300,11 +300,10 @@ class BuildDebEndToEnd(unittest.TestCase):
             for line in listing.splitlines():
                 self.assertIn("root/root", line)
 
-    def test_sidecar_is_written_and_scratch_root_removed(self):
+    def test_only_the_deb_is_written_and_scratch_root_removed(self):
         with tempfile.TemporaryDirectory() as tmp:
             deb = self._build(tmp)
-            sidecar = Path(f"{deb}.sha256").read_text()
-            self.assertEqual(sidecar, f"{_sha256(deb)}  {deb.name}\n")
+            self.assertNotIn(f"{deb.name}.sha256", os.listdir(deb.parent))
             self.assertFalse((Path(tmp) / pd.SCRATCH_DIR_NAME).exists())
 
     def test_stale_scratch_root_does_not_leak_into_the_package(self):

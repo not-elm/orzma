@@ -201,12 +201,12 @@ licenses-refresh-cef:
 stage *args:
     CEF_PATH="${CEF_PATH:-{{ cef_cache_dir }}}" python3 scripts/stage_linux.py {{ if env("ORZMA_STAGE_CHECK_DEPS", "") == "1" { "--check-deps" } else { "" } }} {{ args }}
 
-# archive the staged Linux tree into target/dist/orzma-<version>-x86_64-linux.tar.gz (+ .sha256)
+# archive the staged Linux tree into target/dist/orzma-<version>-x86_64-linux.tar.gz
 [linux]
 tarball version="":
     python3 scripts/stage_linux.py --package-only {{ if version == "" { "" } else { "--version " + version } }}
 
-# package the staged Linux tree into target/dist/orzma_<version>_amd64.deb (+ .sha256)
+# package the staged Linux tree into target/dist/orzma_<version>_amd64.deb
 [linux]
 deb version="":
     python3 scripts/package_deb.py {{ if version == "" { "" } else { "--version " + version } }}
