@@ -122,11 +122,7 @@ class Versions(unittest.TestCase):
 def _make_dist(dist: Path, version: str = "0.2.2") -> None:
     dist.mkdir(parents=True, exist_ok=True)
     for name in rc.expected_assets(version):
-        if name.endswith(".sha256"):
-            continue
         (dist / name).write_bytes(name.encode())
-        digest = hashlib.sha256(name.encode()).hexdigest()
-        (dist / f"{name}.sha256").write_text(f"{digest}  {name}\n", encoding="utf-8")
 
 
 def _uploaded_assets(dist: Path, version: str = "0.2.2") -> list[dict]:
@@ -141,16 +137,15 @@ def _uploaded_assets(dist: Path, version: str = "0.2.2") -> list[dict]:
 
 
 class ExpectedAssets(unittest.TestCase):
-    def test_lists_four_packages_and_their_sidecars(self):
-        packages = [
-            "orzma-0.2.2-arm64.dmg",
-            "orzma-0.2.2-x64.msi",
-            "orzma-0.2.2-x86_64-linux.tar.gz",
-            "orzma_0.2.2_amd64.deb",
-        ]
+    def test_lists_the_four_packages(self):
         self.assertEqual(
             rc.expected_assets("0.2.2"),
-            sorted(packages + [f"{p}.sha256" for p in packages]),
+            [
+                "orzma-0.2.2-arm64.dmg",
+                "orzma-0.2.2-x64.msi",
+                "orzma-0.2.2-x86_64-linux.tar.gz",
+                "orzma_0.2.2_amd64.deb",
+            ],
         )
 
     def test_the_macos_package_is_the_dmg_the_bundler_writes(self):
@@ -179,20 +174,10 @@ class Dist(unittest.TestCase):
             rc.dist_problems(self.dist, "0.2.2"), ["Unexpected orzma-0.2.1-arm64.zip."]
         )
 
-    def test_sidecar_with_wrong_hash_is_reported(self):
-        (self.dist / "orzma_0.2.2_amd64.deb").write_bytes(b"rebuilt")
+    def test_checksum_sidecar_is_reported(self):
+        (self.dist / "orzma_0.2.2_amd64.deb.sha256").write_text("stale\n", encoding="utf-8")
         self.assertEqual(
-            rc.dist_problems(self.dist, "0.2.2"),
-            ["orzma_0.2.2_amd64.deb.sha256 does not match orzma_0.2.2_amd64.deb."],
-        )
-
-    def test_sidecar_naming_another_file_is_reported(self):
-        name = "orzma-0.2.2-arm64.dmg"
-        digest = hashlib.sha256(name.encode()).hexdigest()
-        (self.dist / f"{name}.sha256").write_text(f"{digest}  orzma.dmg\n", encoding="utf-8")
-        self.assertEqual(
-            rc.dist_problems(self.dist, "0.2.2"),
-            [f"{name}.sha256 does not match {name}."],
+            rc.dist_problems(self.dist, "0.2.2"), ["Unexpected orzma_0.2.2_amd64.deb.sha256."]
         )
 
     def test_dist_command_fails_on_problems(self):
@@ -236,10 +221,10 @@ class Uploaded(unittest.TestCase):
         )
 
     def test_missing_asset_is_reported(self):
-        self.assets.remove(self._asset("orzma-0.2.2-arm64.dmg.sha256"))
+        self.assets.remove(self._asset("orzma-0.2.2-arm64.dmg"))
         self.assertEqual(
             rc.uploaded_problems(self.assets, "0.2.2", self.dist),
-            ["Asset orzma-0.2.2-arm64.dmg.sha256 is missing."],
+            ["Asset orzma-0.2.2-arm64.dmg is missing."],
         )
 
     def test_unexpected_asset_is_reported(self):

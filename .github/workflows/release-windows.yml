@@ -139,15 +139,6 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
         run: just msi-validate $env:VERSION
 
-      - name: Write the checksum sidecar
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          $msi = "target/dist/orzma-$env:VERSION-x64.msi"
-          $hash = (Get-FileHash -Algorithm SHA256 $msi).Hash.ToLower()
-          $name = Split-Path -Leaf $msi
-          [IO.File]::WriteAllText("$msi.sha256", "$hash  $name`n")
-
       # Uploaded on every run, so a manual dry run's MSI can be downloaded too; the draft
       # job in release.yml releases exactly these files.
       - name: Upload the release files
@@ -157,6 +148,4 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           overwrite: true
-          path: |
-            target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi
-            target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi.sha256
+          path: target/dist/orzma-${{ steps.ver.outputs.version }}-x64.msi

@@ -54,29 +54,21 @@ def version_problems(tag: str, versions: dict[str, str | None]) -> list[str]:
 
 
 def expected_assets(version: str) -> list[str]:
-    """The eight files every release carries: four packages and their .sha256 sidecars."""
-    packages = [
+    """The four packages every release carries; GitHub records each one's SHA-256 as its digest."""
+    return [
         f"orzma-{version}-arm64.dmg",
         f"orzma-{version}-x64.msi",
         f"orzma-{version}-x86_64-linux.tar.gz",
         f"orzma_{version}_amd64.deb",
     ]
-    return sorted(packages + [f"{package}.sha256" for package in packages])
 
 
 def dist_problems(dist: Path, version: str) -> list[str]:
-    """Checks that dist holds exactly the expected files and that each sidecar names and hashes its file."""
+    """Checks that dist holds exactly the expected files."""
     expected = set(expected_assets(version))
     present = {path.name for path in dist.iterdir()} if dist.is_dir() else set()
     problems = [f"Missing {name}." for name in sorted(expected - present)]
     problems += [f"Unexpected {name}." for name in sorted(present - expected)]
-    for sidecar in sorted(name for name in expected & present if name.endswith(".sha256")):
-        package = sidecar.removesuffix(".sha256")
-        if package not in present:
-            continue
-        recorded = (dist / sidecar).read_text(encoding="utf-8")
-        if recorded != f"{sha256_file(dist / package)}  {package}\n":
-            problems.append(f"{sidecar} does not match {package}.")
     return problems
 
 
@@ -151,7 +143,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     versions.set_defaults(handler=_versions_command)
 
     dist = commands.add_parser(
-        "dist", help="check the downloaded release files and their .sha256 sidecars"
+        "dist", help="check that the downloaded release files are exactly the expected packages"
     )
     dist.add_argument("--version", required=True)
     dist.add_argument("--dir", type=Path, required=True)

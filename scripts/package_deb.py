@@ -12,7 +12,7 @@ import stat
 import subprocess
 from pathlib import Path
 
-from stage_linux import BIN_NAME, COMPANION_BINS, DEFAULT_OUT_DIR, dist_name, normalized_mode, write_sidecar
+from stage_linux import BIN_NAME, COMPANION_BINS, DEFAULT_OUT_DIR, dist_name, normalized_mode
 from stage_windows import cargo_version
 
 PACKAGE = "orzma"
@@ -167,8 +167,7 @@ def build_deb(tree: Path, version: str, out_dir: Path) -> Path:
         subprocess.run(dpkg_deb_argv(root, out), check=True, env=env)
     finally:
         shutil.rmtree(root, ignore_errors=True)
-    sidecar = write_sidecar(out)
-    print(f"==> wrote {out} and {sidecar.name}")
+    print(f"==> wrote {out}")
     return out
 
 

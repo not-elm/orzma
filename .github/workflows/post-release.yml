@@ -82,10 +82,11 @@ jobs:
             echo "::error::HOMEBREW_TAP_TOKEN is not set, so the cask cannot be bumped."
             exit 1
           fi
-          gh release download "$TAG" --pattern "orzma-${VERSION}-arm64.dmg.sha256" --dir "$RUNNER_TEMP"
-          SHA256="$(cut -d' ' -f1 "${RUNNER_TEMP}/orzma-${VERSION}-arm64.dmg.sha256")"
+          DMG="orzma-${VERSION}-arm64.dmg"
+          DIGEST="$(gh release view "$TAG" --json assets --jq ".assets[] | select(.name == \"${DMG}\") | .digest")"
+          SHA256="${DIGEST#sha256:}"
           if ! printf '%s' "$SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
-            echo "::error::The dmg's sidecar holds '${SHA256}', not a SHA-256."
+            echo "::error::The release records '${DIGEST}' as the digest of ${DMG}, not a SHA-256."
             exit 1
           fi
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/not-elm/homebrew-orzma.git" "${RUNNER_TEMP}/tap"

@@ -86,16 +86,6 @@ jobs:
             python3 scripts/bundle_macos.py --version "$VERSION"
           fi
 
-      # upload-artifact's if-no-files-found fails only when no path matches, so a
-      # missing sidecar would otherwise pass unnoticed until release.yml's draft job.
-      - name: Check the bundle
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          DMG="target/bundle/orzma-${VERSION}-arm64.dmg"
-          test -f "$DMG" || { echo "Bundle not found: $DMG"; exit 1; }
-          test -f "${DMG}.sha256" || { echo "Missing sidecar: ${DMG}.sha256"; exit 1; }
-
       # Uploaded on every run, so a manual dry run can be downloaded too; the draft job
       # in release.yml releases exactly these files.
       - name: Upload the release files
@@ -105,6 +95,4 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           overwrite: true
-          path: |
-            target/bundle/orzma-${{ steps.ver.outputs.version }}-arm64.dmg
-            target/bundle/orzma-${{ steps.ver.outputs.version }}-arm64.dmg.sha256
+          path: target/bundle/orzma-${{ steps.ver.outputs.version }}-arm64.dmg

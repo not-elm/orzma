@@ -526,9 +526,7 @@ def run_hdiutil(argv: list[str]) -> None:
 
 def package(cfg: BundleConfig) -> str:
     dest = cfg.dmg_path
-    sidecar = dest.with_name(dest.name + ".sha256")
     dest.unlink(missing_ok=True)
-    sidecar.unlink(missing_ok=True)
     try:
         with tempfile.TemporaryDirectory(prefix="dmg-staging-", dir=cfg.out_dir) as tmp:
             staging = Path(tmp)
@@ -538,9 +536,7 @@ def package(cfg: BundleConfig) -> str:
     except BaseException:
         dest.unlink(missing_ok=True)
         raise
-    digest = compute_sha256(dest)
-    sidecar.write_text(f"{digest}  {dest.name}\n")
-    return digest
+    return compute_sha256(dest)
 
 
 def verify_orzmd_web_assets(assets_dir: Path | None = None) -> None:

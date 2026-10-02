@@ -392,30 +392,19 @@ class Archive(unittest.TestCase):
                 self.assertEqual((member.mtime, member.uid, member.gid, member.uname, member.gname),
                                  (0, 0, 0, "", ""))
 
-    def test_sidecar_matches_sha256sum_format(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            archive = Path(tmp) / "orzma-0.2.0-x86_64-linux.tar.gz"
-            archive.write_bytes(b"payload")
-            sidecar = sl.write_sidecar(archive)
-            self.assertEqual(sidecar.name, "orzma-0.2.0-x86_64-linux.tar.gz.sha256")
-            self.assertEqual(
-                sidecar.read_text(encoding="ascii"),
-                f"{sl.sha256_file(archive)}  orzma-0.2.0-x86_64-linux.tar.gz\n",
-            )
-
     def test_package_requires_stage_tree(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(SystemExit) as ctx:
                 sl.package(Path(tmp) / "stage", "0.2.0", Path(tmp))
             self.assertIn("just stage", str(ctx.exception))
 
-    def test_package_writes_archive_and_sidecar(self):
+    def test_package_writes_only_the_archive(self):
         with tempfile.TemporaryDirectory() as tmp:
             _make_tree(Path(tmp))
             archive = sl.package(Path(tmp) / "stage", "0.2.0", Path(tmp))
             self.assertEqual(archive, Path(tmp) / "orzma-0.2.0-x86_64-linux.tar.gz")
             self.assertTrue(archive.is_file())
-            self.assertTrue(Path(f"{archive}.sha256").is_file())
+            self.assertEqual(sorted(os.listdir(tmp)), [archive.name, "stage"])
 
 
 class Cli(unittest.TestCase):

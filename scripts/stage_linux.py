@@ -19,7 +19,6 @@ from stage_windows import (
     is_cef_locale_pak,
     locked_version,
     missing_cef_locales,
-    sha256_file,
     verify_orzbrowser_web_assets,
     verify_orzmd_web_assets,
 )
@@ -289,12 +288,6 @@ def write_archive(tree: Path, out: Path) -> None:
                     tar.addfile(info, f)
 
 
-def write_sidecar(archive: Path) -> Path:
-    sidecar = archive.with_name(f"{archive.name}.sha256")
-    sidecar.write_text(f"{sha256_file(archive)}  {archive.name}\n", encoding="ascii", newline="\n")
-    return sidecar
-
-
 def package(stage_root: Path, version: str, out_dir: Path) -> Path:
     tree = stage_root / dist_name(version)
     if not tree.is_dir():
@@ -304,8 +297,7 @@ def package(stage_root: Path, version: str, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     archive = out_dir / f"{dist_name(version)}.tar.gz"
     write_archive(tree, archive)
-    sidecar = write_sidecar(archive)
-    print(f"==> wrote {archive} and {sidecar.name}")
+    print(f"==> wrote {archive}")
     return archive
 
 
