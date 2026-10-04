@@ -69,6 +69,26 @@ See [Installation](https://not-elm.github.io/orzma/installation.html) for detail
 See [Building Webview Apps](https://not-elm.github.io/orzma/building-webview-apps.html)
 for a tutorial.
 
+## Generative AI Policy from v0.4.0
+
+Up through v0.3.0, I used generative AI tools such as Claude Code for development. Through a [Reddit thread](https://www.reddit.com/r/Reddit_Beginners/comments/1wwh6h0/comment/pdnkvxw/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button), I learned that the use of generative AI is strongly disliked by some members of the international community, as well as the reasons behind that sentiment.
+
+I want as many people as possible to feel comfortable contributing to this project, so I have decided to prohibit the use of generative AI except for a limited set of purposes. This policy applies to all contributors, including myself.
+
+Up through v0.3.0, I mainly used generative AI for the following purposes:
+
+- Discussing and refining designs with AI using the `superpowers:brainstorming` skill, and then having AI write code or documentation
+- Creating the PR
+- Technical research
+- Translating text
+
+Starting with v0.4.0, the use of generative AI will be prohibited for all purposes except:
+
+- Technical research
+- Translation text
+
+I will also remove AI-related files that were used through v0.3.0, including `CLAUDE.md`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
