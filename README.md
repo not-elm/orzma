@@ -7,7 +7,8 @@ orzma is a terminal emulator that can render web pages inside the terminal. A
 program running in an orzma pane can place a live web page among its own text
 and exchange messages with it.
 
-https://github.com/user-attachments/assets/da9d061f-4d25-431d-964d-d0700332c5d6
+https://github.com/user-attachments/assets/0d3cb717-dd7c-416b-a323-c999ebcaec22
+
 
 ## Companion apps
 
