@@ -4528,7 +4528,7 @@ SOFTWARE.
 ### MIT License — `MIT`
 
 Used by:
-- ratatui_orzma 0.3.0
+- ratatui_orzma 0.4.0-dev
 - accesskit 0.24.1
 - accesskit_consumer 0.37.0
 - accesskit_macos 0.26.2
