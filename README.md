@@ -81,11 +81,14 @@ Up through v0.3.0, I mainly used generative AI for the following purposes:
 - Creating the PR
 - Technical research
 - Translating text
+- Bug Investigation
 
 Starting with v0.4.0, the use of generative AI will be prohibited for all purposes except:
 
 - Technical research
 - Translation text
+- Bug Investigation
+- Mechanical code edits with clearly defined changes, such as simple renaming.
 
 I will also remove AI-related files that were used through v0.3.0, including `CLAUDE.md`.
 
