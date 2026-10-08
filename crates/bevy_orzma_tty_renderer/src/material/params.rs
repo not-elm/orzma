@@ -218,7 +218,7 @@ impl TerminalParams {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
             cell_size_px,
             atlas_size_px,
-            baseline_px: metrics.baseline,
+            baseline_px: *metrics.baseline,
             dpr,
             cursor_pos,
             cursor_style,
@@ -229,7 +229,7 @@ impl TerminalParams {
             sel_end_col,
             sel_kind,
             underline_position_phys: metrics.underline.position,
-            underline_thickness_phys: metrics.underline.thickness,
+            underline_thickness_phys: *metrics.underline.thickness,
             max_overflow_phys: metrics.max_overflow,
             bg_padding_color,
             hover_hyperlink_id,
@@ -322,7 +322,7 @@ fn selection_uniforms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::Underline;
+    use crate::font::{Baseline, Thickness, Underline};
 
     /// Asserts that the uniforms take the cell size and the baseline from
     /// the metrics, and the caret thickness as the rounded share of the cell
@@ -334,10 +334,10 @@ mod tests {
     fn terminal_params_derive_cell_size_baseline_and_caret_from_the_metrics() {
         let metrics = CellMetrics {
             cell_size: Vec2::new(7.0, 15.0),
-            baseline: 12.0,
+            baseline: Baseline::new(12.0),
             underline: Underline {
                 position: -1.5,
-                thickness: 1.0,
+                thickness: Thickness::new(1.0),
             },
             max_overflow: 0.0,
         };
@@ -549,10 +549,10 @@ mod tests {
     fn params_for(palette: &Palette) -> TerminalParams {
         let metrics = CellMetrics {
             cell_size: Vec2::new(8.0, 16.0),
-            baseline: 12.0,
+            baseline: Baseline::new(12.0),
             underline: Underline {
                 position: -2.0,
-                thickness: 1.0,
+                thickness: Thickness::new(1.0),
             },
             max_overflow: 0.0,
         };

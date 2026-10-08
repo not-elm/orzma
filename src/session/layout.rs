@@ -103,17 +103,17 @@ fn send_window_geometry(
 mod tests {
     use super::*;
     use bevy::window::WindowResolution;
-    use bevy_orzma_tty_renderer::prelude::{CellMetrics, Underline};
+    use bevy_orzma_tty_renderer::prelude::{Baseline, CellMetrics, Thickness, Underline};
     use orzmux::prelude::OrzmuxClient;
 
     fn metrics(cell_w: f32, cell_h: f32) -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
             metrics: CellMetrics {
                 cell_size: Vec2::new(cell_w, cell_h),
-                baseline: 0.0,
+                baseline: Baseline::new(0.0),
                 underline: Underline {
                     position: 0.0,
-                    thickness: 0.0,
+                    thickness: Thickness::new(1.0),
                 },
                 max_overflow: 0.0,
             },

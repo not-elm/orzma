@@ -317,14 +317,14 @@ mod test_support {
     }
 
     pub(super) fn test_metrics() -> TerminalCellMetricsResource {
-        use bevy_orzma_tty_renderer::prelude::{CellMetrics, Underline};
+        use bevy_orzma_tty_renderer::prelude::{Baseline, CellMetrics, Thickness, Underline};
         TerminalCellMetricsResource {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
-                baseline: 12.0,
+                baseline: Baseline::new(12.0),
                 underline: Underline {
                     position: -2.0,
-                    thickness: 1.0,
+                    thickness: Thickness::new(1.0),
                 },
                 max_overflow: 0.0,
             },

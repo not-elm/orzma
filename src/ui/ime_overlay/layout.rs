@@ -98,12 +98,12 @@ pub(super) fn compute_overlay_layout(
     // NOTE: `underline.position` is baseline-relative and negative;
     // subtract it from the baseline so the bar lands below the baseline, not
     // above the cell top.
-    let underline_top = pos.y + (metrics.baseline - metrics.underline.position) / scale;
+    let underline_top = pos.y + (*metrics.baseline - metrics.underline.position) / scale;
     let underline = RectPx {
         left: pos.x,
         top: underline_top,
         width: total_width_logical,
-        height: (metrics.underline.thickness / scale).max(1.0),
+        height: (*metrics.underline.thickness / scale).max(1.0),
     };
 
     let caret = match caret {
@@ -240,15 +240,15 @@ fn glyph_columns(c: char) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_orzma_tty_renderer::prelude::Underline;
+    use bevy_orzma_tty_renderer::prelude::{Baseline, Thickness, Underline};
 
     fn metrics(cell_w: f32, cell_h: f32) -> CellMetrics {
         CellMetrics {
             cell_size: Vec2::new(cell_w, cell_h),
-            baseline: 12.0,
+            baseline: Baseline::new(12.0),
             underline: Underline {
                 position: -2.0,
-                thickness: 1.0,
+                thickness: Thickness::new(1.0),
             },
             max_overflow: 0.0,
         }

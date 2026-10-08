@@ -2,7 +2,7 @@
 //! them.
 
 use crate::font::TerminalFonts;
-use bevy::prelude::{Resource, Vec2};
+use bevy::prelude::{Deref, Resource, Vec2};
 
 /// The cell the grid lays out with, measured from the regular face at one
 /// physical pixel size and snapped to the whole pixels the cells sit on.
@@ -12,9 +12,8 @@ pub struct CellMetrics {
     /// the line height (ascent + |descent| + line gap), each floored and at
     /// least one pixel.
     pub cell_size: Vec2,
-    /// The baseline's depth below the top of a cell, in whole physical pixels:
-    /// the ascent rounded to the nearest pixel.
-    pub baseline: f32,
+    /// [Baseline]
+    pub baseline: Baseline,
     /// The underline stroke.
     pub underline: Underline,
     /// Worst-case rightward overflow in physical px across all four faces
@@ -25,14 +24,40 @@ pub struct CellMetrics {
     pub max_overflow: f32,
 }
 
+/// The baseline's depth below the top of a cell, in whole physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Deref)]
+pub struct Baseline(f32);
+
+impl Baseline {
+    /// Creates the baseline from a face's ascent of `ascent` physical pixels.
+    ///
+    /// The ascent is rounded to the nearest whole pixel.
+    pub fn new(ascent: f32) -> Self {
+        Self(ascent.round())
+    }
+}
+
 /// A horizontal stroke across a cell, in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Underline {
     /// Physical offset from the baseline to the stroke's TOP edge.
     /// Negative below the baseline.
     pub position: f32,
-    /// Physical stroke thickness, at least one pixel.
-    pub thickness: f32,
+    /// The stroke's thickness.
+    pub thickness: Thickness,
+}
+
+/// A stroke thickness in physical pixels, never below one pixel.
+#[derive(Clone, Copy, Debug, Deref, PartialEq)]
+pub struct Thickness(f32);
+
+impl Thickness {
+    /// A stroke `thickness` physical pixels thick, raised to one pixel when
+    /// thinner rather than rejected. A thickness that is not a number also
+    /// becomes one pixel.
+    pub fn new(thickness: f32) -> Self {
+        Self(thickness.max(1.0))
+    }
 }
 
 /// The canonical cell metrics.
@@ -58,5 +83,21 @@ impl TerminalCellMetricsResource {
             metrics: fonts.cell_metrics_px(phys_font_size),
             phys_font_size,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Asserts that a thickness under one pixel is raised to one pixel
+    /// rather than rejected, and a thicker one is kept as it is.
+    ///
+    /// Case: the bundled font's underline measures 0.6 px at the default
+    /// 12 px size and 1.2 px at 24 px.
+    #[test]
+    fn thickness_is_raised_to_at_least_one_pixel() {
+        assert_eq!(*Thickness::new(0.6), 1.0);
+        assert_eq!(*Thickness::new(1.2), 1.2);
     }
 }

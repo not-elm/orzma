@@ -6,7 +6,7 @@ use crate::bundled::{
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
 use crate::error::{RendererError, RendererResult};
-use crate::font::{CellMetrics, Underline};
+use crate::font::{Baseline, CellMetrics, Thickness, Underline};
 use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
 use bevy::prelude::{Resource, Vec2};
 use orzma_vt::prelude::Style;
@@ -166,12 +166,12 @@ impl TerminalFonts {
         let underline = if let Some(u) = face.underline_metrics() {
             Underline {
                 position: f32::from(u.position) * scale,
-                thickness: (f32::from(u.thickness) * scale).max(1.0),
+                thickness: Thickness::new(f32::from(u.thickness) * scale),
             }
         } else {
             Underline {
                 position: -ascent_phys * 0.07,
-                thickness: (ascent_phys / 14.0).max(1.0),
+                thickness: Thickness::new(ascent_phys / 14.0),
             }
         };
 
@@ -185,7 +185,7 @@ impl TerminalFonts {
 
         CellMetrics {
             cell_size,
-            baseline: ascent_phys.round(),
+            baseline: Baseline::new(ascent_phys),
             underline,
             max_overflow,
         }
@@ -414,7 +414,7 @@ mod tests {
 
     /// Asserts that `cell_metrics_px(12)` measures the cell of the bundled
     /// JetBrains Mono Nerd Font Mono Regular, with the underline below the
-    /// baseline and at least one pixel thick.
+    /// baseline.
     ///
     /// Case: the terminal lays out its grid with the bundled font at the
     /// default 12 px size.
@@ -426,16 +426,11 @@ mod tests {
         // JetBrainsMonoNerdFontMono-Regular.ttf. Update if the font is
         // re-vendored.
         assert_eq!(m.cell_size, Vec2::new(7.0, 15.0));
-        assert_eq!(m.baseline, 12.0);
+        assert_eq!(*m.baseline, 12.0);
         assert!(
             m.underline.position < 0.0,
             "underline.position = {} should be below baseline (negative)",
             m.underline.position
-        );
-        assert!(
-            m.underline.thickness >= 1.0,
-            "underline.thickness = {}",
-            m.underline.thickness
         );
     }
 
