@@ -328,9 +328,9 @@ fn spawn_webview(
         .next()
         .map(Window::scale_factor)
         .unwrap_or(1.0);
-    let (cell_w_phys, cell_h_phys) = cell_size_phys(params.metrics.as_deref());
+    let cell_size = cell_size_phys(params.metrics.as_deref());
     let size = spec.size();
-    let logical = seed_logical_size(size.rows, size.cols, cell_w_phys, cell_h_phys, scale_factor);
+    let logical = seed_logical_size(size.rows, size.cols, cell_size.x, cell_size.y, scale_factor);
     let texture = WebviewTextureTarget(params.images.add(Image::default()));
     // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
     // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
@@ -423,15 +423,10 @@ fn smallest_free_slot(occupied: &[u8]) -> Option<u8> {
 /// Physical cell pitch from the metrics resource, floored to whole physical
 /// pixels and at least 1, or the 8×16 placeholder when no terminal has
 /// rendered yet.
-fn cell_size_phys(metrics: Option<&TerminalCellMetricsResource>) -> (f32, f32) {
+fn cell_size_phys(metrics: Option<&TerminalCellMetricsResource>) -> Vec2 {
     metrics
-        .map(|m| {
-            (
-                m.metrics.advance_phys.floor().max(1.0),
-                m.metrics.line_height_phys.floor().max(1.0),
-            )
-        })
-        .unwrap_or((FALLBACK_CELL_W_PHYS, FALLBACK_CELL_H_PHYS))
+        .map(|m| m.metrics.cell_size)
+        .unwrap_or(Vec2::new(FALLBACK_CELL_W_PHYS, FALLBACK_CELL_H_PHYS))
 }
 
 /// The initial `WebviewSize` (logical px) for a rows×cols rect:
@@ -460,9 +455,9 @@ fn sync_webview_size(
         .next()
         .map(Window::scale_factor)
         .unwrap_or(1.0);
-    let (cell_w_phys, cell_h_phys) = cell_size_phys(metrics.as_deref());
+    let cell_size = cell_size_phys(metrics.as_deref());
     for (mut size, view) in &mut sizes {
-        let next = seed_logical_size(view.rows, view.cols, cell_w_phys, cell_h_phys, scale_factor);
+        let next = seed_logical_size(view.rows, view.cols, cell_size.x, cell_size.y, scale_factor);
         size.set_if_neq(WebviewSize(next));
     }
 }
@@ -553,7 +548,7 @@ fn project_webview_overlays(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-    use bevy_orzma_tty_renderer::prelude::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
     use bevy_orzmux::prelude::OrzmuxClient;
     use crossbeam_channel::Receiver;
     use orzma_vt::prelude::{AnchoredPlacement, GridColumn, GridLine, GridPoint, MAX_PLACEMENTS};
@@ -1315,7 +1310,7 @@ mod tests {
     fn cell_size_phys_falls_back_without_metrics() {
         assert_eq!(
             cell_size_phys(None),
-            (FALLBACK_CELL_W_PHYS, FALLBACK_CELL_H_PHYS)
+            Vec2::new(FALLBACK_CELL_W_PHYS, FALLBACK_CELL_H_PHYS)
         );
     }
 
@@ -1701,13 +1696,13 @@ mod tests {
 
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 10.0,
-                line_height_phys: 20.0,
-                ascent_phys: 15.0,
-                descent_phys: 5.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(10.0, 20.0),
+                baseline: 15.0,
+                underline: LineStroke {
+                    position: -2.0,
+                    thickness: 1.0,
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 24,
         });

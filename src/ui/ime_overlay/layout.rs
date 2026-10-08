@@ -65,8 +65,8 @@ pub(super) fn compute_overlay_layout(
     metrics: &CellMetrics,
     scale: f32,
 ) -> OverlayLayout {
-    let cell_w_logical = metrics.advance_phys.floor().max(1.0) / scale;
-    let line_h_logical = metrics.line_height_phys.floor().max(1.0) / scale;
+    let cell_w_logical = metrics.cell_size.x / scale;
+    let line_h_logical = metrics.cell_size.y / scale;
 
     let (placements, total_cells) = layout_preedit_cells(text, cell_w_logical, 0.0);
     let total_width_logical = total_cells as f32 * cell_w_logical;
@@ -95,15 +95,15 @@ pub(super) fn compute_overlay_layout(
         height: line_h_logical,
     };
 
-    // NOTE: `underline_position_phys` is baseline-relative and negative;
-    // subtract it from ascent so the bar lands below the baseline, not above
-    // the cell top.
-    let underline_top = pos.y + (metrics.ascent_phys - metrics.underline_position_phys) / scale;
+    // NOTE: `underline.position` is baseline-relative and negative;
+    // subtract it from the baseline so the bar lands below the baseline, not
+    // above the cell top.
+    let underline_top = pos.y + (metrics.baseline - metrics.underline.position) / scale;
     let underline = RectPx {
         left: pos.x,
         top: underline_top,
         width: total_width_logical,
-        height: (metrics.underline_thickness_phys / scale).max(1.0),
+        height: (metrics.underline.thickness / scale).max(1.0),
     };
 
     let caret = match caret {
@@ -153,8 +153,8 @@ fn compute_overlay_pos(
     // NOTE: `UiGlobalTransform.translation` is the CENTER of the node in
     // PHYSICAL pixels; subtract `0.5 * host_size_phys` for the top-left. Do NOT
     // multiply by `scale` — translation is already physical.
-    let cell_w_phys = metrics.advance_phys.floor().max(1.0);
-    let cell_h_phys = metrics.line_height_phys.floor().max(1.0);
+    let cell_w_phys = metrics.cell_size.x;
+    let cell_h_phys = metrics.cell_size.y;
     let host_top_left_phys = ui_global_translation_phys - 0.5 * host_size_phys;
     let cell_origin_phys = host_top_left_phys
         + Vec2::new(
@@ -248,16 +248,17 @@ fn glyph_columns(c: char) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy_orzma_tty_renderer::prelude::LineStroke;
 
     fn metrics(advance: f32, line_height: f32) -> CellMetrics {
         CellMetrics {
-            advance_phys: advance,
-            line_height_phys: line_height,
-            ascent_phys: 12.0,
-            descent_phys: 4.0,
-            underline_position_phys: -2.0,
-            underline_thickness_phys: 1.0,
-            max_overflow_phys: 0.0,
+            cell_size: Vec2::new(advance, line_height),
+            baseline: 12.0,
+            underline: LineStroke {
+                position: -2.0,
+                thickness: 1.0,
+            },
+            max_overflow: 0.0,
         }
     }
 

@@ -282,8 +282,8 @@ fn ime_policy_system(
         return;
     };
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
-    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cell_w_phys = metrics.metrics.cell_size.x;
+    let cell_h_phys = metrics.metrics.cell_size.y;
     let (cursor_col, cursor_row) = view.cursor_viewport_cell_or_top();
     let host_origin_phys = ui_xform.translation - 0.5 * node.size();
     let cell_origin_phys = host_origin_phys
@@ -372,8 +372,8 @@ fn webview_ime_position(
     if rect.z == 0 {
         return None;
     }
-    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cell_w_phys = metrics.metrics.cell_size.x;
+    let cell_h_phys = metrics.metrics.cell_size.y;
     let host_origin_phys = ui_xform.translation - 0.5 * node.size();
     let rect_origin_phys = Vec2::new(rect.y as f32 * cell_w_phys, rect.x as f32 * cell_h_phys);
     Some((host_origin_phys + rect_origin_phys) / scale_factor.max(f32::EPSILON))
@@ -415,7 +415,7 @@ mod tests {
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
-    use bevy_orzma_tty_renderer::prelude::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
     use bevy_orzmux::prelude::TabId;
     use orzma_vt::prelude::{Cursor, InstanceId};
     use orzma_webview_host::prelude::MountId;
@@ -623,13 +623,13 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: 12.0,
+                underline: LineStroke {
+                    position: -2.0,
+                    thickness: 1.0,
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 12,
         });
@@ -704,13 +704,13 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: 12.0,
+                underline: LineStroke {
+                    position: -2.0,
+                    thickness: 1.0,
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 12,
         });
@@ -867,13 +867,13 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: 12.0,
+                underline: LineStroke {
+                    position: -2.0,
+                    thickness: 1.0,
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 12,
         });
@@ -923,13 +923,13 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: 12.0,
+                underline: LineStroke {
+                    position: -2.0,
+                    thickness: 1.0,
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 12,
         });
@@ -1005,13 +1005,13 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: 12.0,
+                underline: LineStroke {
+                    position: -2.0,
+                    thickness: 1.0,
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 12,
         });

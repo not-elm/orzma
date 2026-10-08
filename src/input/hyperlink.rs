@@ -444,18 +444,18 @@ mod tests {
         );
     }
 
-    use bevy_orzma_tty_renderer::prelude::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
 
     fn hover_test_metrics() -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: 12.0,
+                underline: LineStroke {
+                    position: -2.0,
+                    thickness: 1.0,
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 16,
         }

@@ -4,40 +4,35 @@
 use crate::font::TerminalFonts;
 use bevy::prelude::{Resource, Vec2};
 
-/// Pixel metrics for the regular face at the given physical pixel size.
-#[derive(Clone, Copy, Debug)]
+/// The cell the grid lays out with, measured from the regular face at one
+/// physical pixel size and snapped to the whole pixels the cells sit on.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CellMetrics {
-    /// Horizontal advance of glyph `'0'` in physical pixels.
-    pub advance_phys: f32,
-    /// Ascent + |descent| + line_gap in physical pixels.
-    pub line_height_phys: f32,
-    /// Distance from baseline to top of em-box in physical pixels (positive).
-    pub ascent_phys: f32,
-    /// Distance from baseline to bottom of em-box in physical pixels (positive).
-    pub descent_phys: f32,
-    /// Offset from baseline to underline-stroke CENTER in physical pixels.
-    /// Negative because the underline sits below the baseline. (OpenType
-    /// `post.underlinePosition` convention.)
-    pub underline_position_phys: f32,
-    /// Underline stroke thickness in physical pixels.
-    pub underline_thickness_phys: f32,
+    /// The cell pitch in physical pixels: the advance of glyph `'0'` and
+    /// the line height (ascent + |descent| + line gap), each floored and at
+    /// least one pixel.
+    pub cell_size: Vec2,
+    /// The baseline's depth below the top of a cell, in whole physical pixels:
+    /// the ascent rounded to the nearest pixel.
+    pub baseline: f32,
+    /// The underline stroke.
+    pub underline: LineStroke,
     /// Worst-case rightward overflow in physical px across all four faces
-    /// (Regular/Italic/Bold/BoldItalic) over ASCII printable codepoints,
-    /// measured as `max(0, outline_glyph(...).px_bounds().max.x - cell_w_phys_floor)`.
-    /// A host laying out a terminal node must reserve this much width past
-    /// the grid rectangle.
-    pub max_overflow_phys: f32,
+    /// (Regular/Italic/Bold/BoldItalic) over ASCII printable codepoints: the
+    /// furthest an outline's right edge, rounded up to a whole pixel,
+    /// reaches past the cell width, or 0. A host laying out a terminal node
+    /// must reserve this much width past the grid rectangle.
+    pub max_overflow: f32,
 }
 
-impl CellMetrics {
-    /// The cell pitch the grid lays out at, in physical pixels: the advance
-    /// and the line height, each floored and at least one pixel.
-    pub fn cell_size_phys(&self) -> Vec2 {
-        Vec2::new(
-            self.advance_phys.floor().max(1.0),
-            self.line_height_phys.floor().max(1.0),
-        )
-    }
+/// A horizontal stroke across a cell, in physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineStroke {
+    /// Physical offset from the baseline to the stroke's CENTER.
+    /// Negative below the baseline.
+    pub position: f32,
+    /// Physical stroke thickness, at least one pixel.
+    pub thickness: f32,
 }
 
 /// The canonical cell pitch and advance values.
@@ -63,30 +58,5 @@ impl TerminalCellMetricsResource {
             metrics: fonts.cell_metrics_px(phys_font_size),
             phys_font_size,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Asserts that the cell pitch floors each axis and never drops below
-    /// one pixel.
-    ///
-    /// Case: a fractional font size measures a 7.6 by 15.4 pixel cell, and
-    /// a degenerate face measures a zero-width advance.
-    #[test]
-    fn cell_size_phys_floors_each_axis_to_at_least_one_pixel() {
-        let metrics = |advance_phys, line_height_phys| CellMetrics {
-            advance_phys,
-            line_height_phys,
-            ascent_phys: 0.0,
-            descent_phys: 0.0,
-            underline_position_phys: 0.0,
-            underline_thickness_phys: 0.0,
-            max_overflow_phys: 0.0,
-        };
-        assert_eq!(metrics(7.6, 15.4).cell_size_phys(), Vec2::new(7.0, 15.0));
-        assert_eq!(metrics(0.0, 0.4).cell_size_phys(), Vec2::new(1.0, 1.0));
     }
 }

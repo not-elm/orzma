@@ -191,10 +191,7 @@ fn hit_candidates<'a>(
 /// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to
 /// `>= 1` so a degenerate metric cannot divide by zero.
 fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
-    (
-        metrics.metrics.advance_phys.floor().max(1.0),
-        metrics.metrics.line_height_phys.floor().max(1.0),
-    )
+    metrics.metrics.cell_size.into()
 }
 
 /// The mouse-report modifier bits for the held keys; a held Super (Cmd on
@@ -325,16 +322,16 @@ mod test_support {
     }
 
     pub(super) fn test_metrics() -> TerminalCellMetricsResource {
-        use bevy_orzma_tty_renderer::prelude::CellMetrics;
+        use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
         TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: 12.0,
+                underline: LineStroke {
+                    position: -2.0,
+                    thickness: 1.0,
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 16,
         }

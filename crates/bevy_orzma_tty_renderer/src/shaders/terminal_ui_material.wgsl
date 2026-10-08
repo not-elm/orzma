@@ -9,7 +9,7 @@ struct TerminalParams {
     grid_size: vec2<u32>,
     cell_size_px: vec2<f32>,
     atlas_size_px: vec2<f32>,
-    ascent_px: f32,
+    baseline_px: f32,
     dpr: f32,
     cursor_pos: vec2<u32>,
     cursor_style: u32,
@@ -306,7 +306,7 @@ fn paint_underline(hit: CellHit, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
     }
     // underline_position_phys is negative (below baseline). The actual
     // y in the cell is baseline + |underline_position|.
-    let top = params.ascent_px - params.underline_position_phys;
+    let top = params.baseline_px - params.underline_position_phys;
     if !in_band(hit.in_cell_px.y, top, params.underline_thickness_phys) {
         return base;
     }
@@ -331,7 +331,7 @@ fn paint_strike(style: u32, y: f32, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32>
     if (style & STYLE_STRIKE) == 0u {
         return base;
     }
-    let top = params.ascent_px * 0.5 - params.underline_thickness_phys * 0.5;
+    let top = params.baseline_px * 0.5 - params.underline_thickness_phys * 0.5;
     if !in_band(y, top, params.underline_thickness_phys) {
         return base;
     }
@@ -848,12 +848,12 @@ fn paint_cell_glyph(
 }
 
 // Glyph origin in cell-local PHYSICAL px, snapped to integer pixels.
-// `params.ascent_px` shifts down to the baseline; `glyph.offset_px.y` then
+// `params.baseline_px` shifts down to the baseline; `glyph.offset_px.y` then
 // lifts back up to the bitmap top.
 fn glyph_origin_phys(glyph: Glyph) -> vec2<f32> {
     let origin = vec2<f32>(
         glyph.offset_px.x,
-        params.ascent_px + glyph.offset_px.y,
+        params.baseline_px + glyph.offset_px.y,
     );
     return floor(origin + vec2<f32>(0.5, 0.5));
 }
