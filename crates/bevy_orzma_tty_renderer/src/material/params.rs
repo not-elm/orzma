@@ -175,9 +175,9 @@ impl TerminalParams {
     /// Builds the per-frame uniform block from the current view and the
     /// caret paint the policy settled on.
     ///
-    /// The cell size is the floored cell pitch of `metrics`, the baseline is
-    /// its rounded ascent, and the caret strokes the `cursor_thickness`
-    /// share of the cell width, rounded and at least one pixel thick.
+    /// The cell size and the baseline are those of `metrics`, and the caret
+    /// strokes the `cursor_thickness` share of the cell width, rounded and
+    /// at least one pixel thick.
     ///
     /// # Invariants
     ///
@@ -324,12 +324,12 @@ mod tests {
     use super::*;
     use crate::font::LineStroke;
 
-    /// Asserts that the uniforms take the cell size as the floored cell
-    /// pitch, the baseline as the rounded ascent, and the caret thickness
-    /// as the rounded share of the cell width.
+    /// Asserts that the uniforms take the cell size and the baseline from
+    /// the metrics, and the caret thickness as the rounded share of the cell
+    /// width.
     ///
-    /// Case: a fractional font size measures a 7.6 by 15.4 pixel cell with
-    /// an 11.6 pixel ascent, and the caret is set to 30% of the cell width.
+    /// Case: the font measures a 7 by 15 pixel cell with a 12 pixel
+    /// baseline, and the caret is set to 30% of the cell width.
     #[test]
     fn terminal_params_derive_cell_size_baseline_and_caret_from_the_metrics() {
         let metrics = CellMetrics {

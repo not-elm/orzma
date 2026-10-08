@@ -209,9 +209,8 @@ impl TerminalFonts {
         f32::from(phys_size_px) * em_scale_of(&self.symbol, 0)
     }
 
-    /// Returns the primary regular face's `'0'` advance in physical pixels —
-    /// the monospace cell pitch the grid lays out at, matching the
-    /// `advance_phys` field of [`Self::cell_metrics_px`].
+    /// Returns the primary regular face's `'0'` advance in physical pixels,
+    /// before [`Self::cell_metrics_px`] floors it into the cell width.
     pub(crate) fn cell_advance_px(&self, phys_size_px: u16) -> f32 {
         let scaled = self
             .regular
