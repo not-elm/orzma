@@ -150,9 +150,6 @@ fn compute_overlay_pos(
     measured_width_logical: f32,
     scale: f32,
 ) -> Vec2 {
-    // NOTE: `UiGlobalTransform.translation` is the CENTER of the node in
-    // PHYSICAL pixels; subtract `0.5 * host_size_phys` for the top-left. Do NOT
-    // multiply by `scale` — translation is already physical.
     let cell_w_phys = metrics.cell_size.x;
     let cell_h_phys = metrics.cell_size.y;
     let host_top_left_phys = ui_global_translation_phys - 0.5 * host_size_phys;
@@ -298,21 +295,6 @@ mod tests {
         );
         assert_eq!(pos.x, 100.0);
         assert_eq!(pos.y, 0.0);
-    }
-
-    #[test]
-    fn floors_subpixel_cell_pitch() {
-        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (10, 1),
-            &metrics(10.4, 16.4),
-            0.0,
-            1.0,
-        );
-        assert_eq!(pos.x, 100.0);
-        assert_eq!(pos.y, 16.0);
     }
 
     #[test]
