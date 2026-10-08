@@ -2,9 +2,8 @@
 //! native picking cannot reach: forwards left press/release and pointer
 //! motion to the CEF child under the cursor.
 
-use crate::input::mouse::cell_dims;
 use crate::surface::OrzmaTerminal;
-use crate::surface::geometry::phys_to_pane_local;
+use crate::surface::geometry::{cell_pitch_phys, phys_to_pane_local};
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{MouseButton, MouseScrollUnit};
 use bevy::picking::pointer::PointerButton;
@@ -170,7 +169,7 @@ pub(in crate::input::mouse) fn webview_pointer_frame(
     metrics: &TerminalCellMetricsResource,
 ) -> WebviewPointerFrame {
     let scale = window.scale_factor();
-    let (cell_w, cell_h) = cell_dims(metrics);
+    let (cell_w, cell_h) = cell_pitch_phys(&metrics.metrics);
     WebviewPointerFrame {
         scale,
         cell_w,

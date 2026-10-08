@@ -9,7 +9,7 @@ mod faces;
 mod metrics;
 
 pub use faces::{FontFace, TerminalFonts};
-pub use metrics::{CellMetrics, TerminalCellMetricsResource};
+pub use metrics::{Baseline, CellMetrics, TerminalCellMetricsResource, Thickness, Underline};
 
 /// The physical pixel font size the renderer rasterizes at for a logical
 /// size under the given scale factor.
@@ -232,16 +232,13 @@ mod tests {
 
         // (b) Derived metrics are ALSO scaled to DPR=2 — catches a bug
         // where phys_font_size is right but the wrong size is fed to
-        // cell_metrics_px. Compares against DPR=1 baseline rather than
-        // hardcoding a font-specific advance value that would break on
+        // cell_metrics_px. Compares against the metrics measured at 24 px
+        // rather than hardcoding font-specific values that would break on
         // font updates.
-        let baseline = TerminalFonts::default();
-        let m12 = baseline.cell_metrics_px(12);
-        assert!(
-            (res.metrics.advance_phys - m12.advance_phys * 2.0).abs() < 0.5,
-            "advance_phys at DPR=2 ({:.3}) should be ~2x DPR=1's ({:.3})",
-            res.metrics.advance_phys,
-            m12.advance_phys * 2.0,
+        assert_eq!(
+            res.metrics,
+            TerminalFonts::default().cell_metrics_px(24),
+            "metrics at DPR=2 should be the ones measured at 24 px"
         );
     }
 
@@ -317,7 +314,7 @@ mod tests {
         let doubled = *app.world().resource::<TerminalCellMetricsResource>();
         assert_eq!(doubled.phys_font_size, 24);
         let expected = TerminalFonts::default().cell_metrics_px(24);
-        assert!((doubled.metrics.advance_phys - expected.advance_phys).abs() < 0.001);
+        assert_eq!(doubled.metrics, expected);
 
         let marked = app
             .world()

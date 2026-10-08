@@ -26,7 +26,7 @@ pub(crate) use write::TerminalParamsPlugin;
 /// | 0      | `grid_size`                 |
 /// | 8      | `cell_size_px` (phys)       |
 /// | 16     | `atlas_size_px`             |
-/// | 24     | `ascent_px` (phys)          |
+/// | 24     | `baseline_px` (phys)        |
 /// | 28     | `dpr` (informational)       |
 /// | 32     | `cursor_pos`                |
 /// | 40     | `cursor_style`              |
@@ -73,7 +73,7 @@ pub(super) struct TerminalParams {
     grid_size: UVec2,
     cell_size_px: Vec2,
     atlas_size_px: Vec2,
-    ascent_px: f32,
+    baseline_px: f32,
     dpr: f32,
     cursor_pos: UVec2,
     /// The [`PackedCursorStyle`] bits: bit0=visible, bits1-2=shape
@@ -139,7 +139,7 @@ impl Default for TerminalParams {
             grid_size: UVec2::ZERO,
             cell_size_px: Vec2::ZERO,
             atlas_size_px: Vec2::ZERO,
-            ascent_px: 0.0,
+            baseline_px: 0.0,
             dpr: 0.0,
             cursor_pos: UVec2::ZERO,
             cursor_style: 0,
@@ -175,9 +175,9 @@ impl TerminalParams {
     /// Builds the per-frame uniform block from the current view and the
     /// caret paint the policy settled on.
     ///
-    /// The cell size is the floored cell pitch of `metrics`, the baseline is
-    /// its rounded ascent, and the caret strokes the `cursor_thickness`
-    /// share of the cell width, rounded and at least one pixel thick.
+    /// The cell size and the baseline are those of `metrics`, and the caret
+    /// strokes the `cursor_thickness` share of the cell width, rounded and
+    /// at least one pixel thick.
     ///
     /// # Invariants
     ///
@@ -204,7 +204,7 @@ impl TerminalParams {
     ) -> Self {
         let cols = u32::from(view.cols);
         let rows = u32::from(view.rows);
-        let cell_size_px = metrics.cell_size_phys();
+        let cell_size_px = metrics.cell_size;
 
         let (cursor_pos, cursor_style) = match caret {
             Some(caret) => (caret.pos, PackedCursorStyle::from(caret.stroke).bits()),
@@ -218,7 +218,7 @@ impl TerminalParams {
             grid_size: UVec2::new(cols.max(1), rows.max(1)),
             cell_size_px,
             atlas_size_px,
-            ascent_px: metrics.ascent_phys.round(),
+            baseline_px: *metrics.baseline,
             dpr,
             cursor_pos,
             cursor_style,
@@ -228,9 +228,9 @@ impl TerminalParams {
             sel_end_row,
             sel_end_col,
             sel_kind,
-            underline_position_phys: metrics.underline_position_phys,
-            underline_thickness_phys: metrics.underline_thickness_phys.max(1.0),
-            max_overflow_phys: metrics.max_overflow_phys,
+            underline_position_phys: metrics.underline.position,
+            underline_thickness_phys: *metrics.underline.thickness,
+            max_overflow_phys: metrics.max_overflow,
             bg_padding_color,
             hover_hyperlink_id,
             hover_active,
@@ -322,23 +322,24 @@ fn selection_uniforms(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font::{Baseline, Thickness, Underline};
 
-    /// Asserts that the uniforms take the cell size as the floored cell
-    /// pitch, the baseline as the rounded ascent, and the caret thickness
-    /// as the rounded share of the cell width.
+    /// Asserts that the uniforms take the cell size and the baseline from
+    /// the metrics, and the caret thickness as the rounded share of the cell
+    /// width.
     ///
-    /// Case: a fractional font size measures a 7.6 by 15.4 pixel cell with
-    /// an 11.6 pixel ascent, and the caret is set to 30% of the cell width.
+    /// Case: the font measures a 7 by 15 pixel cell with a 12 pixel
+    /// baseline, and the caret is set to 30% of the cell width.
     #[test]
     fn terminal_params_derive_cell_size_baseline_and_caret_from_the_metrics() {
         let metrics = CellMetrics {
-            advance_phys: 7.6,
-            line_height_phys: 15.4,
-            ascent_phys: 11.6,
-            descent_phys: 3.8,
-            underline_position_phys: -1.5,
-            underline_thickness_phys: 1.0,
-            max_overflow_phys: 0.0,
+            cell_size: Vec2::new(7.0, 15.0),
+            baseline: Baseline::new(12.0),
+            underline: Underline {
+                position: -1.5,
+                thickness: Thickness::new(1.0),
+            },
+            max_overflow: 0.0,
         };
         let params = TerminalParams::new(
             &TerminalView::default(),
@@ -355,7 +356,7 @@ mod tests {
             0.3,
         );
         assert_eq!(params.cell_size_px, Vec2::new(7.0, 15.0));
-        assert_eq!(params.ascent_px, 12.0);
+        assert_eq!(params.baseline_px, 12.0);
         assert_eq!(params.cursor_thickness_phys, 2.0);
     }
 
@@ -547,13 +548,13 @@ mod tests {
 
     fn params_for(palette: &Palette) -> TerminalParams {
         let metrics = CellMetrics {
-            advance_phys: 8.0,
-            line_height_phys: 16.0,
-            ascent_phys: 12.0,
-            descent_phys: 4.0,
-            underline_position_phys: -2.0,
-            underline_thickness_phys: 1.0,
-            max_overflow_phys: 0.0,
+            cell_size: Vec2::new(8.0, 16.0),
+            baseline: Baseline::new(12.0),
+            underline: Underline {
+                position: -2.0,
+                thickness: Thickness::new(1.0),
+            },
+            max_overflow: 0.0,
         };
         TerminalParams::new(
             &TerminalView::default(),

@@ -662,7 +662,7 @@ mod tests {
     use bevy::math::Vec2;
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
-    use bevy_orzma_tty_renderer::prelude::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::{Baseline, CellMetrics, Thickness, Underline};
 
     #[test]
     fn suppresses_cursor_on_focused_terminal() {
@@ -710,18 +710,18 @@ mod tests {
 
     /// Builds a `CellMetrics` literal for the overlay ECS tests.
     /// `CellMetrics` has no `Default`, so every field is set; the tests
-    /// assert on geometry driven by `advance_phys` / `line_height_phys`,
+    /// assert on geometry driven by `cell_size`,
     /// with the remaining fields (read by `compute_overlay_layout` for the
     /// underline rect) filled with arbitrary non-zero values.
-    fn metrics(advance: f32, line_height: f32) -> CellMetrics {
+    fn metrics(cell_w: f32, cell_h: f32) -> CellMetrics {
         CellMetrics {
-            advance_phys: advance,
-            line_height_phys: line_height,
-            ascent_phys: 12.0,
-            descent_phys: 4.0,
-            underline_position_phys: -2.0,
-            underline_thickness_phys: 1.0,
-            max_overflow_phys: 0.0,
+            cell_size: Vec2::new(cell_w, cell_h),
+            baseline: Baseline::new(12.0),
+            underline: Underline {
+                position: -2.0,
+                thickness: Thickness::new(1.0),
+            },
+            max_overflow: 0.0,
         }
     }
 

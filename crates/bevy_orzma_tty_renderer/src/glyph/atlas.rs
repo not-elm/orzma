@@ -351,7 +351,7 @@ mod tests {
         let fonts = TerminalFonts::default();
         let mut atlas = GlyphAtlas::default();
         let size = 24u16;
-        let cell_w = fonts.cell_metrics_px(size).advance_phys;
+        let cell_w = fonts.cell_advance_px(size);
         // ☐ ☑ ☒ ✔ — Miscellaneous Symbols / Dingbats marks that interactive
         // TUIs (e.g. Claude Code's multi-select) draw for checkbox state.
         // Absent from BOTH JetBrains Mono Nerd Font and UDEVGothic35, so

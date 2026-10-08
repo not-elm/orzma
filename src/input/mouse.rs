@@ -14,7 +14,7 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
-use bevy_orzma_tty_renderer::prelude::{TerminalCellMetricsResource, TerminalCells, TerminalView};
+use bevy_orzma_tty_renderer::prelude::{TerminalCells, TerminalView};
 use bevy_orzmux::prelude::{CellSide, RequestTtyPointer};
 use orzma_tty::prelude::{CellCoord, PointerInput, ProtocolModifiers, TerminalModifiers};
 use orzma_vt::prelude::{GridColumn, ViewportLine, ViewportPoint};
@@ -188,15 +188,6 @@ fn hit_candidates<'a>(
         .map(|(e, node, stack, transform, _, _)| (e, node, stack, transform))
 }
 
-/// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to
-/// `>= 1` so a degenerate metric cannot divide by zero.
-fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
-    (
-        metrics.metrics.advance_phys.floor().max(1.0),
-        metrics.metrics.line_height_phys.floor().max(1.0),
-    )
-}
-
 /// The mouse-report modifier bits for the held keys; a held Super (Cmd on
 /// macOS) sets no bit.
 fn protocol_mods(held: &TerminalModifiers) -> ProtocolModifiers {
@@ -293,6 +284,7 @@ fn cell_context_for<'a>(
 mod test_support {
     use super::*;
     use bevy::window::PrimaryWindow;
+    use bevy_orzma_tty_renderer::prelude::TerminalCellMetricsResource;
 
     #[derive(Resource, Default)]
     pub(super) struct CapturedEffects(pub(super) Vec<MouseEffect>);
@@ -325,16 +317,16 @@ mod test_support {
     }
 
     pub(super) fn test_metrics() -> TerminalCellMetricsResource {
-        use bevy_orzma_tty_renderer::prelude::CellMetrics;
+        use bevy_orzma_tty_renderer::prelude::{Baseline, CellMetrics, Thickness, Underline};
         TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: Baseline::new(12.0),
+                underline: Underline {
+                    position: -2.0,
+                    thickness: Thickness::new(1.0),
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 16,
         }

@@ -328,9 +328,9 @@ fn spawn_webview(
         .next()
         .map(Window::scale_factor)
         .unwrap_or(1.0);
-    let (cell_w_phys, cell_h_phys) = cell_size_phys(params.metrics.as_deref());
+    let cell_size = cell_size_phys(params.metrics.as_deref());
     let size = spec.size();
-    let logical = seed_logical_size(size.rows, size.cols, cell_w_phys, cell_h_phys, scale_factor);
+    let logical = seed_logical_size(size.rows, size.cols, cell_size, scale_factor);
     let texture = WebviewTextureTarget(params.images.add(Image::default()));
     // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
     // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
@@ -423,28 +423,16 @@ fn smallest_free_slot(occupied: &[u8]) -> Option<u8> {
 /// Physical cell pitch from the metrics resource, floored to whole physical
 /// pixels and at least 1, or the 8×16 placeholder when no terminal has
 /// rendered yet.
-fn cell_size_phys(metrics: Option<&TerminalCellMetricsResource>) -> (f32, f32) {
+fn cell_size_phys(metrics: Option<&TerminalCellMetricsResource>) -> Vec2 {
     metrics
-        .map(|m| {
-            (
-                m.metrics.advance_phys.floor().max(1.0),
-                m.metrics.line_height_phys.floor().max(1.0),
-            )
-        })
-        .unwrap_or((FALLBACK_CELL_W_PHYS, FALLBACK_CELL_H_PHYS))
+        .map(|m| m.metrics.cell_size)
+        .unwrap_or(Vec2::new(FALLBACK_CELL_W_PHYS, FALLBACK_CELL_H_PHYS))
 }
 
 /// The initial `WebviewSize` (logical px) for a rows×cols rect:
-/// `(cols × cell_w_phys, rows × cell_h_phys) / scale_factor`.
-fn seed_logical_size(
-    rows: u16,
-    cols: u16,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale_factor: f32,
-) -> Vec2 {
-    Vec2::new(f32::from(cols) * cell_w_phys, f32::from(rows) * cell_h_phys)
-        / scale_factor.max(f32::EPSILON)
+/// `(cols, rows) × cell_size_phys / scale_factor`.
+fn seed_logical_size(rows: u16, cols: u16, cell_size_phys: Vec2, scale_factor: f32) -> Vec2 {
+    Vec2::new(f32::from(cols), f32::from(rows)) * cell_size_phys / scale_factor.max(f32::EPSILON)
 }
 
 /// Recomputes every webview's `WebviewSize` from the current cell
@@ -460,9 +448,9 @@ fn sync_webview_size(
         .next()
         .map(Window::scale_factor)
         .unwrap_or(1.0);
-    let (cell_w_phys, cell_h_phys) = cell_size_phys(metrics.as_deref());
+    let cell_size = cell_size_phys(metrics.as_deref());
     for (mut size, view) in &mut sizes {
-        let next = seed_logical_size(view.rows, view.cols, cell_w_phys, cell_h_phys, scale_factor);
+        let next = seed_logical_size(view.rows, view.cols, cell_size, scale_factor);
         size.set_if_neq(WebviewSize(next));
     }
 }
@@ -553,7 +541,7 @@ fn project_webview_overlays(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-    use bevy_orzma_tty_renderer::prelude::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::{Baseline, CellMetrics, Thickness, Underline};
     use bevy_orzmux::prelude::OrzmuxClient;
     use crossbeam_channel::Receiver;
     use orzma_vt::prelude::{AnchoredPlacement, GridColumn, GridLine, GridPoint, MAX_PLACEMENTS};
@@ -1302,11 +1290,11 @@ mod tests {
     #[test]
     fn seed_logical_size_divides_physical_cells_by_scale() {
         assert_eq!(
-            seed_logical_size(10, 40, 8.0, 16.0, 2.0),
+            seed_logical_size(10, 40, Vec2::new(8.0, 16.0), 2.0),
             Vec2::new(160.0, 80.0)
         );
         assert_eq!(
-            seed_logical_size(10, 40, 8.0, 16.0, 1.0),
+            seed_logical_size(10, 40, Vec2::new(8.0, 16.0), 1.0),
             Vec2::new(320.0, 160.0)
         );
     }
@@ -1315,7 +1303,7 @@ mod tests {
     fn cell_size_phys_falls_back_without_metrics() {
         assert_eq!(
             cell_size_phys(None),
-            (FALLBACK_CELL_W_PHYS, FALLBACK_CELL_H_PHYS)
+            Vec2::new(FALLBACK_CELL_W_PHYS, FALLBACK_CELL_H_PHYS)
         );
     }
 
@@ -1701,13 +1689,13 @@ mod tests {
 
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 10.0,
-                line_height_phys: 20.0,
-                ascent_phys: 15.0,
-                descent_phys: 5.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(10.0, 20.0),
+                baseline: Baseline::new(15.0),
+                underline: Underline {
+                    position: -2.0,
+                    thickness: Thickness::new(1.0),
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 24,
         });

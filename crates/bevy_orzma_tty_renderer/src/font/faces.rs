@@ -6,9 +6,9 @@ use crate::bundled::{
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
 use crate::error::{RendererError, RendererResult};
-use crate::font::CellMetrics;
+use crate::font::{Baseline, CellMetrics, Thickness, Underline};
 use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
-use bevy::prelude::Resource;
+use bevy::prelude::{Resource, Vec2};
 use orzma_vt::prelude::Style;
 use ttf_parser::Face as TtfFace;
 
@@ -150,7 +150,6 @@ impl TerminalFonts {
             .as_scaled(ab_glyph::PxScale::from(px_scale_value));
         let advance_phys = scaled.h_advance(scaled.glyph_id('0'));
         let ascent_phys = scaled.ascent();
-        let descent_phys = scaled.descent().abs();
 
         // NOTE: scale for ttf-parser font-unit values: phys_size_px is the
         // em-square (1 em = upem font units = phys_size_px physical pixels).
@@ -164,30 +163,31 @@ impl TerminalFonts {
         // preserved (drives correct line spacing).
         let line_height_phys = (asc - desc + i32::from(face.line_gap())) as f32 * scale;
 
-        let (underline_position_phys, underline_thickness_phys) =
-            if let Some(u) = face.underline_metrics() {
-                (
-                    f32::from(u.position) * scale,
-                    (f32::from(u.thickness) * scale).max(1.0),
-                )
-            } else {
-                (-ascent_phys * 0.07, (ascent_phys / 14.0).max(1.0))
-            };
+        let underline = if let Some(u) = face.underline_metrics() {
+            Underline {
+                position: f32::from(u.position) * scale,
+                thickness: Thickness::new(f32::from(u.thickness) * scale),
+            }
+        } else {
+            Underline {
+                position: -ascent_phys * 0.07,
+                thickness: Thickness::new(ascent_phys / 14.0),
+            }
+        };
 
-        let cell_w_phys_floor = advance_phys.floor().max(1.0);
-        let max_overflow_phys = [&self.regular, &self.italic, &self.bold, &self.bold_italic]
+        let cell_size = Vec2::new(advance_phys, line_height_phys)
+            .floor()
+            .max(Vec2::ONE);
+        let max_overflow = [&self.regular, &self.italic, &self.bold, &self.bold_italic]
             .iter()
-            .map(|face| max_ascii_overflow_for_face(face, px_scale_value, cell_w_phys_floor))
+            .map(|face| max_ascii_overflow_for_face(face, px_scale_value, cell_size.x))
             .fold(0.0_f32, f32::max);
 
         CellMetrics {
-            advance_phys,
-            line_height_phys,
-            ascent_phys,
-            descent_phys,
-            underline_position_phys,
-            underline_thickness_phys,
-            max_overflow_phys,
+            cell_size,
+            baseline: Baseline::new(ascent_phys),
+            underline,
+            max_overflow,
         }
     }
 
@@ -209,9 +209,8 @@ impl TerminalFonts {
         f32::from(phys_size_px) * em_scale_of(&self.symbol, 0)
     }
 
-    /// Returns the primary regular face's `'0'` advance in physical pixels —
-    /// the monospace cell pitch the grid lays out at, matching the
-    /// `advance_phys` field of [`Self::cell_metrics_px`].
+    /// Returns the primary regular face's `'0'` advance in physical pixels,
+    /// before [`Self::cell_metrics_px`] floors it into the cell width.
     pub(crate) fn cell_advance_px(&self, phys_size_px: u16) -> f32 {
         let scaled = self
             .regular
@@ -355,10 +354,7 @@ mod tests {
             via_faces.regular.font_data(),
             "from_faces(index 0) and from_bytes must produce the same regular face"
         );
-        let mb = via_bytes.cell_metrics_px(12);
-        let mf = via_faces.cell_metrics_px(12);
-        assert!((mb.advance_phys - mf.advance_phys).abs() < 0.001);
-        assert!((mb.line_height_phys - mf.line_height_phys).abs() < 0.001);
+        assert_eq!(via_bytes.cell_metrics_px(12), via_faces.cell_metrics_px(12));
     }
 
     /// Asserts that a face whose bytes do not parse is reported as a
@@ -416,9 +412,9 @@ mod tests {
         assert_eq!(TerminalFonts::default().regular_index, 0);
     }
 
-    /// Asserts that `cell_metrics_px(12)` lands in the ranges measured for
-    /// the bundled JetBrains Mono Nerd Font Mono Regular, with the
-    /// underline below the baseline and at least one pixel thick.
+    /// Asserts that `cell_metrics_px(12)` measures the cell of the bundled
+    /// JetBrains Mono Nerd Font Mono Regular, with the underline below the
+    /// baseline.
     ///
     /// Case: the terminal lays out its grid with the bundled font at the
     /// default 12 px size.
@@ -426,43 +422,20 @@ mod tests {
     fn jetbrains_mono_12px_metrics_are_sensible() {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
-        // Empirical ranges below were measured against the bundled
+        // Empirical values below were measured against the bundled
         // JetBrainsMonoNerdFontMono-Regular.ttf. Update if the font is
         // re-vendored.
+        assert_eq!(m.cell_size, Vec2::new(7.0, 15.0));
+        assert_eq!(*m.baseline, 12.0);
         assert!(
-            m.advance_phys > 6.9 && m.advance_phys < 7.5,
-            "advance_phys = {} (JBM Mono 12px range)",
-            m.advance_phys
-        );
-        assert!(
-            m.line_height_phys > 15.5 && m.line_height_phys < 16.2,
-            "line_height_phys = {}",
-            m.line_height_phys
-        );
-        assert!(
-            m.ascent_phys > 11.9 && m.ascent_phys < 12.5,
-            "ascent_phys = {}",
-            m.ascent_phys
-        );
-        assert!(
-            m.descent_phys > 3.3 && m.descent_phys < 3.9,
-            "descent_phys = {}",
-            m.descent_phys
-        );
-        assert!(
-            m.underline_position_phys < 0.0,
-            "underline_position_phys = {} should be below baseline (negative)",
-            m.underline_position_phys
-        );
-        assert!(
-            m.underline_thickness_phys >= 1.0,
-            "underline_thickness_phys = {}",
-            m.underline_thickness_phys
+            m.underline.position < 0.0,
+            "underline.position = {} should be below baseline (negative)",
+            m.underline.position
         );
     }
 
     /// Asserts that the bundled font at 12 px reports a non-zero
-    /// `max_overflow_phys`.
+    /// `max_overflow`.
     ///
     /// Case: the terminal lays out the bundled font at 12 px, where a
     /// glyph like `W` rasterizes past the floored advance.
@@ -471,14 +444,14 @@ mod tests {
         let fonts = TerminalFonts::default();
         let m = fonts.cell_metrics_px(12);
         assert!(
-            m.max_overflow_phys > 0.0,
-            "max_overflow_phys = {} (expected > 0 driven by wide ASCII glyphs)",
-            m.max_overflow_phys
+            m.max_overflow > 0.0,
+            "max_overflow = {} (expected > 0 driven by wide ASCII glyphs)",
+            m.max_overflow
         );
     }
 
-    /// Asserts that `max_overflow_phys` is at least the overflow each of
-    /// the four primary faces reaches on its own.
+    /// Asserts that `max_overflow` is at least the overflow each of the
+    /// four primary faces reaches on its own.
     ///
     /// Case: a program prints bold and italic text, whose glyphs can
     /// reach further past the cell than the regular face's.
@@ -491,7 +464,7 @@ mod tests {
         let upem = f32::from(face.units_per_em());
         let em_scale = (i32::from(face.ascender()) - i32::from(face.descender())) as f32 / upem;
         let px_scale = 12.0_f32 * em_scale;
-        let cell_w_phys_floor = m.cell_size_phys().x;
+        let cell_w_phys_floor = m.cell_size.x;
 
         for (name, face_arc) in [
             ("Regular", &fonts.regular),
@@ -501,16 +474,17 @@ mod tests {
         ] {
             let face_overflow = max_ascii_overflow_for_face(face_arc, px_scale, cell_w_phys_floor);
             assert!(
-                face_overflow <= m.max_overflow_phys + 0.001,
-                "{} face overflow = {} exceeds reported max_overflow_phys = {}",
+                face_overflow <= m.max_overflow + 0.001,
+                "{} face overflow = {} exceeds reported max_overflow = {}",
                 name,
                 face_overflow,
-                m.max_overflow_phys,
+                m.max_overflow,
             );
         }
     }
 
-    /// Asserts that 24 px metrics are approximately double the 12 px ones.
+    /// Asserts that the 24 px cell is double the 12 px one, give or take
+    /// the pixel that flooring each axis can drop.
     ///
     /// Case: the user doubles the font size from 12 px to 24 px.
     #[test]
@@ -518,8 +492,24 @@ mod tests {
         let fonts = TerminalFonts::default();
         let m12 = fonts.cell_metrics_px(12);
         let m24 = fonts.cell_metrics_px(24);
-        assert!((m24.advance_phys - m12.advance_phys * 2.0).abs() < 0.5);
-        assert!((m24.line_height_phys - m12.line_height_phys * 2.0).abs() < 0.5);
+        let excess = m24.cell_size - m12.cell_size * 2.0;
+        assert!(
+            excess.min_element() >= 0.0 && excess.max_element() <= 1.0,
+            "24 px cell {} is not double the 12 px cell {}",
+            m24.cell_size,
+            m12.cell_size,
+        );
+    }
+
+    /// Asserts that the cell never shrinks below one pixel on either axis.
+    ///
+    /// Case: a 1 px font measures a sub-pixel advance and line height.
+    #[test]
+    fn cell_metrics_px_cell_is_at_least_one_pixel() {
+        assert_eq!(
+            TerminalFonts::default().cell_metrics_px(1).cell_size,
+            Vec2::ONE
+        );
     }
 
     /// Asserts that `cell_metrics_px` measures its advance at the same
@@ -537,11 +527,10 @@ mod tests {
             .regular
             .as_scaled(ab_glyph::PxScale::from(helper_value));
         let expected_advance = scaled.h_advance(scaled.glyph_id('0'));
-        assert!(
-            (metrics.advance_phys - expected_advance).abs() < 0.001,
-            "cell_metrics advance = {} disagrees with px_scale_value-derived advance = {}",
-            metrics.advance_phys,
-            expected_advance,
+        assert_eq!(
+            metrics.cell_size.x,
+            expected_advance.floor().max(1.0),
+            "cell_metrics cell width disagrees with px_scale_value-derived advance = {expected_advance}",
         );
     }
 

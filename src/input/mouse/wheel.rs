@@ -3,14 +3,13 @@
 //! `RequestTtyWheel` handing the steps to the terminal under the cursor.
 
 use super::{
-    TerminalSurfaces, cell_context_for, cell_dims, hit_candidates, on_any_mouse_message,
-    protocol_mods,
+    TerminalSurfaces, cell_context_for, hit_candidates, on_any_mouse_message, protocol_mods,
 };
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::gesture::{WheelAccumulator, lock_dominant_axis, wheel_delta_cells};
-use crate::surface::geometry::topmost_surface_at;
+use crate::surface::geometry::{cell_pitch_phys, topmost_surface_at};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -100,7 +99,7 @@ fn resolve_wheel_target(
     if !window.focused || terminals.is_empty() {
         return None;
     }
-    let (cell_w, cell_h) = cell_dims(metrics);
+    let (cell_w, cell_h) = cell_pitch_phys(&metrics.metrics);
     let cursor_phys = window
         .cursor_position()
         .map(|c| c * window.scale_factor())?;
@@ -132,10 +131,6 @@ fn accumulate_wheel<'a>(
         gesture_acc.drop_horizontal_residual();
     }
     let (delta_up, delta_x) = wheel.into_iter().fold((0.0f32, 0.0f32), |(v, h), ev| {
-        // NOTE: BOTH axes divide by cell_h (line height), not cell_w, so a given
-        // finger distance yields the same step rate horizontally and vertically.
-        // Using the narrower cell_w (advance_phys, ~half of line_height_phys) made
-        // horizontal ~2x too sensitive — do not "correct" ev.x to cell_w.
         let cells_up = wheel_delta_cells(ev.unit, ev.y, cell_h);
         let cells_x = wheel_delta_cells(ev.unit, ev.x, cell_h);
         if fold_shift && matches!(ev.unit, MouseScrollUnit::Line) {
@@ -144,10 +139,6 @@ fn accumulate_wheel<'a>(
             (v + cells_up, h + cells_x)
         }
     });
-    // NOTE: do NOT also clear the suppressed axis's residual here. The lock
-    // zeros the off-axis delta before accumulation, so it adds 0 and cannot leak
-    // a step; clearing would instead wipe genuine sub-cell progress on a
-    // deliberate horizontal swipe whose slow frames dip below the lock ratio.
     let (delta_up, delta_right) =
         lock_dominant_axis(delta_up, rightward(delta_x), cfg.axis_lock_ratio);
     gesture_acc.accumulate(delta_up, delta_right, cfg.cells_per_notch)

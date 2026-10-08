@@ -1,6 +1,7 @@
 # Contributing to orzma
 
 <!-- ANCHOR: guide -->
+
 Thanks for helping! This guide covers the development setup, how the code is
 organized, the conventions the code follows, how to send a change, and how to
 work on the documentation.
@@ -20,7 +21,7 @@ You need:
 - On Windows, CMake and Ninja: `winget install Kitware.CMake Ninja-build.Ninja`.
 - On Linux, the build packages the release build uses — on Ubuntu or Debian,
   `sudo apt install build-essential pkg-config libasound2-dev libudev-dev
-  libwayland-dev libxkbcommon-dev libfontconfig1-dev` — and the runtime
+libwayland-dev libxkbcommon-dev libfontconfig1-dev` — and the runtime
   libraries that [Installation](https://not-elm.github.io/orzma/installation.html#linux)
   lists for the tarball.
 
@@ -32,15 +33,15 @@ just setup-cef   # one-time: installs the Chromium Embedded Framework and its re
 just run         # builds and runs orzma
 ```
 
-| Command | What it does |
-| --- | --- |
-| `just build` | Build the workspace. |
-| `just run` | Run orzma. |
-| `just test` | Run every Rust test. |
-| `pnpm -r test` | Run the TypeScript tests. |
-| `pnpm check-types` | Type-check the TypeScript packages. |
-| `just fix-lint` | Apply clippy fixes, rustfmt, and biome fixes. |
-| `just install-apps` | Build and install `orzmd` and `orzbrowser`. |
+| Command             | What it does                                  |
+| ------------------- | --------------------------------------------- |
+| `just build`        | Build the workspace.                          |
+| `just run`          | Run orzma.                                    |
+| `just test`         | Run every Rust test.                          |
+| `pnpm -r test`      | Run the TypeScript tests.                     |
+| `pnpm check-types`  | Type-check the TypeScript packages.           |
+| `just fix-lint`     | Apply clippy fixes, rustfmt, and biome fixes. |
+| `just install-apps` | Build and install `orzmd` and `orzbrowser`.   |
 
 On Windows, `just build`, `just run`, and `just test` set `CEF_PATH` for you.
 When you run cargo yourself — including through `just fix-lint` — set
@@ -85,18 +86,18 @@ flowchart TD
 Arrows point from a crate to the crates it uses; a dependency already implied by
 a path through other crates is left out.
 
-| Crate | Role |
-| --- | --- |
-| `orzma` (`src/`) | The app: window, input, UI, and the plugins below. |
-| `orzma_vt` | Terminal emulation: the screen, scrollback, escape sequences, and selection. |
-| `orzma_tty` | Runs the shell under a PTY and drives `orzma_vt`. |
-| `orzmux` | The multiplexer backend: a thread that owns every pane and the pane layout. |
-| `bevy_orzmux` | Connects the backend to the Bevy app. |
-| `bevy_orzma_tty_renderer` | Draws the terminal grid on the GPU. |
-| `orzma_webview_host` | The webview server: the control socket and every program's registrations, placements, and focus. |
-| `bevy_orzma_webview` | Draws webviews with CEF, serves their content through the `orzma://` scheme, and relays the `window.orzma` bridge. |
-| `orzma_configs` | Loads `config.toml`. |
-| `ratatui_orzma` (`sdk/`) | The Rust SDK for webview apps. `@orzma/web` is its page-side companion. |
+| Crate                     | Role                                                                                                               |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `orzma` (`src/`)          | The app: window, input, UI, and the plugins below.                                                                 |
+| `orzma_vt`                | Terminal emulation: the screen, scrollback, escape sequences, and selection.                                       |
+| `orzma_tty`               | Runs the shell under a PTY and drives `orzma_vt`.                                                                  |
+| `orzmux`                  | The multiplexer backend: a thread that owns every pane and the pane layout.                                        |
+| `bevy_orzmux`             | Connects the backend to the Bevy app.                                                                              |
+| `bevy_orzma_tty_renderer` | Draws the terminal grid on the GPU.                                                                                |
+| `orzma_webview_host`      | The webview server: the control socket and every program's registrations, placements, and focus.                   |
+| `bevy_orzma_webview`      | Draws webviews with CEF, serves their content through the `orzma://` scheme, and relays the `window.orzma` bridge. |
+| `orzma_configs`           | Loads `config.toml`.                                                                                               |
+| `ratatui_orzma` (`sdk/`)  | The Rust SDK for webview apps. `@orzma/web` is its page-side companion.                                            |
 
 At run time, the `orzmux` thread owns each pane's PTY and terminal state and runs
 the webview host. The app sends it commands and receives layout snapshots,
@@ -107,11 +108,6 @@ frames, and webview events, which `bevy_orzma_tty_renderer` and
 ## Conventions
 
 - Code comments are written in English.
-- Rust code follows
-  [.claude/rules/rust.md](https://github.com/not-elm/orzma/blob/main/.claude/rules/rust.md),
-  and TypeScript follows
-  [.claude/rules/typescript.md](https://github.com/not-elm/orzma/blob/main/.claude/rules/typescript.md).
-  They cover the comment rules, doc comments, imports, and error handling.
 - Run `just fix-lint` before sending a change. CI runs `cargo fmt --check`,
   `cargo clippy` with warnings as errors, the tests, `cargo doc`, cargo-deny,
   the third-party license check, and `pnpm lint:ci`.
@@ -145,15 +141,15 @@ Maintainers cut a release from `main`:
 5. Publishing starts the `post-release` workflow, which bumps the Homebrew
    cask, publishes the SDK to npm and crates.io, and deploys the user guide.
 
-| If this fails | Do this |
-| --- | --- |
-| The `plan` job (a version file disagrees with the tag) | Fix the versions on `main`, then move the tag as described in the next row. |
-| A build in `release`, before any draft exists | Re-run the failed jobs. If the fix needs a code change, merge it to `main`, cancel the old run, and move the tag: `git push --delete origin vX.Y.Z`, then `git tag -f vX.Y.Z` on the new commit and `git push origin vX.Y.Z`. |
-| The `draft` job | Re-run the failed jobs within 7 days, while the build artifacts are kept; the job refills the same draft and keeps your description. After that, re-run all jobs. |
-| A problem you find in the draft | Copy your description, delete the draft, merge the fix, and move the tag as above. |
-| You published the draft before the `release` run succeeded | Treat it as an incident: `post-release` refuses a release with missing assets, so nothing else goes out. Do not re-run the draft job; release a new version. |
-| A `post-release` job | Re-run the failed jobs, or run `gh workflow run post-release.yml --ref vX.Y.Z`. Both run the workflow files as they were at the tag, so a bug in those files needs a new version. |
-| `post-release` skipped Homebrew and the user guide ("is not the Latest release") | Mark the release as Latest on its release page, then run `gh workflow run post-release.yml --ref vX.Y.Z`. |
+| If this fails                                                                    | Do this                                                                                                                                                                                                                       |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The `plan` job (a version file disagrees with the tag)                           | Fix the versions on `main`, then move the tag as described in the next row.                                                                                                                                                   |
+| A build in `release`, before any draft exists                                    | Re-run the failed jobs. If the fix needs a code change, merge it to `main`, cancel the old run, and move the tag: `git push --delete origin vX.Y.Z`, then `git tag -f vX.Y.Z` on the new commit and `git push origin vX.Y.Z`. |
+| The `draft` job                                                                  | Re-run the failed jobs within 7 days, while the build artifacts are kept; the job refills the same draft and keeps your description. After that, re-run all jobs.                                                             |
+| A problem you find in the draft                                                  | Copy your description, delete the draft, merge the fix, and move the tag as above.                                                                                                                                            |
+| You published the draft before the `release` run succeeded                       | Treat it as an incident: `post-release` refuses a release with missing assets, so nothing else goes out. Do not re-run the draft job; release a new version.                                                                  |
+| A `post-release` job                                                             | Re-run the failed jobs, or run `gh workflow run post-release.yml --ref vX.Y.Z`. Both run the workflow files as they were at the tag, so a bug in those files needs a new version.                                             |
+| `post-release` skipped Homebrew and the user guide ("is not the Latest release") | Mark the release as Latest on its release page, then run `gh workflow run post-release.yml --ref vX.Y.Z`.                                                                                                                     |
 
 Once a release is published, fix problems with a new version; never move its
 tag.

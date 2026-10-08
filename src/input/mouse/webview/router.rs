@@ -5,7 +5,6 @@
 use crate::input::InputPhase;
 use crate::input::focus::WebviewMouseDisabled;
 use crate::input::mouse::MousePhase;
-use crate::input::mouse::cell_dims;
 use crate::input::mouse::separator::GrabbedSeparator;
 use crate::input::mouse::webview::{
     CefMouse, WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
@@ -13,8 +12,7 @@ use crate::input::mouse::webview::{
     webview_wheel_delta, webview_wheel_target,
 };
 use crate::surface::OrzmaTerminal;
-use crate::surface::geometry::phys_to_pane_local;
-use crate::surface::geometry::topmost_surface_at;
+use crate::surface::geometry::{cell_pitch_phys, phys_to_pane_local, topmost_surface_at};
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
@@ -250,7 +248,7 @@ fn forward_webview_wheel(
         return;
     }
     let scale = window.scale_factor();
-    let (cell_w, cell_h) = cell_dims(&metrics);
+    let (cell_w, cell_h) = cell_pitch_phys(&metrics.metrics);
     let target = window.cursor_position().and_then(|c| {
         let cursor_phys = c * scale;
         let SurfaceUnderCursor::Open(terminal, local_phys) =
@@ -285,7 +283,7 @@ mod tests {
     use super::*;
     use bevy::math::{DVec2, IVec4};
     use bevy::window::WindowResolution;
-    use bevy_orzma_tty_renderer::prelude::CellMetrics;
+    use bevy_orzma_tty_renderer::prelude::{Baseline, CellMetrics, Thickness, Underline};
     use bevy_orzma_webview::RequestWebviewFocus;
     use orzma_vt::prelude::InstanceId;
     use orzma_webview_host::prelude::MountId;
@@ -297,13 +295,13 @@ mod tests {
     fn test_metrics() -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: Baseline::new(12.0),
+                underline: Underline {
+                    position: -2.0,
+                    thickness: Thickness::new(1.0),
+                },
+                max_overflow: 0.0,
             },
             phys_font_size: 16,
         }
