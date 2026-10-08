@@ -16,7 +16,7 @@ pub struct CellMetrics {
     /// the ascent rounded to the nearest pixel.
     pub baseline: f32,
     /// The underline stroke.
-    pub underline: LineStroke,
+    pub underline: Underline,
     /// Worst-case rightward overflow in physical px across all four faces
     /// (Regular/Italic/Bold/BoldItalic) over ASCII printable codepoints: the
     /// furthest an outline's right edge, rounded up to a whole pixel,
@@ -27,7 +27,7 @@ pub struct CellMetrics {
 
 /// A horizontal stroke across a cell, in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LineStroke {
+pub struct Underline {
     /// Physical offset from the baseline to the stroke's TOP edge.
     /// Negative below the baseline.
     pub position: f32,

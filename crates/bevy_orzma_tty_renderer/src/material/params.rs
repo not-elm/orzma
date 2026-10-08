@@ -322,7 +322,7 @@ fn selection_uniforms(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::LineStroke;
+    use crate::font::Underline;
 
     /// Asserts that the uniforms take the cell size and the baseline from
     /// the metrics, and the caret thickness as the rounded share of the cell
@@ -335,7 +335,7 @@ mod tests {
         let metrics = CellMetrics {
             cell_size: Vec2::new(7.0, 15.0),
             baseline: 12.0,
-            underline: LineStroke {
+            underline: Underline {
                 position: -1.5,
                 thickness: 1.0,
             },
@@ -550,7 +550,7 @@ mod tests {
         let metrics = CellMetrics {
             cell_size: Vec2::new(8.0, 16.0),
             baseline: 12.0,
-            underline: LineStroke {
+            underline: Underline {
                 position: -2.0,
                 thickness: 1.0,
             },

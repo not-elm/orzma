@@ -6,7 +6,7 @@ use crate::bundled::{
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
 use crate::error::{RendererError, RendererResult};
-use crate::font::{CellMetrics, LineStroke};
+use crate::font::{CellMetrics, Underline};
 use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
 use bevy::prelude::{Resource, Vec2};
 use orzma_vt::prelude::Style;
@@ -164,12 +164,12 @@ impl TerminalFonts {
         let line_height_phys = (asc - desc + i32::from(face.line_gap())) as f32 * scale;
 
         let underline = if let Some(u) = face.underline_metrics() {
-            LineStroke {
+            Underline {
                 position: f32::from(u.position) * scale,
                 thickness: (f32::from(u.thickness) * scale).max(1.0),
             }
         } else {
-            LineStroke {
+            Underline {
                 position: -ascent_phys * 0.07,
                 thickness: (ascent_phys / 14.0).max(1.0),
             }

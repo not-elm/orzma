@@ -408,7 +408,7 @@ mod tests {
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
-    use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
+    use bevy_orzma_tty_renderer::prelude::{CellMetrics, Underline};
     use bevy_orzmux::prelude::TabId;
     use orzma_vt::prelude::{Cursor, InstanceId};
     use orzma_webview_host::prelude::MountId;
@@ -618,7 +618,7 @@ mod tests {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
                 baseline: 12.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },
@@ -699,7 +699,7 @@ mod tests {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
                 baseline: 12.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },
@@ -862,7 +862,7 @@ mod tests {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
                 baseline: 12.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },
@@ -918,7 +918,7 @@ mod tests {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
                 baseline: 12.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },
@@ -1000,7 +1000,7 @@ mod tests {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
                 baseline: 12.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },

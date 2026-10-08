@@ -317,12 +317,12 @@ mod test_support {
     }
 
     pub(super) fn test_metrics() -> TerminalCellMetricsResource {
-        use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
+        use bevy_orzma_tty_renderer::prelude::{CellMetrics, Underline};
         TerminalCellMetricsResource {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
                 baseline: 12.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },

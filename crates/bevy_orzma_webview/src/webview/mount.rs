@@ -541,7 +541,7 @@ fn project_webview_overlays(
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-    use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
+    use bevy_orzma_tty_renderer::prelude::{CellMetrics, Underline};
     use bevy_orzmux::prelude::OrzmuxClient;
     use crossbeam_channel::Receiver;
     use orzma_vt::prelude::{AnchoredPlacement, GridColumn, GridLine, GridPoint, MAX_PLACEMENTS};
@@ -1691,7 +1691,7 @@ mod tests {
             metrics: CellMetrics {
                 cell_size: Vec2::new(10.0, 20.0),
                 baseline: 15.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },

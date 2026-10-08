@@ -283,7 +283,7 @@ mod tests {
     use super::*;
     use bevy::math::{DVec2, IVec4};
     use bevy::window::WindowResolution;
-    use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
+    use bevy_orzma_tty_renderer::prelude::{CellMetrics, Underline};
     use bevy_orzma_webview::RequestWebviewFocus;
     use orzma_vt::prelude::InstanceId;
     use orzma_webview_host::prelude::MountId;
@@ -297,7 +297,7 @@ mod tests {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
                 baseline: 12.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },

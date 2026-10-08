@@ -9,7 +9,7 @@ mod faces;
 mod metrics;
 
 pub use faces::{FontFace, TerminalFonts};
-pub use metrics::{CellMetrics, LineStroke, TerminalCellMetricsResource};
+pub use metrics::{CellMetrics, TerminalCellMetricsResource, Underline};
 
 /// The physical pixel font size the renderer rasterizes at for a logical
 /// size under the given scale factor.

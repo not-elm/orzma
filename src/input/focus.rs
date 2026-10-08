@@ -446,7 +446,7 @@ mod tests {
     fn make_gate_app() -> (App, Entity) {
         use bevy::math::IVec4;
         use bevy::window::WindowResolution;
-        use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
+        use bevy_orzma_tty_renderer::prelude::{CellMetrics, Underline};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -456,7 +456,7 @@ mod tests {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
                 baseline: 12.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },

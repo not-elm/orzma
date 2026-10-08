@@ -240,13 +240,13 @@ fn glyph_columns(c: char) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy_orzma_tty_renderer::prelude::LineStroke;
+    use bevy_orzma_tty_renderer::prelude::Underline;
 
     fn metrics(cell_w: f32, cell_h: f32) -> CellMetrics {
         CellMetrics {
             cell_size: Vec2::new(cell_w, cell_h),
             baseline: 12.0,
-            underline: LineStroke {
+            underline: Underline {
                 position: -2.0,
                 thickness: 1.0,
             },

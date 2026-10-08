@@ -444,14 +444,14 @@ mod tests {
         );
     }
 
-    use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
+    use bevy_orzma_tty_renderer::prelude::{CellMetrics, Underline};
 
     fn hover_test_metrics() -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
             metrics: CellMetrics {
                 cell_size: Vec2::new(8.0, 16.0),
                 baseline: 12.0,
-                underline: LineStroke {
+                underline: Underline {
                     position: -2.0,
                     thickness: 1.0,
                 },

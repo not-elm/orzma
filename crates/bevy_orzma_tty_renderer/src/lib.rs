@@ -24,8 +24,8 @@ pub mod prelude {
     pub use crate::cursor::{CaretStyle, CursorPlugin, LastKeyInstant, NextCaretFlip};
     pub use crate::error::{RendererError, RendererResult};
     pub use crate::font::{
-        CellMetrics, FontFace, LineStroke, TerminalCellMetricsResource, TerminalFontInitSet,
-        TerminalFontPlugin, TerminalFontSize, TerminalFonts, physical_font_size,
+        CellMetrics, FontFace, TerminalCellMetricsResource, TerminalFontInitSet,
+        TerminalFontPlugin, TerminalFontSize, TerminalFonts, Underline, physical_font_size,
     };
     pub use crate::grid::{TerminalCells, TerminalGridPlugin, TerminalView};
     pub use crate::hyperlink::HyperlinkHoverState;

@@ -662,7 +662,7 @@ mod tests {
     use bevy::math::Vec2;
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
-    use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
+    use bevy_orzma_tty_renderer::prelude::{CellMetrics, Underline};
 
     #[test]
     fn suppresses_cursor_on_focused_terminal() {
@@ -717,7 +717,7 @@ mod tests {
         CellMetrics {
             cell_size: Vec2::new(cell_w, cell_h),
             baseline: 12.0,
-            underline: LineStroke {
+            underline: Underline {
                 position: -2.0,
                 thickness: 1.0,
             },
