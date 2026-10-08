@@ -3,14 +3,13 @@
 //! `RequestTtyWheel` handing the steps to the terminal under the cursor.
 
 use super::{
-    TerminalSurfaces, cell_context_for, cell_dims, hit_candidates, on_any_mouse_message,
-    protocol_mods,
+    TerminalSurfaces, cell_context_for, hit_candidates, on_any_mouse_message, protocol_mods,
 };
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::gesture::{WheelAccumulator, lock_dominant_axis, wheel_delta_cells};
-use crate::surface::geometry::topmost_surface_at;
+use crate::surface::geometry::{cell_pitch_phys, topmost_surface_at};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -100,7 +99,7 @@ fn resolve_wheel_target(
     if !window.focused || terminals.is_empty() {
         return None;
     }
-    let (cell_w, cell_h) = cell_dims(metrics);
+    let (cell_w, cell_h) = cell_pitch_phys(&metrics.metrics);
     let cursor_phys = window
         .cursor_position()
         .map(|c| c * window.scale_factor())?;

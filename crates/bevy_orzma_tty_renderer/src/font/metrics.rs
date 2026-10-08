@@ -28,14 +28,14 @@ pub struct CellMetrics {
 /// A horizontal stroke across a cell, in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LineStroke {
-    /// Physical offset from the baseline to the stroke's CENTER.
+    /// Physical offset from the baseline to the stroke's TOP edge.
     /// Negative below the baseline.
     pub position: f32,
     /// Physical stroke thickness, at least one pixel.
     pub thickness: f32,
 }
 
-/// The canonical cell pitch and advance values.
+/// The canonical cell metrics.
 ///
 /// It is inserted at startup from the PrimaryWindow's scale_factor, and
 /// rewritten, with the change marked, only when the physical font size —

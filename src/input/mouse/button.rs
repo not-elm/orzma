@@ -3,8 +3,8 @@
 //! and hands every other button and motion event to the pane's backend.
 
 use super::{
-    CellContext, HeldSurfaces, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims,
-    hit_candidates, on_any_mouse_message, protocol_mods, trigger_mouse_effect,
+    CellContext, HeldSurfaces, MouseEffect, TerminalSurfaces, cell_context_for, hit_candidates,
+    on_any_mouse_message, protocol_mods, trigger_mouse_effect,
 };
 use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::current_modifiers;
@@ -14,7 +14,7 @@ use crate::input::link_modifier_held;
 use crate::input::mouse::MousePhase;
 use crate::input::mouse::gesture::{HeldPointer, OrzmaMouseGesture};
 use crate::input::mouse::separator::GrabbedSeparator;
-use crate::surface::geometry::topmost_surface_at;
+use crate::surface::geometry::{cell_pitch_phys, topmost_surface_at};
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
@@ -168,7 +168,7 @@ fn resolve_frame(
     }
     let cursor_phys =
         effective_drag_cursor(live, gesture.held.is_some(), gesture.last_cursor_phys)?;
-    let (cell_w, cell_h) = cell_dims(metrics);
+    let (cell_w, cell_h) = cell_pitch_phys(&metrics.metrics);
     Some(FrameContext {
         cursor_phys,
         scale,

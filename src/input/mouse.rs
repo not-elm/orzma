@@ -14,7 +14,7 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
-use bevy_orzma_tty_renderer::prelude::{TerminalCellMetricsResource, TerminalCells, TerminalView};
+use bevy_orzma_tty_renderer::prelude::{TerminalCells, TerminalView};
 use bevy_orzmux::prelude::{CellSide, RequestTtyPointer};
 use orzma_tty::prelude::{CellCoord, PointerInput, ProtocolModifiers, TerminalModifiers};
 use orzma_vt::prelude::{GridColumn, ViewportLine, ViewportPoint};
@@ -188,12 +188,6 @@ fn hit_candidates<'a>(
         .map(|(e, node, stack, transform, _, _)| (e, node, stack, transform))
 }
 
-/// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to
-/// `>= 1` so a degenerate metric cannot divide by zero.
-fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
-    metrics.metrics.cell_size.into()
-}
-
 /// The mouse-report modifier bits for the held keys; a held Super (Cmd on
 /// macOS) sets no bit.
 fn protocol_mods(held: &TerminalModifiers) -> ProtocolModifiers {
@@ -290,6 +284,7 @@ fn cell_context_for<'a>(
 mod test_support {
     use super::*;
     use bevy::window::PrimaryWindow;
+    use bevy_orzma_tty_renderer::prelude::TerminalCellMetricsResource;
 
     #[derive(Resource, Default)]
     pub(super) struct CapturedEffects(pub(super) Vec<MouseEffect>);

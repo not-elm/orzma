@@ -150,14 +150,9 @@ fn compute_overlay_pos(
     measured_width_logical: f32,
     scale: f32,
 ) -> Vec2 {
-    let cell_w_phys = metrics.cell_size.x;
-    let cell_h_phys = metrics.cell_size.y;
     let host_top_left_phys = ui_global_translation_phys - 0.5 * host_size_phys;
     let cell_origin_phys = host_top_left_phys
-        + Vec2::new(
-            cursor_cell.0 as f32 * cell_w_phys,
-            cursor_cell.1 as f32 * cell_h_phys,
-        );
+        + Vec2::new(cursor_cell.0 as f32, cursor_cell.1 as f32) * metrics.cell_size;
     let pos_logical = cell_origin_phys / scale;
 
     let host_top_left_logical = host_top_left_phys / scale;
@@ -247,9 +242,9 @@ mod tests {
     use super::*;
     use bevy_orzma_tty_renderer::prelude::LineStroke;
 
-    fn metrics(advance: f32, line_height: f32) -> CellMetrics {
+    fn metrics(cell_w: f32, cell_h: f32) -> CellMetrics {
         CellMetrics {
-            cell_size: Vec2::new(advance, line_height),
+            cell_size: Vec2::new(cell_w, cell_h),
             baseline: 12.0,
             underline: LineStroke {
                 position: -2.0,

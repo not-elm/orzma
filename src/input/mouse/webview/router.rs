@@ -5,7 +5,6 @@
 use crate::input::InputPhase;
 use crate::input::focus::WebviewMouseDisabled;
 use crate::input::mouse::MousePhase;
-use crate::input::mouse::cell_dims;
 use crate::input::mouse::separator::GrabbedSeparator;
 use crate::input::mouse::webview::{
     CefMouse, WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
@@ -13,8 +12,7 @@ use crate::input::mouse::webview::{
     webview_wheel_delta, webview_wheel_target,
 };
 use crate::surface::OrzmaTerminal;
-use crate::surface::geometry::phys_to_pane_local;
-use crate::surface::geometry::topmost_surface_at;
+use crate::surface::geometry::{cell_pitch_phys, phys_to_pane_local, topmost_surface_at};
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
@@ -250,7 +248,7 @@ fn forward_webview_wheel(
         return;
     }
     let scale = window.scale_factor();
-    let (cell_w, cell_h) = cell_dims(&metrics);
+    let (cell_w, cell_h) = cell_pitch_phys(&metrics.metrics);
     let target = window.cursor_position().and_then(|c| {
         let cursor_phys = c * scale;
         let SurfaceUnderCursor::Open(terminal, local_phys) =

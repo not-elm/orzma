@@ -713,9 +713,9 @@ mod tests {
     /// assert on geometry driven by `cell_size`,
     /// with the remaining fields (read by `compute_overlay_layout` for the
     /// underline rect) filled with arbitrary non-zero values.
-    fn metrics(advance: f32, line_height: f32) -> CellMetrics {
+    fn metrics(cell_w: f32, cell_h: f32) -> CellMetrics {
         CellMetrics {
-            cell_size: Vec2::new(advance, line_height),
+            cell_size: Vec2::new(cell_w, cell_h),
             baseline: 12.0,
             underline: LineStroke {
                 position: -2.0,

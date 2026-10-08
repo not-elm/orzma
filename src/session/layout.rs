@@ -106,10 +106,10 @@ mod tests {
     use bevy_orzma_tty_renderer::prelude::{CellMetrics, LineStroke};
     use orzmux::prelude::OrzmuxClient;
 
-    fn metrics(advance: f32, line_height: f32) -> TerminalCellMetricsResource {
+    fn metrics(cell_w: f32, cell_h: f32) -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
             metrics: CellMetrics {
-                cell_size: Vec2::new(advance, line_height),
+                cell_size: Vec2::new(cell_w, cell_h),
                 baseline: 0.0,
                 underline: LineStroke {
                     position: 0.0,

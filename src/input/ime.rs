@@ -282,15 +282,10 @@ fn ime_policy_system(
         return;
     };
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
-    let cell_w_phys = metrics.metrics.cell_size.x;
-    let cell_h_phys = metrics.metrics.cell_size.y;
     let (cursor_col, cursor_row) = view.cursor_viewport_cell_or_top();
     let host_origin_phys = ui_xform.translation - 0.5 * node.size();
     let cell_origin_phys = host_origin_phys
-        + Vec2::new(
-            f32::from(cursor_col) * cell_w_phys,
-            (f32::from(cursor_row) + 1.0) * cell_h_phys,
-        );
+        + Vec2::new(f32::from(cursor_col), f32::from(cursor_row) + 1.0) * metrics.metrics.cell_size;
     let pos_logical = cell_origin_phys / scale;
     if window.ime_position != pos_logical {
         window.ime_position = pos_logical;
@@ -372,10 +367,8 @@ fn webview_ime_position(
     if rect.z == 0 {
         return None;
     }
-    let cell_w_phys = metrics.metrics.cell_size.x;
-    let cell_h_phys = metrics.metrics.cell_size.y;
     let host_origin_phys = ui_xform.translation - 0.5 * node.size();
-    let rect_origin_phys = Vec2::new(rect.y as f32 * cell_w_phys, rect.x as f32 * cell_h_phys);
+    let rect_origin_phys = Vec2::new(rect.y as f32, rect.x as f32) * metrics.metrics.cell_size;
     Some((host_origin_phys + rect_origin_phys) / scale_factor.max(f32::EPSILON))
 }
 

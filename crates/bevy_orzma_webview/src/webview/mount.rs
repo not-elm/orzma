@@ -330,7 +330,7 @@ fn spawn_webview(
         .unwrap_or(1.0);
     let cell_size = cell_size_phys(params.metrics.as_deref());
     let size = spec.size();
-    let logical = seed_logical_size(size.rows, size.cols, cell_size.x, cell_size.y, scale_factor);
+    let logical = seed_logical_size(size.rows, size.cols, cell_size, scale_factor);
     let texture = WebviewTextureTarget(params.images.add(Image::default()));
     // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
     // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
@@ -430,16 +430,9 @@ fn cell_size_phys(metrics: Option<&TerminalCellMetricsResource>) -> Vec2 {
 }
 
 /// The initial `WebviewSize` (logical px) for a rows×cols rect:
-/// `(cols × cell_w_phys, rows × cell_h_phys) / scale_factor`.
-fn seed_logical_size(
-    rows: u16,
-    cols: u16,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale_factor: f32,
-) -> Vec2 {
-    Vec2::new(f32::from(cols) * cell_w_phys, f32::from(rows) * cell_h_phys)
-        / scale_factor.max(f32::EPSILON)
+/// `(cols, rows) × cell_size_phys / scale_factor`.
+fn seed_logical_size(rows: u16, cols: u16, cell_size_phys: Vec2, scale_factor: f32) -> Vec2 {
+    Vec2::new(f32::from(cols), f32::from(rows)) * cell_size_phys / scale_factor.max(f32::EPSILON)
 }
 
 /// Recomputes every webview's `WebviewSize` from the current cell
@@ -457,7 +450,7 @@ fn sync_webview_size(
         .unwrap_or(1.0);
     let cell_size = cell_size_phys(metrics.as_deref());
     for (mut size, view) in &mut sizes {
-        let next = seed_logical_size(view.rows, view.cols, cell_size.x, cell_size.y, scale_factor);
+        let next = seed_logical_size(view.rows, view.cols, cell_size, scale_factor);
         size.set_if_neq(WebviewSize(next));
     }
 }
@@ -1297,11 +1290,11 @@ mod tests {
     #[test]
     fn seed_logical_size_divides_physical_cells_by_scale() {
         assert_eq!(
-            seed_logical_size(10, 40, 8.0, 16.0, 2.0),
+            seed_logical_size(10, 40, Vec2::new(8.0, 16.0), 2.0),
             Vec2::new(160.0, 80.0)
         );
         assert_eq!(
-            seed_logical_size(10, 40, 8.0, 16.0, 1.0),
+            seed_logical_size(10, 40, Vec2::new(8.0, 16.0), 1.0),
             Vec2::new(320.0, 160.0)
         );
     }

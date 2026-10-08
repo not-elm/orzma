@@ -506,6 +506,17 @@ mod tests {
         );
     }
 
+    /// Asserts that the cell never shrinks below one pixel on either axis.
+    ///
+    /// Case: a 1 px font measures a sub-pixel advance and line height.
+    #[test]
+    fn cell_metrics_px_cell_is_at_least_one_pixel() {
+        assert_eq!(
+            TerminalFonts::default().cell_metrics_px(1).cell_size,
+            Vec2::ONE
+        );
+    }
+
     /// Asserts that `cell_metrics_px` measures its advance at the same
     /// `PxScale` that `px_scale_value` hands the atlas.
     ///
