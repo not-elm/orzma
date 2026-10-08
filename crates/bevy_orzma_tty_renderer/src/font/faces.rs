@@ -6,10 +6,9 @@ use crate::bundled::{
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
 use crate::error::{RendererError, RendererResult};
-use crate::font::{Baseline, CellMetrics, Thickness, Underline};
+use crate::font::{Baseline, CellMetrics, FontFace, Thickness, Underline};
 use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
 use bevy::prelude::{Resource, Vec2};
-use orzma_vt::prelude::Style;
 use ttf_parser::Face as TtfFace;
 
 /// The faces the terminal grid draws with: four primary faces, the bundled
@@ -241,33 +240,6 @@ impl Default for TerminalFonts {
     }
 }
 
-/// The weight and style a glyph is drawn in.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum FontFace {
-    /// Regular weight, upright style.
-    Regular,
-    /// Bold weight, upright style.
-    Bold,
-    /// Regular weight, italic style.
-    Italic,
-    /// Bold weight, italic style.
-    BoldItalic,
-}
-
-impl FontFace {
-    /// Returns the face that a cell's style selects.
-    ///
-    /// Only `BOLD` and `ITALIC` take part; every other flag is ignored.
-    pub fn from_style(style: Style) -> Self {
-        match (style.contains(Style::BOLD), style.contains(Style::ITALIC)) {
-            (false, false) => Self::Regular,
-            (true, false) => Self::Bold,
-            (false, true) => Self::Italic,
-            (true, true) => Self::BoldItalic,
-        }
-    }
-}
-
 /// Computes the worst-case rightward overflow (in physical px) over ASCII
 /// printable codepoints for a single scaled face. The value matches the
 /// bitmap extent the atlas rasterizes and the shader samples.
@@ -330,7 +302,7 @@ fn fallback_face(bytes: &'static [u8], face: FontFace) -> RendererResult<FontArc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bundled;
+    use crate::{bundled, font::FontFace};
 
     #[test]
     fn from_faces_index_zero_matches_from_bytes() {
@@ -572,25 +544,5 @@ mod tests {
         assert_ne!(r_ptr, i_ptr, "Regular and Italic fallback share bytes");
         assert_ne!(r_ptr, bi_ptr, "Regular and BoldItalic fallback share bytes");
         assert_ne!(b_ptr, i_ptr, "Bold and Italic fallback share bytes");
-    }
-
-    /// Asserts that `from_style` picks the face from the `BOLD` and
-    /// `ITALIC` flags alone, whatever other `Style` flags the cell carries.
-    ///
-    /// Case: a program prints bold, italic, and bold-italic text, some of
-    /// it also underlined or reversed.
-    #[test]
-    fn from_style_selects_the_face_from_the_bold_and_italic_bits() {
-        let other = Style::all().difference(Style::BOLD | Style::ITALIC);
-        let cases = [
-            (Style::empty(), FontFace::Regular),
-            (Style::BOLD, FontFace::Bold),
-            (Style::ITALIC, FontFace::Italic),
-            (Style::BOLD | Style::ITALIC, FontFace::BoldItalic),
-        ];
-        for (style, face) in cases {
-            assert_eq!(FontFace::from_style(style), face);
-            assert_eq!(FontFace::from_style(style | other), face);
-        }
     }
 }

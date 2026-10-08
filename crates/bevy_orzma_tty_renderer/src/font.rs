@@ -5,10 +5,12 @@ use crate::system_set::MaterialStage;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
+mod face;
 mod faces;
 mod metrics;
 
-pub use faces::{FontFace, TerminalFonts};
+pub use face::FontFace;
+pub use faces::TerminalFonts;
 pub use metrics::{Baseline, CellMetrics, TerminalCellMetricsResource, Thickness, Underline};
 
 /// The physical pixel font size the renderer rasterizes at for a logical
