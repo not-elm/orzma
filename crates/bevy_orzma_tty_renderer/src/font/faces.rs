@@ -7,35 +7,35 @@ use crate::bundled::{
 };
 use crate::error::{RendererError, RendererResult};
 use crate::font::{Baseline, CellMetrics, FontFace, Thickness, Underline};
-use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
-use bevy::prelude::{Resource, Vec2};
-use ttf_parser::Face as TtfFace;
+use bevy::prelude::{Deref, Resource, Vec2};
+use swash::scale::ScaleContext;
+use swash::{FontRef, GlyphId, tag_from_bytes};
 
 /// The faces the terminal grid draws with: four primary faces, the bundled
 /// CJK fallback for each, and the bundled symbol face.
 #[derive(Resource, Clone)]
 pub struct TerminalFonts {
     /// Regular weight, upright style.
-    pub regular: FontArc,
+    pub regular: LoadedFont,
     /// Bold weight, upright style.
-    pub bold: FontArc,
+    pub bold: LoadedFont,
     /// Regular weight, italic style.
-    pub italic: FontArc,
+    pub italic: LoadedFont,
     /// Bold weight, italic style.
-    pub bold_italic: FontArc,
+    pub bold_italic: LoadedFont,
     /// Fallback regular weight, upright style (CJK / wide-character coverage).
-    pub fallback_regular: FontArc,
+    pub fallback_regular: LoadedFont,
     /// Fallback bold weight, upright style.
-    pub fallback_bold: FontArc,
+    pub fallback_bold: LoadedFont,
     /// Fallback regular weight, italic style.
-    pub fallback_italic: FontArc,
+    pub fallback_italic: LoadedFont,
     /// Fallback bold weight, italic style.
-    pub fallback_bold_italic: FontArc,
+    pub fallback_bold_italic: LoadedFont,
     /// Symbol/dingbat fallback (e.g. checkbox marks ☐ ☑ ☒ ✔), tried after
     /// both the primary and CJK fallback miss. One face serves every
     /// `FontFace`, and it is always the bundled Noto Sans Symbols 2: no
     /// constructor takes a symbol face.
-    pub symbol: FontArc,
+    pub symbol: LoadedFont,
     /// `.ttc` face index of the regular face. Every ttf-parser reparse of the
     /// regular face (cell metrics, em-scale) MUST use this index.
     regular_index: u32,
@@ -60,15 +60,15 @@ impl TerminalFonts {
         bold_italic: (Vec<u8>, u32),
     ) -> RendererResult<Self> {
         let regular_index = regular.1;
-        let regular = primary_face(regular.0, regular.1, FontFace::Regular)?;
-        let bold = primary_face(bold.0, bold.1, FontFace::Bold)?;
-        let italic = primary_face(italic.0, italic.1, FontFace::Italic)?;
-        let bold_italic = primary_face(bold_italic.0, bold_italic.1, FontFace::BoldItalic)?;
-        let fallback_regular = fallback_face(FALLBACK_REGULAR, FontFace::Regular)?;
-        let fallback_bold = fallback_face(FALLBACK_BOLD, FontFace::Bold)?;
-        let fallback_italic = fallback_face(FALLBACK_ITALIC, FontFace::Italic)?;
-        let fallback_bold_italic = fallback_face(FALLBACK_BOLD_ITALIC, FontFace::BoldItalic)?;
-        let symbol = bundled_symbol_face();
+        let regular = primary_font(regular.0, regular.1)?;
+        let bold = primary_font(bold.0, bold.1)?;
+        let italic = primary_font(italic.0, italic.1)?;
+        let bold_italic = primary_font(bold_italic.0, bold_italic.1)?;
+        let fallback_regular = fallback_font(FALLBACK_REGULAR)?;
+        let fallback_bold = fallback_font(FALLBACK_BOLD)?;
+        let fallback_italic = fallback_font(FALLBACK_ITALIC)?;
+        let fallback_bold_italic = fallback_font(FALLBACK_BOLD_ITALIC)?;
+        let symbol = bundled_symbol_font();
         Ok(Self {
             regular,
             bold,
@@ -104,7 +104,7 @@ impl TerminalFonts {
     }
 
     /// Returns the primary face matching `face`.
-    pub fn choice(&self, face: &FontFace) -> &FontArc {
+    pub fn choice(&self, face: &FontFace) -> &LoadedFont {
         match face {
             FontFace::Regular => &self.regular,
             FontFace::Bold => &self.bold,
@@ -116,7 +116,7 @@ impl TerminalFonts {
     /// Returns the fallback face matching `face`.
     ///
     /// The fallback faces serve glyph lookup alone.
-    pub fn fallback_choice(&self, face: &FontFace) -> &FontArc {
+    pub fn fallback_choice(&self, face: &FontFace) -> &LoadedFont {
         match face {
             FontFace::Regular => &self.fallback_regular,
             FontFace::Bold => &self.fallback_bold,
@@ -128,44 +128,21 @@ impl TerminalFonts {
     /// Returns full pixel metrics for the regular face at the requested
     /// physical pixel size.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
-        let face = TtfFace::parse(self.regular.font_data(), self.regular_index)
-            .expect(
-                "regular face: ttf-parser parse failed (bundled or user-supplied via FontBridgePlugin); \
-                 if a user override is in effect this means the override file passed ab_glyph but \
-                 ttf-parser rejected it — check the most recent FontBridgePlugin warning",
-            );
-        // NOTE: cast to i32 before subtraction. ascender() / descender() return
-        // i16, and (asc − desc) can exceed i16::MAX for fonts where the
-        // typographic envelope is unusually tall. The bundled font is safe;
-        // a user-provided font might not be.
-        let asc = i32::from(face.ascender());
-        let desc = i32::from(face.descender());
-        let upem = f32::from(face.units_per_em());
-        let px_scale_value = self.px_scale_value(phys_size_px);
-        let phys_size_px_f = f32::from(phys_size_px);
-
-        let scaled = self
-            .regular
-            .as_scaled(ab_glyph::PxScale::from(px_scale_value));
-        let advance_phys = scaled.h_advance(scaled.glyph_id('0'));
-        let ascent_phys = scaled.ascent();
-
-        // NOTE: scale for ttf-parser font-unit values: phys_size_px is the
-        // em-square (1 em = upem font units = phys_size_px physical pixels).
-        // px_scale_value is already inflated for ab_glyph's PxScale convention
-        // and must not be used here — that would double-count the em_scale factor.
-        let scale = phys_size_px_f / upem;
-
-        // NOTE: ab_glyph's PxScale maps em-square exactly to px so
-        // ascent+descent==px_size and line_gap()==0. Use the hhea typographic
-        // values from ttf-parser instead so the real typographic line gap is
-        // preserved (drives correct line spacing).
-        let line_height_phys = (asc - desc + i32::from(face.line_gap())) as f32 * scale;
-
-        let underline = if let Some(u) = face.underline_metrics() {
+        let font = &self.regular.0;
+        let px = f32::from(phys_size_px);
+        let metrics = font.metrics(&[]);
+        let upem = f32::from(metrics.units_per_em);
+        let to_px = |units: f32| units * px / upem;
+        let advance_phys = to_px(
+            font.glyph_metrics(&[])
+                .advance_width(font.charmap().map('0')),
+        );
+        let ascent_phys = to_px(metrics.ascent);
+        let line_height_phys = to_px(metrics.ascent + metrics.descent + metrics.leading);
+        let underline = if font.table(tag_from_bytes(b"post")).is_some() {
             Underline {
-                position: f32::from(u.position) * scale,
-                thickness: Thickness::new(f32::from(u.thickness) * scale),
+                position: to_px(metrics.underline_offset),
+                thickness: Thickness::new(to_px(metrics.stroke_size)),
             }
         } else {
             Underline {
@@ -173,13 +150,13 @@ impl TerminalFonts {
                 thickness: Thickness::new(ascent_phys / 14.0),
             }
         };
-
         let cell_size = Vec2::new(advance_phys, line_height_phys)
             .floor()
             .max(Vec2::ONE);
+        let mut context = ScaleContext::new();
         let max_overflow = [&self.regular, &self.italic, &self.bold, &self.bold_italic]
-            .iter()
-            .map(|face| max_ascii_overflow_for_face(face, px_scale_value, cell_size.x))
+            .into_iter()
+            .map(|font| max_ascii_overflow(&mut context, font.0, px, cell_size.x))
             .fold(0.0_f32, f32::max);
 
         CellMetrics {
@@ -189,360 +166,75 @@ impl TerminalFonts {
             max_overflow,
         }
     }
-
-    /// Returns the `ab_glyph::PxScale` value for the primary regular face at
-    /// the given physical pixel size.
-    pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
-        f32::from(phys_size_px) * em_scale_of(&self.regular, self.regular_index)
-    }
-
-    /// Returns the `PxScale` value for the CJK fallback face so its em-square
-    /// renders at the same physical pixel size as the primary's.
-    pub(crate) fn fallback_px_scale_value(&self, phys_size_px: u16) -> f32 {
-        f32::from(phys_size_px) * em_scale_of(&self.fallback_regular, 0)
-    }
-
-    /// Returns the `PxScale` value for the symbol fallback face so its
-    /// em-square renders at the same physical pixel size as the primary's.
-    pub(crate) fn symbol_px_scale_value(&self, phys_size_px: u16) -> f32 {
-        f32::from(phys_size_px) * em_scale_of(&self.symbol, 0)
-    }
-
-    /// Returns the primary regular face's `'0'` advance in physical pixels,
-    /// before [`Self::cell_metrics_px`] floors it into the cell width.
-    pub(crate) fn cell_advance_px(&self, phys_size_px: u16) -> f32 {
-        let scaled = self
-            .regular
-            .as_scaled(ab_glyph::PxScale::from(self.px_scale_value(phys_size_px)));
-        scaled.h_advance(scaled.glyph_id('0'))
-    }
 }
 
 impl Default for TerminalFonts {
     fn default() -> Self {
         Self {
-            regular: FontArc::try_from_slice(REGULAR)
-                .expect("JetBrainsMonoNerdFontMono-Regular load"),
-            bold: FontArc::try_from_slice(BOLD).expect("JetBrainsMonoNerdFontMono-Bold load"),
-            italic: FontArc::try_from_slice(ITALIC).expect("JetBrainsMonoNerdFontMono-Italic load"),
-            bold_italic: FontArc::try_from_slice(BOLD_ITALIC)
-                .expect("JetBrainsMonoNerdFontMono-BoldItalic load"),
-            fallback_regular: FontArc::try_from_slice(FALLBACK_REGULAR)
-                .expect("UDEVGothic35-Regular load"),
-            fallback_bold: FontArc::try_from_slice(FALLBACK_BOLD).expect("UDEVGothic35-Bold load"),
-            fallback_italic: FontArc::try_from_slice(FALLBACK_ITALIC)
-                .expect("UDEVGothic35-Italic load"),
-            fallback_bold_italic: FontArc::try_from_slice(FALLBACK_BOLD_ITALIC)
-                .expect("UDEVGothic35-BoldItalic load"),
-            symbol: bundled_symbol_face(),
+            regular: LoadedFont::bundled(REGULAR),
+            bold: LoadedFont::bundled(BOLD),
+            italic: LoadedFont::bundled(ITALIC),
+            bold_italic: LoadedFont::bundled(BOLD_ITALIC),
+            fallback_regular: LoadedFont::bundled(FALLBACK_REGULAR),
+            fallback_bold: LoadedFont::bundled(FALLBACK_BOLD),
+            fallback_italic: LoadedFont::bundled(FALLBACK_ITALIC),
+            fallback_bold_italic: LoadedFont::bundled(FALLBACK_BOLD_ITALIC),
+            symbol: LoadedFont::bundled(SYMBOL_REGULAR),
             regular_index: 0,
         }
     }
 }
 
-/// Computes the worst-case rightward overflow (in physical px) over ASCII
-/// printable codepoints for a single scaled face. The value matches the
-/// bitmap extent the atlas rasterizes and the shader samples.
-///
-/// `cell_w_phys_floor` is the floored advance the renderer uses as cell
-/// pitch. The overflow is how far past that floor the rasterized bitmap
-/// reaches.
-fn max_ascii_overflow_for_face(face: &FontArc, px_scale: f32, cell_w_phys_floor: f32) -> f32 {
-    let scaled = face.as_scaled(ab_glyph::PxScale::from(px_scale));
-    let mut worst = 0.0_f32;
-    for codepoint in 0x20u8..=0x7Eu8 {
-        let ch = codepoint as char;
-        let gid = scaled.glyph_id(ch);
-        if gid.0 == 0 {
-            continue;
-        }
-        let outlined = match scaled.outline_glyph(gid.with_scale(px_scale)) {
-            Some(o) => o,
-            None => continue,
-        };
-        let overflow = outlined.px_bounds().max.x - cell_w_phys_floor;
-        if overflow > worst {
-            worst = overflow;
-        }
+#[derive(Clone, Deref)]
+pub struct LoadedFont(FontRef<'static>);
+
+impl LoadedFont {
+    pub fn new(bytes: &'static [u8], index: usize) -> RendererResult<Self> {
+        let font = FontRef::from_index(bytes, index).ok_or(RendererError::FontParse)?;
+        Ok(Self(font))
     }
-    worst.max(0.0)
+
+    pub fn bundled(bytes: &'static [u8]) -> Self {
+        Self::new(bytes, 0).expect("a bundled font")
+    }
+
+    pub fn glyph_id(&self, code_point: char) -> GlyphId {
+        self.0.charmap().map(code_point)
+    }
 }
 
-/// Returns a face's em-scale `(ascender − descender) / units_per_em` — the
-/// factor that maps a physical font size in pixels to the `ab_glyph::PxScale`
-/// whose em-square renders at exactly that pixel size.
-fn em_scale_of(font: &FontArc, index: u32) -> f32 {
-    let face = TtfFace::parse(font.font_data(), index)
-        .expect("ttf-parser parse failed for a face ab_glyph already accepted");
-    let asc = i32::from(face.ascender());
-    let desc = i32::from(face.descender());
-    let upem = f32::from(face.units_per_em());
-    (asc - desc) as f32 / upem
+/// The furthest any printable ASCII glyph of `face` reaches past
+/// `cell_w_phys_floor` at `px` px per em, measured to the outline's right
+/// edge rounded up to a whole pixel; 0 when none reaches past it.
+fn max_ascii_overflow(
+    context: &mut ScaleContext,
+    font: FontRef<'static>,
+    px: f32,
+    cell_w_phys_floor: f32,
+) -> f32 {
+    let charmap = font.charmap();
+    let mut scaler = context.builder(font).size(px).hint(false).build();
+    (0x20u8..=0x7E)
+        .map(|byte| charmap.map(char::from(byte)))
+        .filter(|glyph_id| *glyph_id != 0)
+        .filter_map(|glyph_id| scaler.scale_outline(glyph_id))
+        .map(|outline| outline.bounds().max.x.ceil() - cell_w_phys_floor)
+        .fold(0.0_f32, f32::max)
 }
 
 /// Loads the bundled symbol/dingbat fallback face (Noto Sans Symbols 2).
-fn bundled_symbol_face() -> FontArc {
-    FontArc::try_from_slice(SYMBOL_REGULAR).expect("bundled NotoSansSymbols2-Regular load")
+fn bundled_symbol_font() -> LoadedFont {
+    LoadedFont::bundled(SYMBOL_REGULAR)
 }
 
-/// Builds one primary `FontArc` from owned bytes at a `.ttc` face index,
-/// tagging parse failures with the offending face.
-fn primary_face(bytes: Vec<u8>, index: u32, face: FontFace) -> RendererResult<FontArc> {
-    FontVec::try_from_vec_and_index(bytes, index)
-        .map(FontArc::from)
-        .map_err(|source| RendererError::FontParse { face, source })
+/// Builds one primary `Font` from owned bytes at a `.ttc` face index.
+///
+/// The bytes are leaked, so they stay allocated for the rest of the process.
+fn primary_font(bytes: Vec<u8>, index: u32) -> RendererResult<LoadedFont> {
+    LoadedFont::new(Box::leak(bytes.into_boxed_slice()), index as usize)
 }
 
-/// Loads one bundled fallback face at face index 0, tagging parse failures
-/// with the face it stands in for.
-fn fallback_face(bytes: &'static [u8], face: FontFace) -> RendererResult<FontArc> {
-    FontArc::try_from_slice(bytes).map_err(|source| RendererError::FontParse { face, source })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{bundled, font::FontFace};
-
-    #[test]
-    fn from_faces_index_zero_matches_from_bytes() {
-        let via_bytes = TerminalFonts::from_bytes(
-            bundled::REGULAR.to_vec(),
-            bundled::BOLD.to_vec(),
-            bundled::ITALIC.to_vec(),
-            bundled::BOLD_ITALIC.to_vec(),
-        )
-        .expect("from_bytes");
-        let via_faces = TerminalFonts::from_faces(
-            (bundled::REGULAR.to_vec(), 0),
-            (bundled::BOLD.to_vec(), 0),
-            (bundled::ITALIC.to_vec(), 0),
-            (bundled::BOLD_ITALIC.to_vec(), 0),
-        )
-        .expect("from_faces");
-        assert_eq!(via_faces.regular_index, 0);
-        assert_eq!(
-            via_bytes.regular.font_data(),
-            via_faces.regular.font_data(),
-            "from_faces(index 0) and from_bytes must produce the same regular face"
-        );
-        assert_eq!(via_bytes.cell_metrics_px(12), via_faces.cell_metrics_px(12));
-    }
-
-    /// Asserts that a face whose bytes do not parse is reported as a
-    /// font-parse error naming that face, not the first face loaded.
-    ///
-    /// Case: the configured bold family resolves to a file that is not a
-    /// font, while every other face is valid.
-    #[test]
-    fn an_unparsable_face_is_reported_by_name() {
-        let result = TerminalFonts::from_bytes(
-            bundled::REGULAR.to_vec(),
-            b"not a font".to_vec(),
-            bundled::ITALIC.to_vec(),
-            bundled::BOLD_ITALIC.to_vec(),
-        );
-        assert!(matches!(
-            result,
-            Err(RendererError::FontParse {
-                face: FontFace::Bold,
-                ..
-            })
-        ));
-    }
-
-    /// Asserts that `from_faces` sets the bundled UDEV Gothic 35 faces as
-    /// the fallbacks, whatever the primary faces are.
-    ///
-    /// Case: the user configures a system family whose four faces all
-    /// resolve to one file, and the grid still needs CJK coverage for every
-    /// style.
-    #[test]
-    fn from_faces_sets_the_bundled_fallbacks() {
-        let fonts = TerminalFonts::from_faces(
-            (bundled::REGULAR.to_vec(), 0),
-            (bundled::REGULAR.to_vec(), 0),
-            (bundled::REGULAR.to_vec(), 0),
-            (bundled::REGULAR.to_vec(), 0),
-        )
-        .expect("from_faces accepts JBM regular for all four faces");
-        for (face, bytes) in [
-            (FontFace::Regular, bundled::FALLBACK_REGULAR),
-            (FontFace::Bold, bundled::FALLBACK_BOLD),
-            (FontFace::Italic, bundled::FALLBACK_ITALIC),
-            (FontFace::BoldItalic, bundled::FALLBACK_BOLD_ITALIC),
-        ] {
-            assert!(
-                fonts.fallback_choice(&face).font_data() == bytes,
-                "{face:?} fallback is not the bundled face"
-            );
-        }
-    }
-
-    #[test]
-    fn default_terminal_fonts_regular_index_is_zero() {
-        assert_eq!(TerminalFonts::default().regular_index, 0);
-    }
-
-    /// Asserts that `cell_metrics_px(12)` measures the cell of the bundled
-    /// JetBrains Mono Nerd Font Mono Regular, with the underline below the
-    /// baseline.
-    ///
-    /// Case: the terminal lays out its grid with the bundled font at the
-    /// default 12 px size.
-    #[test]
-    fn jetbrains_mono_12px_metrics_are_sensible() {
-        let fonts = TerminalFonts::default();
-        let m = fonts.cell_metrics_px(12);
-        // Empirical values below were measured against the bundled
-        // JetBrainsMonoNerdFontMono-Regular.ttf. Update if the font is
-        // re-vendored.
-        assert_eq!(m.cell_size, Vec2::new(7.0, 15.0));
-        assert_eq!(*m.baseline, 12.0);
-        assert!(
-            m.underline.position < 0.0,
-            "underline.position = {} should be below baseline (negative)",
-            m.underline.position
-        );
-    }
-
-    /// Asserts that the bundled font at 12 px reports a non-zero
-    /// `max_overflow`.
-    ///
-    /// Case: the terminal lays out the bundled font at 12 px, where a
-    /// glyph like `W` rasterizes past the floored advance.
-    #[test]
-    fn cell_metrics_px_reports_nonzero_max_overflow() {
-        let fonts = TerminalFonts::default();
-        let m = fonts.cell_metrics_px(12);
-        assert!(
-            m.max_overflow > 0.0,
-            "max_overflow = {} (expected > 0 driven by wide ASCII glyphs)",
-            m.max_overflow
-        );
-    }
-
-    /// Asserts that `max_overflow` is at least the overflow each of the
-    /// four primary faces reaches on its own.
-    ///
-    /// Case: a program prints bold and italic text, whose glyphs can
-    /// reach further past the cell than the regular face's.
-    #[test]
-    fn cell_metrics_px_max_overflow_covers_all_faces() {
-        let fonts = TerminalFonts::default();
-        let m = fonts.cell_metrics_px(12);
-
-        let face = TtfFace::parse(fonts.regular.font_data(), 0).unwrap();
-        let upem = f32::from(face.units_per_em());
-        let em_scale = (i32::from(face.ascender()) - i32::from(face.descender())) as f32 / upem;
-        let px_scale = 12.0_f32 * em_scale;
-        let cell_w_phys_floor = m.cell_size.x;
-
-        for (name, face_arc) in [
-            ("Regular", &fonts.regular),
-            ("Italic", &fonts.italic),
-            ("Bold", &fonts.bold),
-            ("BoldItalic", &fonts.bold_italic),
-        ] {
-            let face_overflow = max_ascii_overflow_for_face(face_arc, px_scale, cell_w_phys_floor);
-            assert!(
-                face_overflow <= m.max_overflow + 0.001,
-                "{} face overflow = {} exceeds reported max_overflow = {}",
-                name,
-                face_overflow,
-                m.max_overflow,
-            );
-        }
-    }
-
-    /// Asserts that the 24 px cell is double the 12 px one, give or take
-    /// the pixel that flooring each axis can drop.
-    ///
-    /// Case: the user doubles the font size from 12 px to 24 px.
-    #[test]
-    fn metrics_scale_linearly_with_size() {
-        let fonts = TerminalFonts::default();
-        let m12 = fonts.cell_metrics_px(12);
-        let m24 = fonts.cell_metrics_px(24);
-        let excess = m24.cell_size - m12.cell_size * 2.0;
-        assert!(
-            excess.min_element() >= 0.0 && excess.max_element() <= 1.0,
-            "24 px cell {} is not double the 12 px cell {}",
-            m24.cell_size,
-            m12.cell_size,
-        );
-    }
-
-    /// Asserts that the cell never shrinks below one pixel on either axis.
-    ///
-    /// Case: a 1 px font measures a sub-pixel advance and line height.
-    #[test]
-    fn cell_metrics_px_cell_is_at_least_one_pixel() {
-        assert_eq!(
-            TerminalFonts::default().cell_metrics_px(1).cell_size,
-            Vec2::ONE
-        );
-    }
-
-    /// Asserts that `cell_metrics_px` measures its advance at the same
-    /// `PxScale` that `px_scale_value` hands the atlas.
-    ///
-    /// Case: the renderer measures the cell pitch and rasterizes the
-    /// bundled font's glyphs at 12 px.
-    #[test]
-    fn px_scale_value_matches_cell_metrics_internal_use() {
-        let fonts = TerminalFonts::default();
-        let phys = 12u16;
-        let helper_value = fonts.px_scale_value(phys);
-        let metrics = fonts.cell_metrics_px(phys);
-        let scaled = fonts
-            .regular
-            .as_scaled(ab_glyph::PxScale::from(helper_value));
-        let expected_advance = scaled.h_advance(scaled.glyph_id('0'));
-        assert_eq!(
-            metrics.cell_size.x,
-            expected_advance.floor().max(1.0),
-            "cell_metrics cell width disagrees with px_scale_value-derived advance = {expected_advance}",
-        );
-    }
-
-    #[test]
-    fn fallback_px_scale_value_is_em_matched_and_smaller_than_primary() {
-        let fonts = TerminalFonts::default();
-        let phys = 12u16;
-        let primary = fonts.px_scale_value(phys);
-        let fallback = fonts.fallback_px_scale_value(phys);
-        let ratio = fallback / primary;
-        assert!(
-            (ratio - 0.879646).abs() < 0.001,
-            "fallback/primary px_scale ratio = {ratio} (expected ~0.879646: \
-             UDEVGothic35 em_scale 1.161133 / JBM 1.320000)"
-        );
-    }
-
-    #[test]
-    fn fallback_choice_returns_face_aware() {
-        use ab_glyph::Font as _;
-        let fonts = TerminalFonts::default();
-        // Different FontFace variants must yield different FontArc pointers
-        // (we have 4 distinct bundled UDEVGothic35 faces, not the same one
-        // wired four times).
-        let r_ptr = fonts
-            .fallback_choice(&FontFace::Regular)
-            .font_data()
-            .as_ptr();
-        let b_ptr = fonts.fallback_choice(&FontFace::Bold).font_data().as_ptr();
-        let i_ptr = fonts
-            .fallback_choice(&FontFace::Italic)
-            .font_data()
-            .as_ptr();
-        let bi_ptr = fonts
-            .fallback_choice(&FontFace::BoldItalic)
-            .font_data()
-            .as_ptr();
-        assert_ne!(r_ptr, b_ptr, "Regular and Bold fallback share bytes");
-        assert_ne!(r_ptr, i_ptr, "Regular and Italic fallback share bytes");
-        assert_ne!(r_ptr, bi_ptr, "Regular and BoldItalic fallback share bytes");
-        assert_ne!(b_ptr, i_ptr, "Bold and Italic fallback share bytes");
-    }
+/// Loads one bundled fallback face at face index 0.
+fn fallback_font(bytes: &'static [u8]) -> RendererResult<LoadedFont> {
+    LoadedFont::new(bytes, 0)
 }

@@ -10,7 +10,7 @@ mod faces;
 mod metrics;
 
 pub use face::FontFace;
-pub use faces::TerminalFonts;
+pub use faces::{LoadedFont, TerminalFonts};
 pub use metrics::{Baseline, CellMetrics, TerminalCellMetricsResource, Thickness, Underline};
 
 /// The physical pixel font size the renderer rasterizes at for a logical

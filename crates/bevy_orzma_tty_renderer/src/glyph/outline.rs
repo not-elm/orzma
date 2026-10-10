@@ -1,9 +1,13 @@
 //! Turning a glyph key into outlines: the face fallback chain, symbol
 //! fitting, and mark placement.
 
-use crate::font::{FontFace, TerminalFonts};
+use swash::scale::image::Image;
+use swash::scale::{Render, ScaleContext, Scaler, Source};
+use swash::zeno::{Format, Vector};
+use swash::{FontRef, GlyphId};
+
+use crate::font::{FontFace, LoadedFont, TerminalFonts};
 use crate::glyph::GlyphKey;
-use ab_glyph::{Font, FontArc, GlyphId, OutlinedGlyph, PxScale, Rect, ScaleFont, point};
 
 /// Which face in the fallback chain a glyph resolved through.
 #[derive(Clone, Copy)]
@@ -28,20 +32,20 @@ pub fn resolve_glyph<'a>(
     fonts: &'a TerminalFonts,
     face: &FontFace,
     ch: char,
-) -> Option<(&'a FontArc, GlyphId, GlyphTier)> {
+) -> Option<(&'a LoadedFont, GlyphId, GlyphTier)> {
     let primary = fonts.choice(face);
     let id = primary.glyph_id(ch);
-    if id.0 != 0 {
+    if id != 0 {
         return Some((primary, id, GlyphTier::Primary));
     }
     let fallback = fonts.fallback_choice(face);
     let id = fallback.glyph_id(ch);
-    if id.0 != 0 {
+    if id != 0 {
         return Some((fallback, id, GlyphTier::Fallback));
     }
     let symbol = &fonts.symbol;
     let id = symbol.glyph_id(ch);
-    if id.0 != 0 {
+    if id != 0 {
         return Some((symbol, id, GlyphTier::Symbol));
     }
     None
@@ -51,63 +55,75 @@ pub fn resolve_glyph<'a>(
 /// advance, returning the original outline when it already fits or when
 /// re-outlining at the reduced scale fails.
 pub fn fit_symbol_to_cell(
-    font: &FontArc,
+    context: &mut ScaleContext,
+    font: FontRef<'_>,
     glyph_id: GlyphId,
-    scale_value: f32,
-    outlined: OutlinedGlyph,
+    px: f32,
+    image: Image,
     cell_advance_px: f32,
-) -> OutlinedGlyph {
-    let w = outlined.px_bounds().width();
+) -> Image {
+    let w = image.placement.width as f32;
     if cell_advance_px <= 0.0 || w <= cell_advance_px {
-        return outlined;
+        return image;
     }
-    let fitted = PxScale::from(scale_value * (cell_advance_px / w));
-    font.outline_glyph(glyph_id.with_scale(fitted))
-        .unwrap_or(outlined)
+    let mut scaler = context
+        .builder(font)
+        .size(px * (cell_advance_px / w))
+        .hint(false)
+        .build();
+    Render::new(&[Source::Outline])
+        .format(Format::Alpha)
+        .render(&mut scaler, glyph_id)
+        .unwrap_or(image)
 }
 
-/// The smallest rect containing both `a` and `b`.
-pub fn union(a: Rect, b: Rect) -> Rect {
-    Rect {
-        min: point(a.min.x.min(b.min.x), a.min.y.min(b.min.y)),
-        max: point(a.max.x.max(b.max.x), a.max.y.max(b.max.y)),
-    }
-}
-
-/// Outlines the key's marks at `scale`, each laid over `base`: a mark
-/// whose outline reaches left of its origin sits at the pen position
-/// after `base_id`'s advance, and any other mark is right-aligned to
-/// `base`'s ink. A mark the font lacks, that outlines to nothing, or
-/// whose box does not overlap `base`'s box horizontally is left out.
+/// Renders the key's marks at `px` px per em, each laid over `base`: a mark
+/// whose outline reaches left of its origin sits at the pen position after
+/// `base_id`'s advance, and any other mark is right-aligned to `base`'s
+/// ink. A mark the font lacks, that renders to nothing, or whose box does
+/// not overlap `base`'s box horizontally is left out.
 // TODO: Place marks from GPOS anchor data. The advance and right-align
 // rules put a Latin mark right of center on a fullwidth base and drop a
 // mark that lands beside narrow CJK punctuation.
 pub fn outline_marks(
-    font: &FontArc,
-    scale: PxScale,
-    base: &OutlinedGlyph,
+    scaler: &mut Scaler,
+    font: FontRef<'_>,
+    px: f32,
+    base: &Image,
     base_id: GlyphId,
     key: GlyphKey,
-) -> Vec<OutlinedGlyph> {
-    let base_bounds = base.px_bounds();
-    let advance = font.as_scaled(scale).h_advance(base_id);
+) -> Vec<Image> {
+    let base_left = base.placement.left as f32;
+    let base_right = base_left + base.placement.width as f32;
+    let advance = font.glyph_metrics(&[]).scale(px).advance_width(base_id);
+    let charmap = font.charmap();
     key.marks()
         .filter_map(|mark| {
-            let id = font.glyph_id(mark);
-            if id.0 == 0 {
+            let id = charmap.map(mark);
+            if id == 0 {
                 return None;
             }
-            let at_origin = font.outline_glyph(id.with_scale(scale))?.px_bounds();
+            let at_origin = scaler.scale_outline(id)?.bounds();
             let x = if at_origin.min.x < 0.0 {
                 advance
             } else {
-                base_bounds.max.x - at_origin.max.x
+                base_right - at_origin.max.x.ceil()
             };
-            let placed = font.outline_glyph(id.with_scale_and_position(scale, point(x, 0.0)))?;
-            let placed_bounds = placed.px_bounds();
-            let overlaps =
-                placed_bounds.min.x < base_bounds.max.x && placed_bounds.max.x > base_bounds.min.x;
-            overlaps.then_some(placed)
+            let placed = render_outline(scaler, id, x)?;
+            let placement = placed.placement;
+            let left = placement.left as f32;
+            let right = left + placement.width as f32;
+            let inked = placement.width > 0 && placement.height > 0;
+            (inked && left < base_right && right > base_left).then_some(placed)
         })
         .collect()
+}
+
+/// Renders `glyph_id`'s outline as an alpha mask with its origin `x` px
+/// right of the pen position on the baseline.
+fn render_outline(scaler: &mut Scaler, glyph_id: GlyphId, x: f32) -> Option<Image> {
+    Render::new(&[Source::Outline])
+        .format(Format::Alpha)
+        .offset(Vector::new(x, 0.0))
+        .render(scaler, glyph_id)
 }

@@ -4,9 +4,8 @@
 use crate::font::TerminalFonts;
 use crate::glyph::{
     GlyphKey,
-    outline::{GlyphTier, fit_symbol_to_cell, outline_marks, resolve_glyph, union},
+    outline::{GlyphTier, fit_symbol_to_cell, outline_marks, resolve_glyph},
 };
-use ab_glyph::{Font, OutlinedGlyph, PxScale};
 use bevy::{platform::collections::HashMap, prelude::*};
 use std::iter::once;
 
@@ -158,23 +157,25 @@ impl GlyphAtlas {
         Some(rect)
     }
 
-    /// Blends `outlined`'s coverage into the current shelf position,
-    /// shifted right by `dx` and down by `dy` pixels, keeping the higher
-    /// coverage where pixels overlap.
-    fn write_outline_pixels(&mut self, outlined: &OutlinedGlyph, dx: u32, dy: u32) {
-        let u = self.shelves.shelf.x + dx;
-        let v = self.shelves.y + dy;
+    /// Blends `image`'s coverage into the current shelf position,
+    /// shifted right by `dx` and down by `dy` pixels, keeping the higher coverage where pixels overlap.
+    fn write_image_pixels(&mut self, image: &swash::scale::image::Image, dx: u32, dy: u32) {
+        let width = image.placement.width as usize;
+        if width == 0 {
+            return;
+        }
         let atlas_width = self.shelves.width as usize;
-        let atlas_height = self.shelves.height as usize;
-        outlined.draw(|px, py, alpha| {
-            let xx = u as usize + px as usize;
-            let yy = v as usize + py as usize;
-            if xx < atlas_width && yy < atlas_height {
-                let coverage = (alpha * 255.0) as u8;
-                let slot = &mut self.pixels[yy * atlas_width + xx];
-                *slot = (*slot).max(coverage);
+        let u = (self.shelves.shelf.x + dx) as usize;
+        let v = (self.shelves.y + dy) as usize;
+        for (row, coverage) in image.data.chunks_exact(width).enumerate() {
+            let start = (v + row) * atlas_width + u;
+            let Some(slots) = self.pixels.get_mut(start..start + width) else {
+                continue;
+            };
+            for (slot, alpha) in slots.iter_mut().zip(coverage) {
+                *slot = (*slot).max(*alpha);
             }
-        });
+        }
     }
 }
 
@@ -239,6 +240,14 @@ impl Shelves {
 struct Shelf {
     pub height: u32,
     pub x: u32,
+}
+
+/// The pixel box `image` covers, relative to the pen origin on the baseline with +y down.
+fn sprite_rect(image: &swash::scale::image::Image) -> IRect {
+    let placement = image.placement;
+    let min = IVec2::new(placement.left, -placement.top);
+    let size = IVec2::new(placement.width as i32, placement.height as i32);
+    IRect::from_corners(min, min + size)
 }
 
 #[cfg(test)]
