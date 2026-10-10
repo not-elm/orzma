@@ -16,7 +16,6 @@ default = ["debug"]
 debug = ["bevy_orzma_webview/debug"]
 
 [dependencies]
-ab_glyph = "0.2"
 anyhow = { workspace = true }
 arboard = { version = "3.6.1", default-features = false, features = [
   "wayland-data-control",

@@ -300,7 +300,6 @@ fn bundled_face_bytes(spec: FontStyleSpec) -> &'static [u8] {
 mod tests {
     use super::*;
     use crate::configs::OrzmaConfigsPlugin;
-    use ab_glyph::Font as AbFont;
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
@@ -384,7 +383,7 @@ mod tests {
         app.update();
         let fonts = app.world().resource::<TerminalFonts>();
         assert_eq!(
-            fonts.regular.font_data(),
+            fonts.regular.data,
             bundled::REGULAR,
             "regular face is bundled JetBrains Mono when no override is configured"
         );
@@ -530,17 +529,17 @@ mod tests {
 
         let fonts = app.world().resource::<TerminalFonts>();
         assert_eq!(
-            fonts.regular.font_data(),
+            fonts.regular.data,
             bundled::REGULAR,
             "regular face must resolve to the bytes registered under `normal`"
         );
         assert_eq!(
-            fonts.bold.font_data(),
+            fonts.bold.data,
             bundled::BOLD,
             "bold face must resolve via `bold`, not fall back to `normal`'s bytes"
         );
         assert_eq!(
-            fonts.italic.font_data(),
+            fonts.italic.data,
             bundled::REGULAR,
             "italic face (no italic override) must fall back to `normal` via .or()"
         );
@@ -593,7 +592,7 @@ mod tests {
 
         let fonts = app.world().resource::<TerminalFonts>();
         assert_eq!(
-            fonts.regular.font_data(),
+            fonts.regular.data,
             bundled::BOLD,
             "style = \"Bold\" must select the weight-700 face, not the family's weight-400 face"
         );
@@ -671,7 +670,7 @@ mod tests {
             ("symbol", &fonts.symbol, bundled::SYMBOL_REGULAR),
         ] {
             assert!(
-                std::ptr::eq(face.font_data(), bytes),
+                std::ptr::eq(face.data, bytes),
                 "{name} reads a second copy of its bundled bytes"
             );
         }

@@ -127,7 +127,6 @@ fn update_cell_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ab_glyph::Font as _;
 
     /// Asserts that `TerminalFontPlugin::build` keeps an already-present
     /// `TerminalFonts` resource rather than overwriting it.
@@ -146,7 +145,7 @@ mod tests {
 
         // Use a sentinel: pre-insert THIS specific instance, then check
         // that the bytes pointer hasn't changed after Plugin::build.
-        let pre_inserted_bytes_ptr = custom.regular.font_data().as_ptr();
+        let pre_inserted_bytes_ptr = custom.regular.data.as_ptr();
 
         let mut app = App::new();
         let mut window = Window {
@@ -162,7 +161,7 @@ mod tests {
 
         let fonts = app.world().resource::<TerminalFonts>();
         assert_eq!(
-            fonts.regular.font_data().as_ptr(),
+            fonts.regular.data.as_ptr(),
             pre_inserted_bytes_ptr,
             "TerminalFonts was overwritten by Plugin::build, but the resource was \
              already present at add_plugins time — the pre-insert should have been preserved"
