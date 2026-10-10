@@ -9,7 +9,6 @@ and exchange messages with it.
 
 https://github.com/user-attachments/assets/0d3cb717-dd7c-416b-a323-c999ebcaec22
 
-
 ## Companion apps
 
 The [webview protocol](https://not-elm.github.io/orzma/protocol-reference.html)
@@ -83,6 +82,8 @@ Up through v0.3.0, I mainly used generative AI for the following purposes:
 - Technical research
 - Translating text
 - Bug Investigation
+- Code Review
+- Create Test Cases
 
 Starting with v0.4.0, the use of generative AI will be prohibited for all purposes except:
 
@@ -90,6 +91,8 @@ Starting with v0.4.0, the use of generative AI will be prohibited for all purpos
 - Translation text
 - Bug Investigation
 - Mechanical code edits with clearly defined changes, such as simple renaming.
+- Code Review
+- Create Test Cases (However, we must use the enumerate-test-cases skill to thoroughly review the test cases ourself.)
 
 I will also remove AI-related files that were used through v0.3.0, including `CLAUDE.md`.
 
