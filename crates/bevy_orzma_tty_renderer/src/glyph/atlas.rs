@@ -1,18 +1,18 @@
 //! The CPU-side glyph atlas: rasterized sprites packed onto shelves of one
 //! coverage texture.
 
-use crate::error::RendererResult;
-use crate::font::TerminalFonts;
+use crate::font::{FontFace, TerminalFonts};
 use crate::glyph::{
     GlyphKey,
     outline::{GlyphTier, fit_symbol_to_cell, outline_marks, resolve_glyph},
 };
 use bevy::{platform::collections::HashMap, prelude::*};
 use std::iter::once;
-use swash::scale::outline::Outline;
-use swash::scale::{Render, ScaleContext, Scaler, Source};
-use swash::zeno::{Bounds, Format};
-use swash::{FontRef, GlyphId};
+use swash::FontRef;
+use swash::scale::image::Image;
+use swash::scale::{Render, ScaleContext, Source};
+use swash::shape::ShapeContext;
+use swash::zeno::Format;
 
 pub struct TerminalGlyphAtlasPlugin;
 
@@ -58,6 +58,7 @@ pub struct GlyphAtlas {
     pub restarts: u64,
     shelves: Shelves,
     context: ScaleContext,
+    shape_context: ShapeContext,
 }
 
 impl GlyphAtlas {
@@ -70,6 +71,7 @@ impl GlyphAtlas {
             restarts: 0,
             shelves: Shelves::new(width, height),
             context: ScaleContext::new(),
+            shape_context: ShapeContext::new(),
         }
     }
 
@@ -98,43 +100,22 @@ impl GlyphAtlas {
         if let Some(r) = self.glyphs.get(&key) {
             return Some(*r);
         }
-        let ch = char::from_u32(key.codepoint)?;
-        let (font, glyph_id, tier) = resolve_glyph(fonts, &key.face, ch)?;
-        // let outlined = font.outline_glyph(glyph_id.with_scale(scale))?;
-        // let outlined = if matches!(tier, GlyphTier::Symbol) {
-        //     fit_symbol_to_cell(
-        //         font,
-        //         glyph_id,
-        //         scale_value,
-        //         outlined,
-        //         fonts.cell_advance_px(key.size_px),
-        //     )
-        // } else {
-        //     outlined
-        // };
-        // let marks = if matches!(tier, GlyphTier::Symbol) {
-        //     Vec::new()
-        // } else {
-        //     outline_marks(font, scale, &outlined, glyph_id, key) };
-        // let bounds = marks
-        //     .iter()
-        //     .map(OutlinedGlyph::px_bounds)
-        //     .fold(outlined.px_bounds(), union);
-        // TODO: 単純にNoneを返すだけでいいのか検討する
-        let bounds = self.outline_bounds(font.font_ref(), glyph_id)?;
-        let w = bounds.width().ceil() as u16;
-        let h = bounds.height().ceil() as u16;
-        if w == 0 || h == 0 || u32::from(w) > self.width() || u32::from(h) > self.height() {
+        let sprites = self.build_sprites(fonts, key)?;
+        let bounds = sprites
+            .iter()
+            .map(sprite_rect)
+            .reduce(|union, rect| union.union(rect))?;
+        let (Ok(w), Ok(h)) = (
+            u16::try_from(bounds.width()),
+            u16::try_from(bounds.height()),
+        ) else {
+            return None;
+        };
+
+        if w == 0 || h == 0 || self.width() < w as u32 || self.height() < h as u32 {
             return None;
         }
 
-        self.write_glyph_pixels(
-            font.font_ref(),
-            key.size_px as f32,
-            glyph_id,
-            &bounds,
-            &[bounds],
-        );
         self.shelves.new_line_if_need(w);
         if self.shelves.would_overflow(h) {
             self.shelves.clear();
@@ -142,64 +123,77 @@ impl GlyphAtlas {
             self.glyphs.clear();
             self.restarts = self.restarts.wrapping_add(1);
         }
+
         let u = self.shelves.shelf.x as u16;
         let v = self.shelves.y as u16;
+        for sprite in &sprites {
+            let offset = sprite_rect(sprite).min - bounds.min;
+            self.write_image_pixels(sprite, offset.x as u32, offset.y as u32);
+        }
+
         self.shelves.advance_x(w);
         self.shelves.adjust_shelf_height(h);
         self.generation = self.generation.wrapping_add(1);
+
         let rect = GlyphRect {
             u,
             v,
             w,
             h,
-            offset_x: bounds.min.x.floor() as i16,
-            offset_y: bounds.min.y.floor() as i16,
+            offset_x: bounds.min.x as i16,
+            offset_y: bounds.min.y as i16,
         };
         self.glyphs.insert(key, rect);
         Some(rect)
     }
 
-    fn build_scaler<'a>(&'a mut self, font: FontRef<'a>, font_size: f32) -> Scaler<'a> {
-        self.context
+    fn build_sprites(&mut self, fonts: &TerminalFonts, key: GlyphKey) -> Option<Vec<Image>> {
+        let ch = char::from_u32(key.codepoint)?;
+        let (font, glyph_id, tier) = resolve_glyph(fonts, &key.face, ch)?;
+        let font = font.font_ref();
+        let px = f32::from(key.size_px);
+        let mut scaler = self
+            .context
             .builder(font)
-            .size(font_size)
+            .size(px)
             //TODO: Should set true?
             .hint(false)
-            .build()
-    }
-
-    fn outline_bounds<'a>(&'a mut self, font: FontRef<'a>, glyph_id: GlyphId) -> Option<Bounds> {
-        let outline = self.context.builder(font).build().scale_outline(glyph_id)?;
-        // TODO: markの処理
-        Some(outline.bounds())
-    }
-
-    fn write_glyph_pixels(
-        &mut self,
-        font: FontRef<'_>,
-        font_size: f32,
-        glyph_id: GlyphId,
-        union_bounds: &Bounds,
-        bounds_parts: &[Bounds],
-    ) {
-        let mut scaler = self.build_scaler(font, font_size);
-        let Some(image) = Render::new(&[Source::Outline])
+            .build();
+        let base = Render::new(&[Source::Outline])
             .format(Format::Alpha)
-            .render(&mut scaler, glyph_id)
-        else {
-            return;
+            .render(&mut scaler, glyph_id)?;
+        let sprites = if matches!(tier, GlyphTier::Symbol) {
+            let regular = fonts.choice(&FontFace::Regular);
+            let cell_advance_px = regular
+                .glyph_metrics(&[])
+                .scale(px)
+                .advance_width(regular.glyph_id('0'));
+            vec![fit_symbol_to_cell(
+                &mut self.context,
+                font,
+                glyph_id,
+                px,
+                base,
+                cell_advance_px,
+            )]
+        } else {
+            let marks = outline_marks(
+                &mut self.shape_context,
+                &mut scaler,
+                font,
+                px,
+                &base,
+                glyph_id,
+                key,
+            );
+            once(base).chain(marks).collect()
         };
-
-        for local in bounds_parts {
-            let dx = (local.min.x - union_bounds.min.x) as u32;
-            let dy = (local.min.y - union_bounds.min.y) as u32;
-            self.write_image_pixels(&image, dx, dy);
-        }
+        Some(sprites)
     }
 
     /// Blends `image`'s coverage into the current shelf position,
     /// shifted right by `dx` and down by `dy` pixels, keeping the higher coverage where pixels overlap.
-    fn write_image_pixels(&mut self, image: &swash::scale::image::Image, dx: u32, dy: u32) {
+    fn write_image_pixels(&mut self, image: &Image, dx: u32, dy: u32) {
         let width = image.placement.width as usize;
         if width == 0 {
             return;
@@ -283,7 +277,7 @@ struct Shelf {
 }
 
 /// The pixel box `image` covers, relative to the pen origin on the baseline with +y down.
-fn sprite_rect(image: &swash::scale::image::Image) -> IRect {
+fn sprite_rect(image: &Image) -> IRect {
     let placement = image.placement;
     let min = IVec2::new(placement.left, -placement.top);
     let size = IVec2::new(placement.width as i32, placement.height as i32);
@@ -294,6 +288,7 @@ fn sprite_rect(image: &swash::scale::image::Image) -> IRect {
 mod tests {
     use super::*;
     use crate::font::{FontFace, LoadedFont};
+    use std::ops::Range;
     use swash::scale::image::Image;
     use swash::scale::{Render, ScaleContext, Source};
     use swash::zeno::Format;
@@ -376,7 +371,11 @@ mod tests {
         let fonts = TerminalFonts::default();
         let mut atlas = GlyphAtlas::default();
         let size = 24u16;
-        let cell_w = fonts.cell_advance_px(size);
+        let regular = fonts.choice(&FontFace::Regular);
+        let cell_w = regular
+            .glyph_metrics(&[])
+            .scale(f32::from(size))
+            .advance_width(regular.glyph_id('0'));
         // ☐ ☑ ☒ ✔ — Miscellaneous Symbols / Dingbats marks that interactive
         // TUIs (e.g. Claude Code's multi-select) draw for checkbox state.
         // Absent from BOTH JetBrains Mono Nerd Font and UDEVGothic35, so
@@ -409,6 +408,21 @@ mod tests {
                 atlas.pixels[row..row + usize::from(rect.w)].iter().copied()
             })
             .collect()
+    }
+
+    /// The leftmost and rightmost columns of `rect` that hold ink within
+    /// `rows`, or `None` when those rows are blank.
+    fn ink_columns(
+        atlas: &GlyphAtlas,
+        rect: GlyphRect,
+        rows: Range<usize>,
+    ) -> Option<(usize, usize)> {
+        let pixels = sprite_pixels(atlas, rect);
+        let width = usize::from(rect.w);
+        let inked = |x: &usize| rows.clone().any(|y| pixels[y * width + x] > 0);
+        let left = (0..width).find(inked)?;
+        let right = (0..width).rev().find(inked)?;
+        Some((left, right))
     }
 
     /// Renders `ch` from `font` on its own at `size_px` px per em, unhinted,
@@ -897,6 +911,95 @@ mod tests {
             }
         }
         assert_eq!(atlas.glyphs.len(), 2);
+    }
+
+    /// Asserts that a mark the face anchors to a letter with an ascender is
+    /// raised clear of the ascender rather than drawn across it.
+    ///
+    /// Case: a program prints `l` followed by a combining acute accent, the
+    /// decomposed spelling of the Slovak letter ĺ.
+    #[test]
+    fn an_anchored_mark_is_raised_clear_of_an_ascender() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let accent = standalone_raster(fonts.choice(&FontFace::Regular), '\u{0301}', 24);
+        let bare = GlyphKey::new(FontFace::Regular, u32::from('l'), 24);
+        let base = atlas.get_or_insert(bare, &fonts).expect("'l' rasterizes");
+
+        let marked = atlas
+            .get_or_insert(bare.with_marks(['\u{0301}']), &fonts)
+            .expect("'l' with an accent rasterizes");
+
+        let rows_above = u32::try_from(base.offset_y - marked.offset_y)
+            .expect("the composed box starts at or above the base");
+        assert!(
+            rows_above >= accent.placement.height,
+            "{rows_above} rows above the letter, accent is {} rows tall",
+            accent.placement.height
+        );
+    }
+
+    /// Asserts that two marks the face anchors to the same glyph, one above
+    /// it and one below, are both drawn within the glyph's columns.
+    ///
+    /// Case: a program prints `x` followed by a combining acute accent and a
+    /// combining dot below.
+    #[test]
+    fn marks_anchored_above_and_below_one_glyph_are_both_drawn() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let bare = GlyphKey::new(FontFace::Regular, u32::from('x'), 24);
+        let base = atlas.get_or_insert(bare, &fonts).expect("'x' rasterizes");
+
+        let marked = atlas
+            .get_or_insert(bare.with_marks(['\u{0301}', '\u{0323}']), &fonts)
+            .expect("'x' with two marks rasterizes");
+
+        assert_eq!(
+            (marked.offset_x, marked.w),
+            (base.offset_x, base.w),
+            "{marked:?} vs {base:?}"
+        );
+        let rows_above = usize::try_from(base.offset_y - marked.offset_y)
+            .expect("the composed box starts at or above the base");
+        let base_bottom = rows_above + usize::from(base.h);
+        assert!(
+            ink_columns(&atlas, marked, 0..rows_above).is_some(),
+            "the accent leaves ink above the letter"
+        );
+        assert!(
+            ink_columns(&atlas, marked, base_bottom..usize::from(marked.h)).is_some(),
+            "the dot leaves ink below the letter"
+        );
+    }
+
+    /// Asserts that a mark the face stacks on the mark before it sits above
+    /// that mark, so the sprite reaches higher than with the first mark
+    /// alone by at least the second mark's height.
+    ///
+    /// Case: a program prints `x` followed by a combining acute accent and a
+    /// combining grave accent.
+    #[test]
+    fn a_mark_stacked_on_another_mark_sits_above_it() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let grave = standalone_raster(fonts.choice(&FontFace::Regular), '\u{0300}', 24);
+        let bare = GlyphKey::new(FontFace::Regular, u32::from('x'), 24);
+        let one = atlas
+            .get_or_insert(bare.with_marks(['\u{0301}']), &fonts)
+            .expect("'x' with one accent rasterizes");
+
+        let two = atlas
+            .get_or_insert(bare.with_marks(['\u{0301}', '\u{0300}']), &fonts)
+            .expect("'x' with two accents rasterizes");
+
+        let rows_added = u32::try_from(one.offset_y - two.offset_y)
+            .expect("the second accent does not lower the composed box");
+        assert!(
+            rows_added >= grave.placement.height,
+            "{rows_added} rows added, grave is {} rows tall",
+            grave.placement.height
+        );
     }
 
     /// Asserts that a mark whose outline is empty is left out, leaving the
