@@ -2,17 +2,19 @@
 //! coverage texture.
 
 use crate::font::{FontFace, TerminalFonts};
+use crate::glyph::atlas::shelf::Shelves;
 use crate::glyph::{
     GlyphKey,
     outline::{GlyphTier, fit_symbol_to_cell, outline_marks, resolve_glyph},
 };
 use bevy::{platform::collections::HashMap, prelude::*};
 use std::iter::once;
-use swash::FontRef;
 use swash::scale::image::Image;
 use swash::scale::{Render, ScaleContext, Source};
 use swash::shape::ShapeContext;
 use swash::zeno::Format;
+
+mod shelf;
 
 pub struct TerminalGlyphAtlasPlugin;
 
@@ -77,12 +79,12 @@ impl GlyphAtlas {
 
     #[inline]
     pub const fn width(&self) -> u32 {
-        self.shelves.width
+        self.shelves.width()
     }
 
     #[inline]
     pub const fn height(&self) -> u32 {
-        self.shelves.height
+        self.shelves.height()
     }
 
     /// Returns the rect for the keyed glyph, rasterizing and packing it on
@@ -124,8 +126,8 @@ impl GlyphAtlas {
             self.restarts = self.restarts.wrapping_add(1);
         }
 
-        let u = self.shelves.shelf.x as u16;
-        let v = self.shelves.y as u16;
+        let u = self.shelves.x() as u16;
+        let v = self.shelves.y() as u16;
         for sprite in &sprites {
             let offset = sprite_rect(sprite).min - bounds.min;
             self.write_image_pixels(sprite, offset.x as u32, offset.y as u32);
@@ -198,9 +200,9 @@ impl GlyphAtlas {
         if width == 0 {
             return;
         }
-        let atlas_width = self.shelves.width as usize;
-        let u = (self.shelves.shelf.x + dx) as usize;
-        let v = (self.shelves.y + dy) as usize;
+        let atlas_width = self.shelves.width() as usize;
+        let u = (self.shelves.x() + dx) as usize;
+        let v = (self.shelves.y() + dy) as usize;
         for (row, coverage) in image.data.chunks_exact(width).enumerate() {
             let start = (v + row) * atlas_width + u;
             let Some(slots) = self.pixels.get_mut(start..start + width) else {
@@ -217,63 +219,6 @@ impl Default for GlyphAtlas {
     fn default() -> Self {
         Self::new(1024, 1024)
     }
-}
-
-struct Shelves {
-    pub width: u32,
-    pub height: u32,
-    pub y: u32,
-    shelf: Shelf,
-}
-
-impl Shelves {
-    pub fn new(width: u32, height: u32) -> Self {
-        Self {
-            width,
-            height,
-            y: 0,
-            shelf: Shelf::default(),
-        }
-    }
-
-    #[inline]
-    pub fn new_line_if_need(&mut self, font_width: u16) {
-        if self.width < self.shelf.x + font_width as u32 {
-            self.shelf.x = 0;
-            self.y = self.y.saturating_add(self.shelf.height);
-            self.shelf.height = 0;
-        }
-    }
-
-    /// Whether the current shelf, grown to at least `height` pixels,
-    /// would not fit below the current row.
-    #[inline]
-    pub fn would_overflow(&self, height: u16) -> bool {
-        self.height < self.y + self.shelf.height.max(u32::from(height))
-    }
-
-    #[inline]
-    pub fn clear(&mut self) {
-        self.shelf.x = 0;
-        self.y = 0;
-        self.shelf.height = 0;
-    }
-
-    #[inline]
-    pub fn advance_x(&mut self, font_width: u16) {
-        self.shelf.x = self.shelf.x.saturating_add(font_width as u32);
-    }
-
-    #[inline]
-    pub fn adjust_shelf_height(&mut self, font_height: u16) {
-        self.shelf.height = self.shelf.height.max(font_height as u32);
-    }
-}
-
-#[derive(Default)]
-struct Shelf {
-    pub height: u32,
-    pub x: u32,
 }
 
 /// The pixel box `image` covers, relative to the pen origin on the baseline with +y down.
