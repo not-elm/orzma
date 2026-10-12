@@ -4,6 +4,11 @@
 use crate::font::TerminalFonts;
 use bevy::prelude::{Deref, Resource, Vec2};
 
+mod baseline;
+mod geometry;
+
+pub use baseline::Baseline;
+
 /// The cell the grid lays out with, measured from the regular face at one
 /// physical pixel size and snapped to the whole pixels the cells sit on.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -22,19 +27,6 @@ pub struct CellMetrics {
     /// reaches past the cell width, or 0. A host laying out a terminal node
     /// must reserve this much width past the grid rectangle.
     pub max_overflow: f32,
-}
-
-/// The baseline's depth below the top of a cell, in whole physical pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Deref)]
-pub struct Baseline(f32);
-
-impl Baseline {
-    /// Creates the baseline from a face's ascent of `ascent` physical pixels.
-    ///
-    /// The ascent is rounded to the nearest whole pixel.
-    pub fn new(ascent: f32) -> Self {
-        Self(ascent.round())
-    }
 }
 
 /// A horizontal stroke across a cell, in physical pixels.
@@ -93,8 +85,8 @@ mod tests {
     /// Asserts that a thickness under one pixel is raised to one pixel
     /// rather than rejected, and a thicker one is kept as it is.
     ///
-    /// Case: the bundled font's underline measures 0.6 px at the default
-    /// 12 px size and 1.2 px at 24 px.
+    /// Case: JetBrains Mono's underline measures 0.6 px at the 12 px size
+    /// and 1.2 px at 24 px.
     #[test]
     fn thickness_is_raised_to_at_least_one_pixel() {
         assert_eq!(*Thickness::new(0.6), 1.0);
