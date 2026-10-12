@@ -3,11 +3,13 @@
 
 use crate::font::TerminalFonts;
 use bevy::prelude::{Deref, Resource, Vec2};
+use swash::{FontRef, tag_from_bytes};
 
 mod baseline;
 mod geometry;
 
 pub use baseline::Baseline;
+pub use geometry::CellGeometry;
 
 /// The cell the grid lays out with, measured from the regular face at one
 /// physical pixel size and snapped to the whole pixels the cells sit on.
@@ -37,6 +39,27 @@ pub struct Underline {
     pub position: f32,
     /// The stroke's thickness.
     pub thickness: Thickness,
+}
+
+impl Underline {
+    /// Measures the underline of `font` at `px` physical pixels per em.
+    pub fn measure(font: FontRef<'_>, px: f32) -> Self {
+        let metrics = font.metrics(&[]);
+        let upem = f32::from(metrics.units_per_em);
+        let to_px = |units: f32| units * px / upem;
+        if font.table(tag_from_bytes(b"post")).is_some() {
+            Self {
+                position: to_px(metrics.underline_offset),
+                thickness: Thickness::new(to_px(metrics.stroke_size)),
+            }
+        } else {
+            let ascent = to_px(metrics.ascent);
+            Self {
+                position: -ascent * 0.07,
+                thickness: Thickness::new(ascent / 14.0),
+            }
+        }
+    }
 }
 
 /// A stroke thickness in physical pixels, never below one pixel.

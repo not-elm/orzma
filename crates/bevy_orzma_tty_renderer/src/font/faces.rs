@@ -6,10 +6,11 @@ use crate::bundled::{
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
 use crate::error::{RendererError, RendererResult};
-use crate::font::{Baseline, CellMetrics, FontFace, Thickness, Underline};
-use bevy::prelude::{Deref, Resource, Vec2};
+use crate::font::metrics::CellGeometry;
+use crate::font::{CellMetrics, FontFace, Underline};
+use bevy::prelude::{Deref, Resource};
 use swash::scale::ScaleContext;
-use swash::{FontRef, GlyphId, tag_from_bytes};
+use swash::{FontRef, GlyphId};
 
 /// The faces the terminal grid draws with: four primary faces, the bundled
 /// CJK fallback for each, and the bundled symbol face.
@@ -126,29 +127,9 @@ impl TerminalFonts {
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
         let font = &self.regular.0;
         let px = f32::from(phys_size_px);
-        let metrics = font.metrics(&[]);
-        let upem = f32::from(metrics.units_per_em);
-        let to_px = |units: f32| units * px / upem;
-        let advance_phys = to_px(
-            font.glyph_metrics(&[])
-                .advance_width(font.charmap().map('0')),
-        );
-        let ascent_phys = to_px(metrics.ascent);
-        let line_height_phys = to_px(metrics.ascent + metrics.descent + metrics.leading);
-        let underline = if font.table(tag_from_bytes(b"post")).is_some() {
-            Underline {
-                position: to_px(metrics.underline_offset),
-                thickness: Thickness::new(to_px(metrics.stroke_size)),
-            }
-        } else {
-            Underline {
-                position: -ascent_phys * 0.07,
-                thickness: Thickness::new(ascent_phys / 14.0),
-            }
-        };
-        let cell_size = Vec2::new(advance_phys, line_height_phys)
-            .floor()
-            .max(Vec2::ONE);
+        let underline = Underline::measure(*font, px);
+        let geometry = self.cell_geometry(phys_size_px);
+        let cell_size = geometry.cell_size();
         let mut context = ScaleContext::new();
         let max_overflow = [&self.regular, &self.italic, &self.bold, &self.bold_italic]
             .into_iter()
@@ -157,10 +138,18 @@ impl TerminalFonts {
 
         CellMetrics {
             cell_size,
-            baseline: Baseline::new(ascent_phys),
+            baseline: geometry.baseline(),
             underline,
             max_overflow,
         }
+    }
+
+    fn cell_geometry(&self, phys_size_px: u16) -> CellGeometry {
+        let font = &self.regular.0;
+        let zero_advance = font
+            .glyph_metrics(&[])
+            .advance_width(font.charmap().map('0'));
+        CellGeometry::measure(&font.metrics(&[]), zero_advance, f32::from(phys_size_px))
     }
 }
 
@@ -242,6 +231,7 @@ fn fallback_font(bytes: &'static [u8]) -> RendererResult<LoadedFont> {
 mod tests {
     use super::*;
     use crate::bundled;
+    use bevy::prelude::Vec2;
 
     /// Asserts that `from_faces` with every index at 0 loads the same
     /// regular face, and measures the same cell, as `from_bytes`.
