@@ -26,6 +26,7 @@ struct TerminalParams {
     hover_hyperlink_id: u32,
     hover_active: u32,
     dim: f32,
+    strike_depth_px: f32,
     inactive_tint: vec4<f32>,
     overlay_rects: array<vec4<i32>, 12>,
     overlay_dim: f32,
@@ -326,12 +327,14 @@ fn in_hovered_url(hit: CellHit) -> bool {
 }
 
 // Paints the strike line of a struck-through cell at the cell-local `y`.
-// The line sits at half the ascent and reuses the underline thickness.
+// The line is centered `strike_depth_px` below the cell top, which the host
+// places from the font's strike-out position, and reuses the underline
+// thickness.
 fn paint_strike(style: u32, y: f32, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
     if (style & STYLE_STRIKE) == 0u {
         return base;
     }
-    let top = params.baseline_px * 0.5 - params.underline_thickness_phys * 0.5;
+    let top = params.strike_depth_px - params.underline_thickness_phys * 0.5;
     if !in_band(y, top, params.underline_thickness_phys) {
         return base;
     }

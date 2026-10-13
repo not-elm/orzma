@@ -79,12 +79,13 @@ pub(super) fn compute_overlay_layout(
         scale,
     );
 
+    let glyph_top = pos.y + metrics.baseline.gap_above() / scale;
     let cells = placements
         .into_iter()
         .map(|placement| PlacedCell {
             text: placement.text,
             left: placement.left + pos.x,
-            top: pos.y,
+            top: glyph_top,
         })
         .collect();
 
@@ -513,6 +514,34 @@ mod tests {
                 top: 0.0,
                 height: 16.0
             })
+        );
+    }
+
+    /// Asserts that the preedit glyphs move down by the line gap that
+    /// lowered the baseline, keeping their distance to the underline.
+    ///
+    /// Case: the user composes Japanese in a terminal set in Consolas at
+    /// 12 px, whose line gap lowers the baseline by two pixels.
+    #[test]
+    fn preedit_glyphs_follow_a_baseline_the_line_gap_lowered() {
+        let (translation, size) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
+        let without_gap = CellMetrics {
+            baseline: Baseline::new(8.91),
+            ..metrics(7.0, 14.0)
+        };
+        let with_gap = CellMetrics {
+            baseline: Baseline::with_line_gap(8.91, 3.09, 2.05, 14.0),
+            ..metrics(7.0, 14.0)
+        };
+        let layout_for = |metrics: &CellMetrics| {
+            compute_overlay_layout("あ", None, translation, size, (0, 0), metrics, 1.0)
+        };
+        let lowered = layout_for(&with_gap);
+        let level = layout_for(&without_gap);
+        assert_eq!(lowered.cells[0].top, 2.0);
+        assert_eq!(
+            lowered.underline.top - lowered.cells[0].top,
+            level.underline.top - level.cells[0].top
         );
     }
 

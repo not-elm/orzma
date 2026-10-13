@@ -3,6 +3,13 @@
 
 use crate::font::TerminalFonts;
 use bevy::prelude::{Deref, Resource, Vec2};
+use swash::{FontRef, Metrics, tag_from_bytes};
+
+mod baseline;
+mod geometry;
+
+pub use baseline::Baseline;
+pub use geometry::CellGeometry;
 
 /// The cell the grid lays out with, measured from the regular face at one
 /// physical pixel size and snapped to the whole pixels the cells sit on.
@@ -24,19 +31,6 @@ pub struct CellMetrics {
     pub max_overflow: f32,
 }
 
-/// The baseline's depth below the top of a cell, in whole physical pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Deref)]
-pub struct Baseline(f32);
-
-impl Baseline {
-    /// Creates the baseline from a face's ascent of `ascent` physical pixels.
-    ///
-    /// The ascent is rounded to the nearest whole pixel.
-    pub fn new(ascent: f32) -> Self {
-        Self(ascent.round())
-    }
-}
-
 /// A horizontal stroke across a cell, in physical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Underline {
@@ -45,6 +39,28 @@ pub struct Underline {
     pub position: f32,
     /// The stroke's thickness.
     pub thickness: Thickness,
+}
+
+impl Underline {
+    /// Measures the underline of `font`, whose global metrics are `metrics`,
+    /// at `px` physical pixels per em.
+    ///
+    /// `metrics.units_per_em` is not zero.
+    pub fn measure(font: FontRef<'_>, metrics: &Metrics, px: f32) -> Self {
+        let to_px = |units| font_units_to_px(units, metrics.units_per_em, px);
+        if font.table(tag_from_bytes(b"post")).is_some() {
+            Self {
+                position: to_px(metrics.underline_offset),
+                thickness: Thickness::new(to_px(metrics.stroke_size)),
+            }
+        } else {
+            let ascent = to_px(metrics.ascent);
+            Self {
+                position: -ascent * 0.07,
+                thickness: Thickness::new(ascent / 14.0),
+            }
+        }
+    }
 }
 
 /// A stroke thickness in physical pixels, never below one pixel.
@@ -86,6 +102,17 @@ impl TerminalCellMetricsResource {
     }
 }
 
+/// Converts `units` font units of a face with `units_per_em` units per em to
+/// physical pixels at `px` pixels per em.
+///
+/// A value that lands on a whole pixel converts to exactly that pixel.
+fn font_units_to_px(units: f32, units_per_em: u16, px: f32) -> f32 {
+    // NOTE: Multiply before dividing. Scaling by `px / units_per_em` first
+    // rounds the factor, so a line that measures exactly a whole pixel can
+    // come out just under it, and the floored cell height then loses a pixel.
+    units * px / f32::from(units_per_em)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,8 +120,8 @@ mod tests {
     /// Asserts that a thickness under one pixel is raised to one pixel
     /// rather than rejected, and a thicker one is kept as it is.
     ///
-    /// Case: the bundled font's underline measures 0.6 px at the default
-    /// 12 px size and 1.2 px at 24 px.
+    /// Case: JetBrains Mono's underline measures 0.6 px at the 12 px size
+    /// and 1.2 px at 24 px.
     #[test]
     fn thickness_is_raised_to_at_least_one_pixel() {
         assert_eq!(*Thickness::new(0.6), 1.0);

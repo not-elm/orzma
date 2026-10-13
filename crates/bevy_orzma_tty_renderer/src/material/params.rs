@@ -43,6 +43,7 @@ pub(crate) use write::TerminalParamsPlugin;
 /// | 96     | `hover_hyperlink_id`        |
 /// | 100    | `hover_active`              |
 /// | 104    | `dim`                       |
+/// | 108    | `strike_depth_px` (phys)    |
 /// | 112    | `inactive_tint`             |
 /// | 128    | `overlay_rects`             |
 /// | 320    | `overlay_dim`               |
@@ -108,6 +109,8 @@ pub(super) struct TerminalParams {
     /// Pane brightness multiplier applied to the final fragment RGB.
     /// `1.0` = active / full-bright; `< 1.0` dims an inactive pane.
     dim: f32,
+    /// Depth of the strike-through line's center below the cell top.
+    strike_depth_px: f32,
     /// Per-pane background tint: `rgb` = target color (LINEAR), `a` = blend
     /// amount in `0.0..=1.0`. The shader blends each background source toward
     /// `rgb` by `a` BEFORE glyphs/overlays paint (background only). `a == 0`
@@ -156,6 +159,7 @@ impl Default for TerminalParams {
             hover_hyperlink_id: 0,
             hover_active: 0,
             dim: 1.0,
+            strike_depth_px: 0.0,
             inactive_tint: Vec4::ZERO,
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
             overlay_dim: 1.0,
@@ -175,9 +179,9 @@ impl TerminalParams {
     /// Builds the per-frame uniform block from the current view and the
     /// caret paint the policy settled on.
     ///
-    /// The cell size and the baseline are those of `metrics`, and the caret
-    /// strokes the `cursor_thickness` share of the cell width, rounded and
-    /// at least one pixel thick.
+    /// The cell size, the baseline and the strike-through depth are those of
+    /// `metrics`, and the caret strokes the `cursor_thickness` share of the
+    /// cell width, rounded and at least one pixel thick.
     ///
     /// # Invariants
     ///
@@ -235,6 +239,7 @@ impl TerminalParams {
             hover_hyperlink_id,
             hover_active,
             dim: treatment.dim,
+            strike_depth_px: metrics.baseline.strike_depth(),
             inactive_tint: treatment.inactive_tint,
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
             overlay_dim: treatment.overlay_dim,
@@ -324,9 +329,9 @@ mod tests {
     use super::*;
     use crate::font::{Baseline, Thickness, Underline};
 
-    /// Asserts that the uniforms take the cell size and the baseline from
-    /// the metrics, and the caret thickness as the rounded share of the cell
-    /// width.
+    /// Asserts that the uniforms take the cell size, the baseline and the
+    /// strike-through depth from the metrics, and the caret thickness as the
+    /// rounded share of the cell width.
     ///
     /// Case: the font measures a 7 by 15 pixel cell with a 12 pixel
     /// baseline, and the caret is set to 30% of the cell width.
@@ -357,6 +362,7 @@ mod tests {
         );
         assert_eq!(params.cell_size_px, Vec2::new(7.0, 15.0));
         assert_eq!(params.baseline_px, 12.0);
+        assert_eq!(params.strike_depth_px, 6.0);
         assert_eq!(params.cursor_thickness_phys, 2.0);
     }
 
@@ -414,51 +420,29 @@ mod tests {
         assert!(params.hover_span.x > params.hover_span.y);
     }
 
-    /// Asserts the std140 offsets of the fields after `dim`, where a
-    /// `Vec4` and the rect array force alignment padding, down to the
-    /// packed default foreground in the tail.
+    /// Asserts the std140 offsets of the fields from `dim` to the hover
+    /// span, with the strike-through depth in the four bytes that the
+    /// 16-byte aligned `inactive_tint` would otherwise leave as padding.
     ///
     /// Case: an inactive pane shows a dimmed, desaturated webview while
-    /// nvim in it holds an `OSC 12` cursor color.
+    /// nvim in it strikes through text and holds an `OSC 12` cursor color.
     #[test]
     fn terminal_params_field_offsets_are_pinned() {
+        let offset = |index| <TerminalParams as ShaderType>::METADATA.offset(index);
+        assert_eq!(offset(19), 104, "dim");
+        assert_eq!(offset(20), 108, "strike_depth_px in the pad after dim");
         assert_eq!(
-            <TerminalParams as ShaderType>::METADATA.offset(19),
-            104,
-            "dim"
-        );
-        assert_eq!(
-            <TerminalParams as ShaderType>::METADATA.offset(20),
+            offset(21),
             112,
-            "inactive_tint (Vec4, 16-byte aligned) after the pad following dim"
+            "inactive_tint (Vec4, 16-byte aligned) after strike_depth_px"
         );
+        assert_eq!(offset(22), 128, "overlay_rects after inactive_tint");
+        assert_eq!(offset(23), 320, "overlay_dim after overlay_rects");
+        assert_eq!(offset(24), 324, "overlay_desaturate after overlay_dim");
+        assert_eq!(offset(25), 328, "cursor_packed after overlay_desaturate");
+        assert_eq!(offset(26), 332, "default_fg_packed after cursor_packed");
         assert_eq!(
-            <TerminalParams as ShaderType>::METADATA.offset(21),
-            128,
-            "overlay_rects after inactive_tint"
-        );
-        assert_eq!(
-            <TerminalParams as ShaderType>::METADATA.offset(22),
-            320,
-            "overlay_dim after overlay_rects"
-        );
-        assert_eq!(
-            <TerminalParams as ShaderType>::METADATA.offset(23),
-            324,
-            "overlay_desaturate after overlay_dim"
-        );
-        assert_eq!(
-            <TerminalParams as ShaderType>::METADATA.offset(24),
-            328,
-            "cursor_packed after overlay_desaturate"
-        );
-        assert_eq!(
-            <TerminalParams as ShaderType>::METADATA.offset(25),
-            332,
-            "default_fg_packed after cursor_packed"
-        );
-        assert_eq!(
-            <TerminalParams as ShaderType>::METADATA.offset(26),
+            offset(27),
             336,
             "hover_span (UVec2, 8-byte aligned) after default_fg_packed"
         );
@@ -653,21 +637,26 @@ mod tests {
     /// the span the host wrote after the packed default foreground.
     #[test]
     fn wgsl_terminal_params_end_with_the_hover_span() {
-        let src = include_str!("../shaders/terminal_ui_material.wgsl");
-        let declaration = src
-            .split("struct TerminalParams {")
-            .nth(1)
-            .and_then(|rest| rest.split("};").next())
-            .expect("the shader declares TerminalParams");
-        let fields: Vec<&str> = declaration
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
+        let fields = wgsl_terminal_params_fields();
         assert_eq!(
             fields[fields.len() - 2..],
             ["default_fg_packed: u32,", "hover_span: vec2<u32>,"]
         );
+    }
+
+    /// Asserts that the shader declares the strike-through depth right
+    /// after `dim`, the slot the host layout gives it.
+    ///
+    /// Case: a program strikes through text, and the shader reads the depth
+    /// the host wrote at offset 108.
+    #[test]
+    fn wgsl_terminal_params_declare_the_strike_depth_after_dim() {
+        let fields = wgsl_terminal_params_fields();
+        let dim = fields
+            .iter()
+            .position(|field| *field == "dim: f32,")
+            .expect("the shader declares dim");
+        assert_eq!(fields.get(dim + 1), Some(&"strike_depth_px: f32,"));
     }
 
     /// Asserts that the shader declares no time uniform, so every
@@ -706,5 +695,19 @@ mod tests {
             "const CURSOR_SHAPE_BAR: u32 = {}u;",
             PackedCursorStyle::SHAPE_BAR.bits() >> 1
         )));
+    }
+
+    /// The trimmed, non-empty lines of the shader's `TerminalParams`
+    /// declaration, one field per line.
+    fn wgsl_terminal_params_fields() -> Vec<&'static str> {
+        include_str!("../shaders/terminal_ui_material.wgsl")
+            .split("struct TerminalParams {")
+            .nth(1)
+            .and_then(|rest| rest.split("};").next())
+            .expect("the shader declares TerminalParams")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect()
     }
 }
