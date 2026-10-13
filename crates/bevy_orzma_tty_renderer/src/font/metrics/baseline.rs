@@ -9,11 +9,9 @@ pub struct Baseline {
     /// The baseline's depth below the cell top.
     #[deref]
     depth: f32,
-    /// The whole pixels of line gap between the rounded ascent and the
-    /// baseline.
+    /// The whole pixels of line gap between the rounded ascent and the baseline.
     gap_above: f32,
-    /// The depth of the strike-through line's center below the cell top, in
-    /// physical pixels.
+    /// The depth of the strike-through line's center below the cell top, in physical pixels.
     strike_depth: f32,
 }
 
@@ -39,9 +37,6 @@ impl Baseline {
     /// the row top, raised as far as the rounded descent needs to stay inside
     /// the row, but never above the rounded ascent. The strike-through line
     /// sits half the rounded ascent above the baseline.
-    ///
-    /// `descent` is the distance below the baseline, so it is not negative,
-    /// and `line_height` is the whole-pixel height the rows are laid out with.
     pub fn with_line_gap(ascent: f32, descent: f32, line_gap: f32, line_height: f32) -> Self {
         let raised = ascent.round();
         let depth = raised.max(
