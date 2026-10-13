@@ -3,7 +3,7 @@
 
 use crate::font::TerminalFonts;
 use bevy::prelude::{Deref, Resource, Vec2};
-use swash::{FontRef, tag_from_bytes};
+use swash::{FontRef, Metrics, tag_from_bytes};
 
 mod baseline;
 mod geometry;
@@ -42,11 +42,12 @@ pub struct Underline {
 }
 
 impl Underline {
-    /// Measures the underline of `font` at `px` physical pixels per em.
-    pub fn measure(font: FontRef<'_>, px: f32) -> Self {
-        let metrics = font.metrics(&[]);
-        let upem = f32::from(metrics.units_per_em);
-        let to_px = |units: f32| units * px / upem;
+    /// Measures the underline of `font`, whose global metrics are `metrics`,
+    /// at `px` physical pixels per em.
+    ///
+    /// `metrics.units_per_em` is not zero.
+    pub fn measure(font: FontRef<'_>, metrics: &Metrics, px: f32) -> Self {
+        let to_px = |units| font_units_to_px(units, metrics.units_per_em, px);
         if font.table(tag_from_bytes(b"post")).is_some() {
             Self {
                 position: to_px(metrics.underline_offset),
@@ -99,6 +100,17 @@ impl TerminalCellMetricsResource {
             phys_font_size,
         }
     }
+}
+
+/// Converts `units` font units of a face with `units_per_em` units per em to
+/// physical pixels at `px` pixels per em.
+///
+/// A value that lands on a whole pixel converts to exactly that pixel.
+fn font_units_to_px(units: f32, units_per_em: u16, px: f32) -> f32 {
+    // NOTE: Multiply before dividing. Scaling by `px / units_per_em` first
+    // rounds the factor, so a line that measures exactly a whole pixel can
+    // come out just under it, and the floored cell height then loses a pixel.
+    units * px / f32::from(units_per_em)
 }
 
 #[cfg(test)]

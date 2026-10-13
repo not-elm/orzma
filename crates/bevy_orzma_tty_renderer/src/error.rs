@@ -9,8 +9,8 @@ pub type RendererResult<T = ()> = Result<T, RendererError>;
 /// Every failure the terminal renderer reports.
 #[derive(Debug, Error)]
 pub enum RendererError {
-    /// Font bytes that are not a font, or that hold no face at the
-    /// requested `.ttc` index.
+    /// Font bytes that are not a font, that hold no face at the requested
+    /// `.ttc` index, or whose face reports zero units per em.
     #[error("failed to parse the font")]
     FontParse,
     /// A frame whose content the VT schema rejects.

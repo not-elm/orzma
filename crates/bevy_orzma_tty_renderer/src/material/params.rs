@@ -43,6 +43,7 @@ pub(crate) use write::TerminalParamsPlugin;
 /// | 96     | `hover_hyperlink_id`        |
 /// | 100    | `hover_active`              |
 /// | 104    | `dim`                       |
+/// | 108    | `strike_depth_px` (phys)    |
 /// | 112    | `inactive_tint`             |
 /// | 128    | `overlay_rects`             |
 /// | 320    | `overlay_dim`               |
@@ -178,9 +179,9 @@ impl TerminalParams {
     /// Builds the per-frame uniform block from the current view and the
     /// caret paint the policy settled on.
     ///
-    /// The cell size and the baseline are those of `metrics`, and the caret
-    /// strokes the `cursor_thickness` share of the cell width, rounded and
-    /// at least one pixel thick.
+    /// The cell size, the baseline and the strike-through depth are those of
+    /// `metrics`, and the caret strokes the `cursor_thickness` share of the
+    /// cell width, rounded and at least one pixel thick.
     ///
     /// # Invariants
     ///
@@ -636,17 +637,7 @@ mod tests {
     /// the span the host wrote after the packed default foreground.
     #[test]
     fn wgsl_terminal_params_end_with_the_hover_span() {
-        let src = include_str!("../shaders/terminal_ui_material.wgsl");
-        let declaration = src
-            .split("struct TerminalParams {")
-            .nth(1)
-            .and_then(|rest| rest.split("};").next())
-            .expect("the shader declares TerminalParams");
-        let fields: Vec<&str> = declaration
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
+        let fields = wgsl_terminal_params_fields();
         assert_eq!(
             fields[fields.len() - 2..],
             ["default_fg_packed: u32,", "hover_span: vec2<u32>,"]
@@ -660,17 +651,7 @@ mod tests {
     /// the host wrote at offset 108.
     #[test]
     fn wgsl_terminal_params_declare_the_strike_depth_after_dim() {
-        let src = include_str!("../shaders/terminal_ui_material.wgsl");
-        let declaration = src
-            .split("struct TerminalParams {")
-            .nth(1)
-            .and_then(|rest| rest.split("};").next())
-            .expect("the shader declares TerminalParams");
-        let fields: Vec<&str> = declaration
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect();
+        let fields = wgsl_terminal_params_fields();
         let dim = fields
             .iter()
             .position(|field| *field == "dim: f32,")
@@ -714,5 +695,19 @@ mod tests {
             "const CURSOR_SHAPE_BAR: u32 = {}u;",
             PackedCursorStyle::SHAPE_BAR.bits() >> 1
         )));
+    }
+
+    /// The trimmed, non-empty lines of the shader's `TerminalParams`
+    /// declaration, one field per line.
+    fn wgsl_terminal_params_fields() -> Vec<&'static str> {
+        include_str!("../shaders/terminal_ui_material.wgsl")
+            .split("struct TerminalParams {")
+            .nth(1)
+            .and_then(|rest| rest.split("};").next())
+            .expect("the shader declares TerminalParams")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect()
     }
 }

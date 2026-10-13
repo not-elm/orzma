@@ -327,7 +327,9 @@ fn in_hovered_url(hit: CellHit) -> bool {
 }
 
 // Paints the strike line of a struck-through cell at the cell-local `y`.
-// The line sits at half the ascent and reuses the underline thickness.
+// The line is centered `strike_depth_px` below the cell top, which the host
+// places from the font's strike-out position, and reuses the underline
+// thickness.
 fn paint_strike(style: u32, y: f32, fg: vec4<f32>, base: vec4<f32>) -> vec4<f32> {
     if (style & STYLE_STRIKE) == 0u {
         return base;

@@ -50,8 +50,8 @@ impl TerminalFonts {
     /// # Errors
     ///
     /// Returns [`RendererError::FontParse`] when a face's bytes are not a
-    /// font or hold no face at its `.ttc` index. The error does not say
-    /// which face failed.
+    /// font, hold no face at its `.ttc` index, or hold a face that reports
+    /// zero units per em. The error does not say which face failed.
     pub fn from_faces(
         regular: (Vec<u8>, u32),
         bold: (Vec<u8>, u32),
@@ -90,7 +90,8 @@ impl TerminalFonts {
     /// # Errors
     ///
     /// Returns [`RendererError::FontParse`] when a face's bytes are not a
-    /// font. The error does not say which face failed.
+    /// font or hold a face that reports zero units per em. The error does
+    /// not say which face failed.
     pub fn from_bytes(
         regular: Vec<u8>,
         bold: Vec<u8>,
@@ -125,10 +126,13 @@ impl TerminalFonts {
     /// Returns full pixel metrics for the regular face at the requested
     /// physical pixel size.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
-        let font = &self.regular.0;
+        let font = self.regular.0;
         let px = f32::from(phys_size_px);
-        let underline = Underline::measure(*font, px);
-        let geometry = self.cell_geometry(phys_size_px);
+        let metrics = font.metrics(&[]);
+        let zero_advance = font
+            .glyph_metrics(&[])
+            .advance_width(font.charmap().map('0'));
+        let geometry = CellGeometry::measure(&metrics, zero_advance, px);
         let cell_size = geometry.cell_size();
         let mut context = ScaleContext::new();
         let max_overflow = [&self.regular, &self.italic, &self.bold, &self.bold_italic]
@@ -139,17 +143,9 @@ impl TerminalFonts {
         CellMetrics {
             cell_size,
             baseline: geometry.baseline(),
-            underline,
+            underline: Underline::measure(font, &metrics, px),
             max_overflow,
         }
-    }
-
-    fn cell_geometry(&self, phys_size_px: u16) -> CellGeometry {
-        let font = &self.regular.0;
-        let zero_advance = font
-            .glyph_metrics(&[])
-            .advance_width(font.charmap().map('0'));
-        CellGeometry::measure(&font.metrics(&[]), zero_advance, f32::from(phys_size_px))
     }
 }
 
@@ -173,8 +169,17 @@ impl Default for TerminalFonts {
 pub struct LoadedFont(FontRef<'static>);
 
 impl LoadedFont {
+    /// Loads the face at `.ttc` index `index` of `bytes`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RendererError::FontParse`] when `bytes` are not a font, hold
+    /// no face at `index`, or hold a face whose `head` table reports zero
+    /// units per em.
     pub fn new(bytes: &'static [u8], index: usize) -> RendererResult<Self> {
-        let font = FontRef::from_index(bytes, index).ok_or(RendererError::FontParse)?;
+        let font = FontRef::from_index(bytes, index)
+            .filter(|font| font.metrics(&[]).units_per_em != 0)
+            .ok_or(RendererError::FontParse)?;
         Ok(Self(font))
     }
 
@@ -273,6 +278,39 @@ mod tests {
             bundled::BOLD_ITALIC.to_vec(),
         );
         assert!(matches!(result, Err(RendererError::FontParse)));
+    }
+
+    /// Asserts that a face whose `head` table reports zero units per em is
+    /// reported as a font-parse error.
+    ///
+    /// Case: the configured regular family resolves to a damaged font file
+    /// whose `head` table lost its units-per-em value.
+    #[test]
+    fn a_face_with_zero_units_per_em_is_reported_as_a_font_parse_error() {
+        let result = TerminalFonts::from_bytes(
+            with_zero_units_per_em(bundled::REGULAR),
+            bundled::BOLD.to_vec(),
+            bundled::ITALIC.to_vec(),
+            bundled::BOLD_ITALIC.to_vec(),
+        );
+        assert!(matches!(result, Err(RendererError::FontParse)));
+    }
+
+    fn with_zero_units_per_em(font: &[u8]) -> Vec<u8> {
+        let mut bytes = font.to_vec();
+        let table_count = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+        let head = (0..table_count)
+            .map(|index| 12 + 16 * index)
+            .find(|record| &bytes[*record..*record + 4] == b"head")
+            .map(|record| {
+                let offset = bytes[record + 8..record + 12]
+                    .try_into()
+                    .expect("a table record holds a four-byte offset");
+                u32::from_be_bytes(offset) as usize
+            })
+            .expect("the font has a head table");
+        bytes[head + 18..head + 20].copy_from_slice(&[0, 0]);
+        bytes
     }
 
     /// Asserts that `from_faces` sets the bundled UDEV Gothic 35 faces as
