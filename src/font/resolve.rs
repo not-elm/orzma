@@ -1,10 +1,11 @@
-//! Resolves a font-family name and face attributes to font-file bytes plus a
-//! collection face index, via a `fontique` collection. Pure over the
-//! borrowed collection and source cache.
+//! Resolves a configured font family, or the generic emoji family, to its
+//! font data and collection face index through a `fontique` collection.
+//! Pure over the borrowed collection and source cache.
 
 use bevy_orzma_tty_renderer::prelude::FontFace;
 use fontique::{
-    Attributes, Collection, FontStyle, FontWeight, FontWidth, QueryFamily, QueryStatus, SourceCache,
+    Attributes, Blob, Collection, FontStyle, FontWeight, FontWidth, GenericFamily, QueryFamily,
+    QueryStatus, SourceCache,
 };
 use orzma_configs::font::{FontSlant, FontStyleSpec};
 
@@ -66,6 +67,23 @@ pub(super) fn resolve_configured_face(
     resolve_face_bytes(collection, source_cache, family, attributes).ok_or(FamilyNotFound)
 }
 
+/// The face the collection's generic emoji family resolves to: its font
+/// data, shared with the collection rather than copied, and its `.ttc`
+/// face index; `None` when the family holds no face.
+pub(super) fn emoji_face(
+    collection: &mut Collection,
+    source_cache: &mut SourceCache,
+) -> Option<(Blob<u8>, u32)> {
+    let mut query = collection.query(source_cache);
+    query.set_families([QueryFamily::Generic(GenericFamily::Emoji)]);
+    let mut resolved = None;
+    query.matches_with(|font| {
+        resolved = Some((font.blob.clone(), font.index));
+        QueryStatus::Stop
+    });
+    resolved
+}
+
 /// Resolves `family` at `attributes` to `(font-file bytes, .ttc face index)`,
 /// or `None` when no face resolves — either the family name is absent from the
 /// collection, or it is present but the query returns no match. A present family
@@ -92,7 +110,7 @@ fn resolve_face_bytes(
 mod tests {
     use super::*;
     use bevy_orzma_tty_renderer::bundled;
-    use fontique::{Blob, CollectionOptions};
+    use fontique::CollectionOptions;
     use std::sync::Arc;
 
     fn deterministic_collection() -> (Collection, SourceCache) {
@@ -207,5 +225,38 @@ mod tests {
     fn family_present_false_for_absent_family() {
         let (mut collection, _sc) = deterministic_collection();
         assert!(!family_present(&mut collection, "no-such-family-7fe12"));
+    }
+
+    /// Asserts that `emoji_face` returns the face of the family the
+    /// collection maps the generic emoji family to.
+    ///
+    /// Case: the system's font configuration names an emoji font.
+    #[test]
+    fn emoji_face_resolves_the_generic_emoji_family() {
+        let (mut collection, mut source_cache) = deterministic_collection();
+        let blob =
+            Blob::new(Arc::new(bundled::SYMBOL_REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+        let registered = collection.register_fonts(blob, None);
+        collection.set_generic_families(
+            GenericFamily::Emoji,
+            registered.iter().map(|(family, _)| *family),
+        );
+
+        let (blob, index) =
+            emoji_face(&mut collection, &mut source_cache).expect("the emoji family resolves");
+
+        assert_eq!(blob.data(), bundled::SYMBOL_REGULAR);
+        assert_eq!(index, 0);
+    }
+
+    /// Asserts that `emoji_face` returns `None` when no family is mapped to
+    /// the generic emoji family.
+    ///
+    /// Case: the system has no emoji font installed.
+    #[test]
+    fn emoji_face_is_none_without_an_emoji_family() {
+        let (mut collection, mut source_cache) = deterministic_collection();
+
+        assert!(emoji_face(&mut collection, &mut source_cache).is_none());
     }
 }

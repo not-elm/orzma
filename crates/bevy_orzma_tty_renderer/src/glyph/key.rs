@@ -4,7 +4,8 @@ use crate::font::FontFace;
 use orzma_vt::prelude::MAX_COMBINING;
 
 /// The identity of one rasterized sprite in the atlas: a glyph at a
-/// face and size, with the marks composed onto it.
+/// face and size, in the columns the VT reserved for it, with the marks
+/// composed onto it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GlyphKey {
     /// The face the glyph is drawn with.
@@ -13,18 +14,28 @@ pub struct GlyphKey {
     pub codepoint: u32,
     /// The font size in physical pixels.
     pub size_px: u16,
+    /// Whether the VT reserved two columns for the glyph.
+    pub wide: bool,
     marks: [char; MAX_COMBINING],
 }
 
 impl GlyphKey {
-    /// A key for a bare glyph with no marks.
+    /// A key for a bare glyph in one column, with no marks.
     pub fn new(face: FontFace, codepoint: u32, size_px: u16) -> Self {
         Self {
             face,
             codepoint,
             size_px,
+            wide: false,
             marks: ['\0'; MAX_COMBINING],
         }
+    }
+
+    /// This key with `wide` recording whether the VT reserved two columns
+    /// for the glyph.
+    pub fn with_wide(mut self, wide: bool) -> Self {
+        self.wide = wide;
+        self
     }
 
     /// This key with the first [`MAX_COMBINING`] of `marks` composed
@@ -67,5 +78,22 @@ mod tests {
         assert_eq!(flooded.marks().count(), MAX_COMBINING);
         assert_ne!(plain, accented);
         assert_eq!(plain, GlyphKey::new(FontFace::Regular, u32::from('e'), 24));
+    }
+
+    /// Asserts that a new key is narrow, and that the same glyph keyed for
+    /// two columns is a different key from the one keyed for one.
+    ///
+    /// Case: the renderer keys a character once for a wide cell and once
+    /// for a narrow cell.
+    #[test]
+    fn a_wide_key_differs_from_the_same_narrow_key() {
+        let narrow = GlyphKey::new(FontFace::Regular, u32::from('あ'), 24);
+        assert!(!narrow.wide);
+
+        let wide = narrow.with_wide(true);
+
+        assert!(wide.wide);
+        assert_ne!(wide, narrow);
+        assert_eq!(wide.with_wide(false), narrow);
     }
 }

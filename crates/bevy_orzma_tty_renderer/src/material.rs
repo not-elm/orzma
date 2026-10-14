@@ -158,9 +158,16 @@ struct GpuGlyph {
     offset_px: Vec2,
     /// Rasterized bitmap size in physical px.
     size_px: Vec2,
+    /// [`GpuGlyph::COLOR`] when the sprite holds the glyph's own colors,
+    /// otherwise 0.
+    flags: u32,
 }
 
 impl GpuGlyph {
+    /// The flag of a sprite that holds the glyph's own colors rather than
+    /// coverage.
+    const COLOR: u32 = 1;
+
     /// Builds a `GpuGlyph` from an atlas rect, with all offsets and sizes
     /// in physical pixels.
     fn new(rect: GlyphRect) -> Self {
@@ -169,6 +176,7 @@ impl GpuGlyph {
             uv_max: Vec2::new((rect.u + rect.w) as f32, (rect.v + rect.h) as f32),
             offset_px: Vec2::new(rect.offset_x as f32, rect.offset_y as f32),
             size_px: Vec2::new(rect.w as f32, rect.h as f32),
+            flags: if rect.color { Self::COLOR } else { 0 },
         }
     }
 }
@@ -237,6 +245,17 @@ mod tests {
         assert_eq!(size_of::<GpuCell>(), 20);
     }
 
+    /// Asserts that a `GpuGlyph` occupies 40 bytes in its shader layout, the
+    /// stride of the shader's `Glyph` array.
+    ///
+    /// Case: a pane shows an emoji next to ordinary text, so the renderer
+    /// uploads a glyph table that holds both the color record and the text
+    /// records.
+    #[test]
+    fn gpu_glyph_is_forty_bytes() {
+        assert_eq!(<GpuGlyph as ShaderType>::min_size().get(), 40);
+    }
+
     #[test]
     fn gpu_cell_default_has_zero_hyperlink_id() {
         let cell = GpuCell::default();
@@ -285,6 +304,36 @@ mod tests {
             )])
             .collect();
         assert_eq!(declared, expected);
+    }
+
+    /// Asserts that a glyph record carries the color flag exactly when its
+    /// atlas rect holds a color sprite, and that the shader declares the
+    /// flag with the same bit.
+    ///
+    /// Case: a row shows an emoji next to a letter.
+    #[test]
+    fn a_color_rect_sets_the_color_flag_the_shader_reads() {
+        let rect = GlyphRect {
+            u: 0,
+            v: 0,
+            w: 24,
+            h: 24,
+            offset_x: 0,
+            offset_y: -21,
+            color: true,
+        };
+
+        assert_eq!(GpuGlyph::new(rect).flags, GpuGlyph::COLOR);
+        assert_eq!(
+            GpuGlyph::new(GlyphRect {
+                color: false,
+                ..rect
+            })
+            .flags,
+            0
+        );
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        assert!(src.contains(&format!("const GLYPH_COLOR: u32 = {}u;", GpuGlyph::COLOR)));
     }
 
     const SEEDED_ATLAS: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000003");

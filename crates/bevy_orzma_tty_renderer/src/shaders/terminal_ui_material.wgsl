@@ -49,6 +49,7 @@ struct Glyph {
     uv_max: vec2<f32>,
     offset_px: vec2<f32>,
     size_px: vec2<f32>,
+    flags: u32,
 };
 
 struct CellHit {
@@ -104,6 +105,10 @@ const CURSOR_SHAPE_UNDERLINE: u32 = 1u;
 const CURSOR_SHAPE_BAR: u32 = 2u;
 
 const GLYPH_NONE: u32 = 0xFFFFFFFFu;
+
+// Set in `Glyph.flags` when the sprite holds the glyph's own colors (an
+// emoji) rather than coverage — see material.rs.
+const GLYPH_COLOR: u32 = 1u;
 
 // ============================================================================
 // Fragment entrypoint
@@ -207,7 +212,11 @@ fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
     // glyph. paint_primary_glyph would add another +cell_pitch.x, pushing
     // past the wide bitmap (size_px.x ≈ 2*cell_pitch.x) → zero coverage.
     // The asymmetry vs paint_grid_cell is intentional and unavoidable.
-    color = paint_cell_glyph(strip_cell, strip_local, colors.fg, color);
+    // A color glyph is cut at its two columns, so it has nothing to paint
+    // past the grid's right edge.
+    if !holds_color_glyph(strip_cell) {
+        color = paint_cell_glyph(strip_cell, strip_local, colors.fg, color);
+    }
     let hit = CellHit(true, row, col, strip_cell, strip_local);
     return paint_cell_overlays(hit, colors.fg, color);
 }
@@ -833,8 +842,10 @@ fn resolve_cell_colors(cell: Cell) -> CellColors {
 // ============================================================================
 
 // Paints `cell`'s glyph into `base`, evaluating against `local_px` (the
-// fragment's cell-local coord). Returns `base` unchanged when the cell has
-// no glyph or the index is out of range.
+// fragment's cell-local coord). A color glyph is painted in its own colors
+// by paint_color_glyph; any other glyph is coverage painted in `fg`.
+// Returns `base` unchanged when the cell has no glyph or the index is out
+// of range.
 fn paint_cell_glyph(
     cell: Cell,
     local_px: vec2<f32>,
@@ -845,6 +856,9 @@ fn paint_cell_glyph(
         return base;
     }
     let glyph = glyphs[cell.glyph_index];
+    if is_color_glyph(glyph) {
+        return paint_color_glyph(cell, glyph, local_px, base);
+    }
     let glyph_local = local_px - glyph_origin_phys(glyph);
     let coverage = sample_glyph_coverage(glyph, glyph_local);
     return blend_glyph(base, fg, coverage);
@@ -884,6 +898,58 @@ fn blend_glyph(base: vec4<f32>, fg: vec4<f32>, coverage: f32) -> vec4<f32> {
     // For opaque fg (fg.a == 1.0) this is a no-op; coverage drives blending
     // as before.
     return mix(base, vec4<f32>(fg.rgb, max(fg.a, coverage)), coverage * fg.a);
+}
+
+// Whether `glyph` holds its own colors (an emoji) rather than coverage.
+fn is_color_glyph(glyph: Glyph) -> bool {
+    return (glyph.flags & GLYPH_COLOR) != 0u;
+}
+
+// Whether `cell` shows a color glyph.
+fn holds_color_glyph(cell: Cell) -> bool {
+    return cell.glyph_index != GLYPH_NONE
+        && cell.glyph_index < arrayLength(&glyphs)
+        && is_color_glyph(glyphs[cell.glyph_index]);
+}
+
+// Paints the color `glyph` of `cell` into `base` in the glyph's own
+// colors, evaluating against `local_px` (the fragment's cell-local coord).
+// A concealed cell paints nothing, since a color glyph ignores the
+// foreground that hides other glyphs.
+//
+// NOTE: The atlas holds color texels as straight-alpha sRGB, so they are
+//       read unfiltered with textureLoad and decoded per texel; filtering
+//       the encoded texels would darken the glyph's edges.
+fn paint_color_glyph(
+    cell: Cell,
+    glyph: Glyph,
+    local_px: vec2<f32>,
+    base: vec4<f32>,
+) -> vec4<f32> {
+    if (cell.style_flags & STYLE_HIDDEN) != 0u {
+        return base;
+    }
+    let glyph_local = local_px - color_glyph_origin_phys(glyph);
+    if glyph_local.x < 0.0 || glyph_local.y < 0.0
+        || glyph_local.x >= glyph.size_px.x || glyph_local.y >= glyph.size_px.y {
+        return base;
+    }
+    let texel = textureLoad(atlas_tex, vec2<i32>(glyph.uv_min + floor(glyph_local)), 0);
+    return blend_glyph(base, vec4<f32>(srgb_to_linear(texel.rgb), 1.0), texel.a);
+}
+
+// A color glyph's origin in cell-local physical px: centered across the
+// two columns of its wide cell, and on the baseline like any other glyph.
+fn color_glyph_origin_phys(glyph: Glyph) -> vec2<f32> {
+    let x = floor((2.0 * params.cell_size_px.x - glyph.size_px.x) * 0.5);
+    return vec2<f32>(x, glyph_origin_phys(glyph).y);
+}
+
+// `c` decoded from sRGB to linear, channel by channel.
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let low = c / 12.92;
+    let high = pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4));
+    return select(high, low, c <= vec3<f32>(0.04045));
 }
 
 // ============================================================================

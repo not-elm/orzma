@@ -59,7 +59,7 @@ fn init_atlas_image(
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        expand_r8_to_rgba8(&atlas.pixels),
+        atlas.pixels.as_flattened().to_vec(),
         TextureFormat::Rgba8Unorm,
         RenderAssetUsages::default(),
     );
@@ -80,18 +80,7 @@ fn sync_atlas_image(
         return;
     }
     if let Some(mut image) = images.get_mut(&atlas_image.handle) {
-        image.data = Some(expand_r8_to_rgba8(&atlas.pixels));
+        image.data = Some(atlas.pixels.as_flattened().to_vec());
     }
     atlas_image.last_generation = atlas.generation;
-}
-
-/// Expands an R8 (single-byte coverage) atlas buffer into an RGBA8 buffer
-/// with white RGB and the coverage value in the alpha channel — the format
-/// the fragment shader samples.
-fn expand_r8_to_rgba8(src: &[u8]) -> Vec<u8> {
-    let mut dst = Vec::with_capacity(src.len() * 4);
-    for &a in src {
-        dst.extend_from_slice(&[255, 255, 255, a]);
-    }
-    dst
 }
