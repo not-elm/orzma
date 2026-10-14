@@ -170,6 +170,7 @@ impl GlyphAtlas {
 
     fn build_sprites(&mut self, fonts: &TerminalFonts, key: GlyphKey) -> Option<Vec<Image>> {
         let ch = char::from_u32(key.codepoint)?;
+        let px = f32::from(key.size_px);
         let resolved = resolve_glyph(fonts, &key.face, ch);
         let in_primary_or_cjk = matches!(
             resolved,
@@ -178,13 +179,12 @@ impl GlyphAtlas {
         if key.wide
             && !in_primary_or_cjk
             && let Some(emoji) = &fonts.emoji
-            && let Some(color) = render_color(&mut self.context, emoji, ch, f32::from(key.size_px))
+            && let Some(color) = render_color(&mut self.context, emoji, ch, px)
         {
             return Some(vec![color]);
         }
         let (font, glyph_id, tier) = resolved?;
         let font = font.font_ref();
-        let px = f32::from(key.size_px);
         let mut scaler = self
             .context
             .builder(font)
