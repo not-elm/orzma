@@ -1,7 +1,7 @@
 //! The CPU-side glyph atlas: rasterized sprites packed onto shelves of one
-//! coverage texture.
+//! RGBA texture.
 
-use crate::font::{FontFace, TerminalFonts};
+use crate::font::{FontFace, LoadedFont, TerminalFonts};
 use crate::glyph::atlas::shelf::Shelves;
 use crate::glyph::{
     GlyphKey,
@@ -9,8 +9,8 @@ use crate::glyph::{
 };
 use bevy::{platform::collections::HashMap, prelude::*};
 use std::iter::once;
-use swash::scale::image::Image;
-use swash::scale::{Render, ScaleContext, Source};
+use swash::scale::image::{Content, Image};
+use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::shape::ShapeContext;
 use swash::zeno::Format;
 
@@ -40,16 +40,22 @@ pub struct GlyphRect {
     pub offset_x: i16,
     /// Vertical bearing from the glyph origin (may be negative).
     pub offset_y: i16,
+    /// Whether the sprite holds the glyph's own sRGB colors rather than
+    /// coverage to paint in the foreground color.
+    pub color: bool,
 }
 
-/// CPU-side R8Unorm atlas for rasterized glyphs.
+/// CPU-side RGBA atlas for rasterized glyphs.
 ///
 /// When the atlas is full, it clears every packed glyph and restarts from
 /// the top-left.
 #[derive(Resource)]
 pub struct GlyphAtlas {
-    /// One byte of alpha coverage per pixel, row-major.
-    pub pixels: Vec<u8>,
+    /// One straight-alpha RGBA texel per pixel, row-major. A coverage
+    /// sprite is white with its coverage in alpha, a color sprite holds the
+    /// glyph's own sRGB colors, and a texel no sprite covers is transparent
+    /// white.
+    pub pixels: Vec<[u8; 4]>,
     /// All glyphs currently packed into the atlas.
     pub glyphs: HashMap<GlyphKey, GlyphRect>,
     /// Bumped on every rasterization, including one that clears a full
@@ -64,10 +70,13 @@ pub struct GlyphAtlas {
 }
 
 impl GlyphAtlas {
+    /// The texel a pixel no sprite covers holds.
+    const EMPTY_TEXEL: [u8; 4] = [255, 255, 255, 0];
+
     /// Creates an empty atlas with the given pixel dimensions.
     pub fn new(width: u32, height: u32) -> Self {
         Self {
-            pixels: vec![0; (width * height) as usize],
+            pixels: vec![Self::EMPTY_TEXEL; (width * height) as usize],
             glyphs: HashMap::new(),
             generation: 0,
             restarts: 0,
@@ -95,6 +104,12 @@ impl GlyphAtlas {
     /// would not overlap the glyph is left out, and a glyph resolved
     /// through the symbol face takes no marks.
     ///
+    /// A wide key whose character neither the primary nor the CJK fallback
+    /// face carries is drawn from the emoji face when that face draws it in
+    /// color: as one straight-alpha sRGB sprite at the key's size that takes
+    /// no marks, with the rect's `color` set. Otherwise the symbol face is
+    /// tried as for any key.
+    ///
     /// Returns `None` when the codepoint is not a valid Unicode scalar, no
     /// face in the fallback chain carries it, the glyph has zero extent
     /// (e.g. ASCII space), or the sprite is larger than the atlas.
@@ -103,6 +118,9 @@ impl GlyphAtlas {
             return Some(*r);
         }
         let sprites = self.build_sprites(fonts, key)?;
+        let color = sprites
+            .iter()
+            .any(|sprite| matches!(sprite.content, Content::Color));
         let bounds = sprites
             .iter()
             .map(sprite_rect)
@@ -121,7 +139,7 @@ impl GlyphAtlas {
         self.shelves.new_line_if_need(w);
         if self.shelves.would_overflow(h) {
             self.shelves.clear();
-            self.pixels.fill(0);
+            self.pixels.fill(Self::EMPTY_TEXEL);
             self.glyphs.clear();
             self.restarts = self.restarts.wrapping_add(1);
         }
@@ -144,6 +162,7 @@ impl GlyphAtlas {
             h,
             offset_x: bounds.min.x as i16,
             offset_y: bounds.min.y as i16,
+            color,
         };
         self.glyphs.insert(key, rect);
         Some(rect)
@@ -151,7 +170,19 @@ impl GlyphAtlas {
 
     fn build_sprites(&mut self, fonts: &TerminalFonts, key: GlyphKey) -> Option<Vec<Image>> {
         let ch = char::from_u32(key.codepoint)?;
-        let (font, glyph_id, tier) = resolve_glyph(fonts, &key.face, ch)?;
+        let resolved = resolve_glyph(fonts, &key.face, ch);
+        let in_primary_or_cjk = matches!(
+            resolved,
+            Some((_, _, GlyphTier::Primary | GlyphTier::Fallback))
+        );
+        if key.wide
+            && !in_primary_or_cjk
+            && let Some(emoji) = &fonts.emoji
+            && let Some(color) = render_color(&mut self.context, emoji, ch, f32::from(key.size_px))
+        {
+            return Some(vec![color]);
+        }
+        let (font, glyph_id, tier) = resolved?;
         let font = font.font_ref();
         let px = f32::from(key.size_px);
         let mut scaler = self
@@ -193,8 +224,10 @@ impl GlyphAtlas {
         Some(sprites)
     }
 
-    /// Blends `image`'s coverage into the current shelf position,
-    /// shifted right by `dx` and down by `dy` pixels, keeping the higher coverage where pixels overlap.
+    /// Writes `image` into the texels at the current shelf position, shifted
+    /// right by `dx` and down by `dy` pixels: a color image's texels as they
+    /// are, and a coverage image's coverage into alpha, keeping the higher
+    /// coverage where pixels overlap.
     fn write_image_pixels(&mut self, image: &Image, dx: u32, dy: u32) {
         let width = image.placement.width as usize;
         if width == 0 {
@@ -203,13 +236,23 @@ impl GlyphAtlas {
         let atlas_width = self.shelves.width() as usize;
         let u = (self.shelves.x() + dx) as usize;
         let v = (self.shelves.y() + dy) as usize;
-        for (row, coverage) in image.data.chunks_exact(width).enumerate() {
-            let start = (v + row) * atlas_width + u;
-            let Some(slots) = self.pixels.get_mut(start..start + width) else {
-                continue;
-            };
-            for (slot, alpha) in slots.iter_mut().zip(coverage) {
-                *slot = (*slot).max(*alpha);
+        if matches!(image.content, Content::Color) {
+            let (texels, _) = image.data.as_chunks::<4>();
+            for (row, colors) in texels.chunks_exact(width).enumerate() {
+                let start = (v + row) * atlas_width + u;
+                if let Some(slots) = self.pixels.get_mut(start..start + width) {
+                    slots.copy_from_slice(colors);
+                }
+            }
+        } else {
+            for (row, coverage) in image.data.chunks_exact(width).enumerate() {
+                let start = (v + row) * atlas_width + u;
+                let Some(slots) = self.pixels.get_mut(start..start + width) else {
+                    continue;
+                };
+                for (slot, alpha) in slots.iter_mut().zip(coverage) {
+                    slot[3] = slot[3].max(*alpha);
+                }
             }
         }
     }
@@ -229,14 +272,63 @@ fn sprite_rect(image: &Image) -> IRect {
     IRect::from_corners(min, min + size)
 }
 
+/// Renders `ch` from `font` at `px` px per em from the face's color layers
+/// or color bitmaps, as straight-alpha sRGB RGBA; `None` when the face has
+/// no color glyph for `ch` or the glyph has no pixels.
+fn render_color(context: &mut ScaleContext, font: &LoadedFont, ch: char, px: f32) -> Option<Image> {
+    let glyph_id = font.glyph_id(ch);
+    if glyph_id == 0 {
+        return None;
+    }
+    let mut scaler = context
+        .builder(font.font_ref())
+        .size(px)
+        .hint(false)
+        .build();
+    let mut image = Render::new(&[
+        Source::ColorOutline(0),
+        Source::ColorBitmap(StrikeWith::BestFit),
+    ])
+    .render(&mut scaler, glyph_id)
+    .filter(|image| {
+        matches!(image.content, Content::Color)
+            && image.placement.width > 0
+            && image.placement.height > 0
+    })?;
+    if matches!(image.source, Source::ColorOutline(_)) {
+        let (texels, _) = image.data.as_chunks_mut::<4>();
+        for texel in texels {
+            *texel = unpremultiplied(*texel);
+        }
+    }
+    Some(image)
+}
+
+/// `texel` converted from premultiplied to straight alpha, rounding each
+/// color to the nearest value and saturating at 255; a texel with zero
+/// alpha becomes transparent black.
+fn unpremultiplied(texel: [u8; 4]) -> [u8; 4] {
+    let [r, g, b, a] = texel;
+    if a == 0 {
+        return [0; 4];
+    }
+    let straight = |channel: u8| {
+        let value = (u16::from(channel) * 255 + u16::from(a) / 2) / u16::from(a);
+        u8::try_from(value).unwrap_or(u8::MAX)
+    };
+    [straight(r), straight(g), straight(b), a]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bundled;
     use crate::font::{FontFace, LoadedFont};
     use std::ops::Range;
     use swash::scale::image::Image;
     use swash::scale::{Render, ScaleContext, Source};
     use swash::zeno::Format;
+    use swash::zeno::Placement;
 
     #[test]
     fn returned_rect_matches_written_pixels() {
@@ -344,14 +436,22 @@ mod tests {
         }
     }
 
-    /// The atlas pixels inside `rect`, row-major.
-    fn sprite_pixels(atlas: &GlyphAtlas, rect: GlyphRect) -> Vec<u8> {
+    /// The atlas texels inside `rect`, row-major.
+    fn sprite_texels(atlas: &GlyphAtlas, rect: GlyphRect) -> Vec<[u8; 4]> {
         let width = atlas.width() as usize;
         (0..usize::from(rect.h))
             .flat_map(|dy| {
                 let row = (usize::from(rect.v) + dy) * width + usize::from(rect.u);
                 atlas.pixels[row..row + usize::from(rect.w)].iter().copied()
             })
+            .collect()
+    }
+
+    /// The alpha of the atlas texels inside `rect`, row-major.
+    fn sprite_pixels(atlas: &GlyphAtlas, rect: GlyphRect) -> Vec<u8> {
+        sprite_texels(atlas, rect)
+            .into_iter()
+            .map(|texel| texel[3])
             .collect()
     }
 
@@ -791,6 +891,34 @@ mod tests {
         assert_ne!(atlas.generation, generation);
     }
 
+    /// Asserts that an atlas holding only coverage sprites keeps every
+    /// texel's RGB white, and that each glyph's alpha matches the glyph
+    /// drawn on its own, both as packed and after a full atlas restarts.
+    ///
+    /// Case: a shell prints plain text long enough to fill and restart the
+    /// atlas, with no emoji on screen.
+    #[test]
+    fn a_coverage_only_atlas_keeps_every_texel_white() {
+        let fonts = TerminalFonts::default();
+        let a = GlyphKey::new(FontFace::Regular, u32::from('A'), 24);
+        let b = GlyphKey::new(FontFace::Regular, u32::from('B'), 24);
+        let (wa, ha) = sprite_size(a, &fonts);
+        let (wb, hb) = sprite_size(b, &fonts);
+        let mut atlas = GlyphAtlas::new(wa.max(wb), ha.max(hb));
+        let is_white = |atlas: &GlyphAtlas| atlas.pixels.iter().all(|texel| texel[..3] == [255; 3]);
+
+        let rect_a = atlas.get_or_insert(a, &fonts).expect("'A' rasterizes");
+        assert!(is_white(&atlas));
+        assert_sprite_is(&atlas, rect_a, &standalone_raster(&fonts.regular, 'A', 24));
+        let rect_b = atlas
+            .get_or_insert(b, &fonts)
+            .expect("'B' rasterizes after the restart");
+
+        assert_eq!(atlas.restarts, 1);
+        assert!(is_white(&atlas));
+        assert_sprite_is(&atlas, rect_b, &standalone_raster(&fonts.regular, 'B', 24));
+    }
+
     /// Asserts that a glyph that exactly fills the space left beside or below
     /// the packed glyph is packed without restarting the atlas.
     ///
@@ -1132,5 +1260,310 @@ mod tests {
         assert_eq!(result, None);
         assert!(atlas.glyphs.contains_key(&small));
         assert_eq!(atlas.restarts, 0);
+    }
+
+    /// Asserts that `unpremultiplied` divides each color by alpha, rounds to
+    /// the nearest value, saturates at 255, and turns a texel with zero
+    /// alpha into transparent black.
+    ///
+    /// Case: the atlas packs an emoji the face draws from COLR layers, whose
+    /// texels come out premultiplied.
+    #[test]
+    fn unpremultiplied_restores_straight_alpha() {
+        assert_eq!(unpremultiplied([10, 20, 30, 0]), [0, 0, 0, 0]);
+        assert_eq!(unpremultiplied([200, 100, 50, 255]), [200, 100, 50, 255]);
+        assert_eq!(unpremultiplied([64, 32, 0, 128]), [128, 64, 0, 128]);
+        assert_eq!(unpremultiplied([253, 0, 126, 253]), [255, 0, 127, 253]);
+        assert_eq!(unpremultiplied([200, 0, 0, 100]), [255, 0, 0, 100]);
+    }
+
+    /// Asserts that a color image's texels are written into the atlas as
+    /// they are, leaving the texels around them empty.
+    ///
+    /// Case: the atlas packs an emoji drawn from a color bitmap.
+    #[test]
+    fn a_color_image_is_written_texel_for_texel() {
+        let mut atlas = GlyphAtlas::new(4, 2);
+        let texels = [[255, 0, 0, 255], [0, 128, 255, 64]];
+        let image = Image {
+            source: Source::ColorBitmap(StrikeWith::BestFit),
+            content: Content::Color,
+            placement: Placement {
+                left: 0,
+                top: 0,
+                width: 2,
+                height: 1,
+            },
+            data: texels.as_flattened().to_vec(),
+        };
+
+        atlas.write_image_pixels(&image, 1, 1);
+
+        assert_eq!(atlas.pixels[5..7], texels);
+        assert!(
+            atlas.pixels[..5]
+                .iter()
+                .chain(&atlas.pixels[7..])
+                .all(|texel| *texel == GlyphAtlas::EMPTY_TEXEL)
+        );
+    }
+
+    /// Asserts that a wide glyph the emoji face carries but cannot draw in
+    /// color falls back to the symbol face, exactly as it would with no
+    /// emoji face.
+    ///
+    /// Case: the system's emoji family resolves to a font without color
+    /// glyphs, and a program prints a thumbs-up.
+    #[test]
+    fn a_wide_glyph_the_emoji_face_cannot_color_falls_back_to_the_symbol_face() {
+        let plain = TerminalFonts::default();
+        let mut monochrome = TerminalFonts::default();
+        monochrome
+            .set_emoji(bundled::SYMBOL_REGULAR, 0)
+            .expect("Noto Sans Symbols 2 is a font");
+        let emoji = monochrome.emoji.as_ref().expect("the emoji face is set");
+        assert_ne!(emoji.glyph_id('👍'), 0);
+        let key = GlyphKey::new(FontFace::Regular, u32::from('👍'), 24).with_wide(true);
+        let mut expected_atlas = GlyphAtlas::default();
+        let expected = expected_atlas
+            .get_or_insert(key, &plain)
+            .expect("👍 rasterizes through the symbol face");
+        let mut atlas = GlyphAtlas::default();
+
+        let rect = atlas
+            .get_or_insert(key, &monochrome)
+            .expect("👍 rasterizes");
+
+        assert!(!rect.color);
+        assert_eq!(rect, expected);
+        assert_eq!(
+            sprite_pixels(&atlas, rect),
+            sprite_pixels(&expected_atlas, expected)
+        );
+    }
+
+    /// Asserts that without an emoji face a wide glyph is drawn exactly as
+    /// the same glyph keyed for one column.
+    ///
+    /// Case: the app runs on a system with no emoji font, and a program
+    /// prints Japanese text and a thumbs-up.
+    #[test]
+    fn without_an_emoji_face_a_wide_glyph_is_drawn_as_a_narrow_one() {
+        let fonts = TerminalFonts::default();
+        assert!(fonts.emoji.is_none());
+        for ch in ['あ', '👍'] {
+            let narrow = GlyphKey::new(FontFace::Regular, u32::from(ch), 24);
+            let mut atlas = GlyphAtlas::default();
+            let narrow_rect = atlas
+                .get_or_insert(narrow, &fonts)
+                .expect("the glyph rasterizes");
+
+            let wide_rect = atlas
+                .get_or_insert(narrow.with_wide(true), &fonts)
+                .expect("the glyph rasterizes");
+
+            assert!(!wide_rect.color, "{ch}");
+            assert_same_sprite(&atlas, wide_rect, narrow_rect);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    mod apple_color_emoji {
+        use super::*;
+        use std::fs;
+        use std::sync::OnceLock;
+
+        /// The system's Apple Color Emoji collection, read once per test run.
+        fn apple_color_emoji() -> &'static [u8] {
+            static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
+            BYTES.get_or_init(|| {
+                fs::read("/System/Library/Fonts/Apple Color Emoji.ttc")
+                    .expect("macOS ships Apple Color Emoji")
+            })
+        }
+
+        /// The default fonts with Apple Color Emoji as the emoji face.
+        fn fonts_with_apple_color_emoji() -> TerminalFonts {
+            let mut fonts = TerminalFonts::default();
+            fonts
+                .set_emoji(apple_color_emoji(), 0)
+                .expect("Apple Color Emoji loads");
+            fonts
+        }
+
+        /// Asserts that a wide emoji is drawn from the emoji face in color,
+        /// as a key-sized sprite with texels that are not white.
+        ///
+        /// Case: a program prints a grinning face on macOS.
+        #[test]
+        fn a_wide_emoji_is_drawn_in_color() {
+            let fonts = fonts_with_apple_color_emoji();
+            let mut atlas = GlyphAtlas::default();
+            let key = GlyphKey::new(FontFace::Regular, u32::from('😀'), 24).with_wide(true);
+
+            let rect = atlas.get_or_insert(key, &fonts).expect("😀 rasterizes");
+
+            assert!(rect.color);
+            assert_eq!((rect.w, rect.h), (24, 24));
+            assert!(
+                sprite_texels(&atlas, rect)
+                    .iter()
+                    .any(|texel| texel[3] > 0 && texel[..3] != [255; 3])
+            );
+        }
+
+        /// Asserts that a narrow glyph the emoji face draws in color is still
+        /// drawn from the faces before it, as it is without an emoji face.
+        ///
+        /// Case: a TUI draws a checked box, a check mark, and a heart in
+        /// narrow cells on macOS.
+        #[test]
+        fn a_narrow_glyph_ignores_the_emoji_face() {
+            let plain = TerminalFonts::default();
+            let fonts = fonts_with_apple_color_emoji();
+            let emoji = fonts.emoji.as_ref().expect("the emoji face is loaded");
+            for ch in ['☑', '✔', '❤'] {
+                assert_ne!(emoji.glyph_id(ch), 0, "{ch}");
+                let key = GlyphKey::new(FontFace::Regular, u32::from(ch), 24);
+                let mut expected_atlas = GlyphAtlas::default();
+                let expected = expected_atlas
+                    .get_or_insert(key, &plain)
+                    .expect("the glyph rasterizes");
+                let mut atlas = GlyphAtlas::default();
+
+                let rect = atlas
+                    .get_or_insert(key, &fonts)
+                    .expect("the glyph rasterizes");
+
+                assert!(!rect.color, "{ch}");
+                assert_eq!(rect, expected, "{ch}");
+                assert_eq!(
+                    sprite_pixels(&atlas, rect),
+                    sprite_pixels(&expected_atlas, expected),
+                    "{ch}"
+                );
+            }
+        }
+
+        /// Asserts that a wide glyph only the symbol face carries is drawn in
+        /// color from the emoji face rather than in monochrome from the
+        /// symbol face.
+        ///
+        /// Case: a chat TUI prints a thumbs-up, a soccer ball, and a star.
+        #[test]
+        fn a_wide_glyph_only_the_symbol_face_carries_is_drawn_in_color() {
+            let fonts = fonts_with_apple_color_emoji();
+            for ch in ['👍', '⚽', '⭐'] {
+                assert_eq!(fonts.choice(&FontFace::Regular).glyph_id(ch), 0, "{ch}");
+                assert_eq!(
+                    fonts.fallback_choice(&FontFace::Regular).glyph_id(ch),
+                    0,
+                    "{ch}"
+                );
+                assert_ne!(fonts.symbol.glyph_id(ch), 0, "{ch}");
+                let key = GlyphKey::new(FontFace::Regular, u32::from(ch), 24).with_wide(true);
+                let mut atlas = GlyphAtlas::default();
+
+                let rect = atlas
+                    .get_or_insert(key, &fonts)
+                    .expect("the glyph rasterizes");
+
+                assert!(rect.color, "{ch}");
+            }
+        }
+
+        /// Asserts that a wide glyph the primary or CJK fallback face carries
+        /// is drawn from that face as it is without an emoji face, not from
+        /// the emoji face.
+        ///
+        /// Case: a status line prints a lightning bolt, a part alternation
+        /// mark, and a circled ideograph meaning secret.
+        #[test]
+        fn a_wide_glyph_the_primary_or_cjk_face_carries_ignores_the_emoji_face() {
+            let plain = TerminalFonts::default();
+            let fonts = fonts_with_apple_color_emoji();
+            let emoji = fonts.emoji.as_ref().expect("the emoji face is loaded");
+            for ch in ['⚡', '〽', '㊙'] {
+                assert_ne!(emoji.glyph_id(ch), 0, "{ch}");
+                assert!(
+                    fonts.choice(&FontFace::Regular).glyph_id(ch) != 0
+                        || fonts.fallback_choice(&FontFace::Regular).glyph_id(ch) != 0,
+                    "{ch}"
+                );
+                let key = GlyphKey::new(FontFace::Regular, u32::from(ch), 24).with_wide(true);
+                let mut expected_atlas = GlyphAtlas::default();
+                let expected = expected_atlas
+                    .get_or_insert(key, &plain)
+                    .expect("the glyph rasterizes");
+                let mut atlas = GlyphAtlas::default();
+
+                let rect = atlas
+                    .get_or_insert(key, &fonts)
+                    .expect("the glyph rasterizes");
+
+                assert!(!rect.color, "{ch}");
+                assert_eq!(rect, expected, "{ch}");
+                assert_eq!(
+                    sprite_pixels(&atlas, rect),
+                    sprite_pixels(&expected_atlas, expected),
+                    "{ch}"
+                );
+            }
+        }
+
+        /// Asserts that a wide emoji carrying a mark is drawn without it,
+        /// texel for texel as the bare emoji.
+        ///
+        /// Case: a program prints a heart-eyes face followed by a variation
+        /// selector 16, and a man followed by a zero width joiner.
+        #[test]
+        fn a_wide_emoji_takes_no_marks() {
+            let fonts = fonts_with_apple_color_emoji();
+            let mut atlas = GlyphAtlas::default();
+            for (ch, mark) in [('😍', '\u{FE0F}'), ('👨', '\u{200D}')] {
+                let bare = GlyphKey::new(FontFace::Regular, u32::from(ch), 24).with_wide(true);
+                let base = atlas
+                    .get_or_insert(bare, &fonts)
+                    .expect("the emoji rasterizes");
+
+                let marked = atlas
+                    .get_or_insert(bare.with_marks([mark]), &fonts)
+                    .expect("the emoji with a mark rasterizes");
+
+                assert!(marked.color, "{ch}");
+                assert_eq!(
+                    (marked.w, marked.h, marked.offset_x, marked.offset_y),
+                    (base.w, base.h, base.offset_x, base.offset_y),
+                    "{ch}"
+                );
+                assert_eq!(
+                    sprite_texels(&atlas, marked),
+                    sprite_texels(&atlas, base),
+                    "{ch}"
+                );
+            }
+        }
+
+        /// Asserts that a full atlas restarting while a color sprite is
+        /// packed returns the color texels to transparent white, so a
+        /// coverage sprite packed after the restart stays white.
+        ///
+        /// Case: a long session fills the atlas while an emoji is on screen,
+        /// and plain text is drawn after the restart.
+        #[test]
+        fn a_restart_clears_color_texels_back_to_white() {
+            let fonts = fonts_with_apple_color_emoji();
+            let emoji = GlyphKey::new(FontFace::Regular, u32::from('😀'), 24).with_wide(true);
+            let letter = GlyphKey::new(FontFace::Regular, u32::from('A'), 24);
+            let mut atlas = GlyphAtlas::new(24, 24);
+            atlas.get_or_insert(emoji, &fonts).expect("😀 rasterizes");
+
+            atlas
+                .get_or_insert(letter, &fonts)
+                .expect("'A' rasterizes after the restart");
+
+            assert_eq!(atlas.restarts, 1);
+            assert!(atlas.pixels.iter().all(|texel| texel[..3] == [255; 3]));
+        }
     }
 }

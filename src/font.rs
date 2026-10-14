@@ -101,6 +101,10 @@ impl Plugin for FontBridgePlugin {
             (
                 bridge_font_config.before(TerminalFontInitSet::InitCellMetrics),
                 register_cjk_fallback,
+                // NOTE: load_emoji_font must run after bridge_font_config,
+                // which replaces TerminalFonts and resets its emoji face when a
+                // font family is configured.
+                load_emoji_font.after(bridge_font_config),
             ),
         );
     }
@@ -215,6 +219,35 @@ fn bridge_font_config(
     commands.insert_resource(ui_font);
 }
 
+/// Loads the system's color emoji font into `TerminalFonts`.
+fn load_emoji_font(mut terminal_fonts: ResMut<TerminalFonts>, mut font_cx: ResMut<FontCx>) {
+    let cx = &mut **font_cx;
+    load_emoji_face(
+        &mut terminal_fonts,
+        &mut cx.collection,
+        &mut cx.source_cache,
+    );
+}
+
+/// Loads the system's color emoji face into `terminal_fonts`, sharing the
+/// font's mapped bytes for the rest of the process. Logs a warning and
+/// leaves `terminal_fonts` unchanged when the system has no emoji font or
+/// the font does not load.
+fn load_emoji_face(
+    terminal_fonts: &mut TerminalFonts,
+    collection: &mut Collection,
+    source_cache: &mut SourceCache,
+) {
+    let Some((blob, index)) = resolve::emoji_face(collection, source_cache) else {
+        warn!(target: "orzma::font", "no color emoji font was found; emoji are drawn without color");
+        return;
+    };
+    let bytes: &'static [u8] = Box::leak(Box::new(blob)).data();
+    if let Err(err) = terminal_fonts.set_emoji(bytes, index) {
+        warn!(target: "orzma::font", %err, "the color emoji font did not load; emoji are drawn without color");
+    }
+}
+
 /// One primary face resolved for the terminal grid: its bytes, `.ttc` index,
 /// and whether it came from a system family (vs a bundled fallback).
 struct ResolvedFace {
@@ -305,7 +338,7 @@ mod tests {
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
     use bevy_orzma_tty_renderer::bundled;
     use bevy_orzma_tty_renderer::prelude::TerminalFontPlugin;
-    use fontique::{FontInfoOverride, FontWeight};
+    use fontique::{CollectionOptions, FontInfoOverride, FontWeight, GenericFamily};
     use std::sync::Arc;
 
     /// RAII guard for a process-environment variable. Constructing it via
@@ -727,6 +760,36 @@ mod tests {
         let (mut app, _guard, _env) = make_test_app(Some(&tmp));
         app.update();
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Asserts that `load_emoji_face` loads the collection's emoji face into
+    /// the terminal fonts, and leaves them without one when the collection
+    /// has none.
+    ///
+    /// Case: the app starts once on a system without an emoji font and once
+    /// on a system with one.
+    #[test]
+    fn load_emoji_face_fills_the_emoji_slot_only_when_the_system_has_one() {
+        let mut collection = Collection::new(CollectionOptions {
+            system_fonts: false,
+            ..Default::default()
+        });
+        let mut source_cache = SourceCache::new(Default::default());
+        let mut fonts = TerminalFonts::default();
+
+        load_emoji_face(&mut fonts, &mut collection, &mut source_cache);
+        assert!(fonts.emoji.is_none());
+
+        let blob =
+            Blob::new(Arc::new(bundled::SYMBOL_REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+        let registered = collection.register_fonts(blob, None);
+        collection.set_generic_families(
+            GenericFamily::Emoji,
+            registered.iter().map(|(family, _)| *family),
+        );
+        load_emoji_face(&mut fonts, &mut collection, &mut source_cache);
+
+        assert!(fonts.emoji.is_some());
     }
 
     #[test]

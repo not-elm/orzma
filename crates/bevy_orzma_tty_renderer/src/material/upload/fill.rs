@@ -107,8 +107,9 @@ fn resolve_glyph_index(
         return u32::MAX;
     }
     let face = FontFace::from_style(cell.style);
-    let key =
-        GlyphKey::new(face, u32::from(cell.c), phys_font_size).with_marks(composable_marks(cell));
+    let key = GlyphKey::new(face, u32::from(cell.c), phys_font_size)
+        .with_marks(composable_marks(cell))
+        .with_wide(cell.width == CellWidth::Wide);
     if let Some(&idx) = state.glyph_index_map.get(&key) {
         return idx;
     }
@@ -280,6 +281,42 @@ mod tests {
         assert_eq!(
             composable_marks(&cell_with_link("\u{0301}", None)).count(),
             0
+        );
+    }
+
+    /// Asserts that a wide cell's glyph is keyed apart from the same
+    /// character in a narrow cell, in the glyph table and in the atlas.
+    ///
+    /// Case: a row holds one character in a wide cell and the same
+    /// character in a narrow cell.
+    #[test]
+    fn a_wide_cell_keys_its_glyph_apart_from_a_narrow_one() {
+        let wide = Cell {
+            width: CellWidth::Wide,
+            ..cell_with_link("あ", None)
+        };
+        let continuation = wide.continuation();
+        let narrow = cell_with_link("あ", None);
+        let cells = TerminalCells {
+            cells: vec![vec![wide, continuation, narrow]],
+            ..Default::default()
+        };
+        let mut state = state_for(3);
+        let mut atlas = GlyphAtlas::default();
+        let fonts = TerminalFonts::default();
+
+        fill_cells(&mut state, &mut atlas, &cells, &fonts, 16, (3, 1));
+
+        let key = GlyphKey::new(FontFace::Regular, u32::from('あ'), 16);
+        assert_eq!(
+            state.glyph_index_map[&key.with_wide(true)],
+            state.cpu_cells[0].glyph_index
+        );
+        assert_eq!(state.glyph_index_map[&key], state.cpu_cells[2].glyph_index);
+        assert_eq!(atlas.glyphs.len(), 2);
+        assert_ne!(
+            state.cpu_cells[0].glyph_index,
+            state.cpu_cells[2].glyph_index
         );
     }
 }

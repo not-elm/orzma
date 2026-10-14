@@ -13,7 +13,8 @@ use swash::scale::ScaleContext;
 use swash::{FontRef, GlyphId};
 
 /// The faces the terminal grid draws with: four primary faces, the bundled
-/// CJK fallback for each, and the bundled symbol face.
+/// CJK fallback for each, the bundled symbol face, and the color emoji face
+/// when one is loaded.
 #[derive(Resource, Clone)]
 pub struct TerminalFonts {
     /// Regular weight, upright style.
@@ -37,6 +38,11 @@ pub struct TerminalFonts {
     /// `FontFace`, and it is always the bundled Noto Sans Symbols 2: no
     /// constructor takes a symbol face.
     pub symbol: LoadedFont,
+    /// The color emoji face, tried for a glyph the VT reserved two columns
+    /// for when neither the primary nor the CJK fallback face carries it,
+    /// before the symbol face; `None` when no emoji face is loaded. A glyph
+    /// is taken from it only when the face draws the glyph in color.
+    pub emoji: Option<LoadedFont>,
 }
 
 impl TerminalFonts {
@@ -45,7 +51,7 @@ impl TerminalFonts {
     ///
     /// The fallback faces are always the bundled UDEV Gothic 35 faces and
     /// the symbol face is always the bundled Noto Sans Symbols 2, so callers
-    /// supply neither.
+    /// supply neither. No emoji face is loaded.
     ///
     /// # Errors
     ///
@@ -77,6 +83,7 @@ impl TerminalFonts {
             fallback_italic,
             fallback_bold_italic,
             symbol,
+            emoji: None,
         })
     }
 
@@ -85,7 +92,7 @@ impl TerminalFonts {
     ///
     /// The fallback faces are always the bundled UDEV Gothic 35 faces and
     /// the symbol face is always the bundled Noto Sans Symbols 2, so callers
-    /// supply neither.
+    /// supply neither. No emoji face is loaded.
     ///
     /// # Errors
     ///
@@ -121,6 +128,20 @@ impl TerminalFonts {
             FontFace::Italic => &self.fallback_italic,
             FontFace::BoldItalic => &self.fallback_bold_italic,
         }
+    }
+
+    /// Loads the color emoji face at `.ttc` index `index` of `bytes` into
+    /// [`TerminalFonts::emoji`].
+    ///
+    /// On failure the emoji face is left as it was.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RendererError::FontParse`] when `bytes` are not a font, hold
+    /// no face at `index`, or hold a face that reports zero units per em.
+    pub fn set_emoji(&mut self, bytes: &'static [u8], index: u32) -> RendererResult {
+        self.emoji = Some(LoadedFont::new(bytes, index as usize)?);
+        Ok(())
     }
 
     /// Returns full pixel metrics for the regular face at the requested
@@ -161,6 +182,7 @@ impl Default for TerminalFonts {
             fallback_italic: LoadedFont::bundled(FALLBACK_ITALIC),
             fallback_bold_italic: LoadedFont::bundled(FALLBACK_BOLD_ITALIC),
             symbol: LoadedFont::bundled(SYMBOL_REGULAR),
+            emoji: None,
         }
     }
 }
@@ -447,5 +469,53 @@ mod tests {
         assert_ne!(r_ptr, i_ptr, "Regular and Italic fallback share bytes");
         assert_ne!(r_ptr, bi_ptr, "Regular and BoldItalic fallback share bytes");
         assert_ne!(b_ptr, i_ptr, "Bold and Italic fallback share bytes");
+    }
+
+    /// Asserts that the default fonts and fonts built from faces carry no
+    /// emoji face.
+    ///
+    /// Case: the app starts before the font bridge has searched the system
+    /// for an emoji font.
+    #[test]
+    fn fonts_start_without_an_emoji_face() {
+        assert!(TerminalFonts::default().emoji.is_none());
+        let built = TerminalFonts::from_bytes(
+            bundled::REGULAR.to_vec(),
+            bundled::BOLD.to_vec(),
+            bundled::ITALIC.to_vec(),
+            bundled::BOLD_ITALIC.to_vec(),
+        )
+        .expect("from_bytes");
+        assert!(built.emoji.is_none());
+    }
+
+    /// Asserts that `set_emoji` loads the face at the given index into the
+    /// emoji slot.
+    ///
+    /// Case: the font bridge finds the system's emoji font at startup.
+    #[test]
+    fn set_emoji_loads_the_face_into_the_emoji_slot() {
+        let mut fonts = TerminalFonts::default();
+
+        fonts
+            .set_emoji(bundled::SYMBOL_REGULAR, 0)
+            .expect("Noto Sans Symbols 2 is a font");
+
+        let emoji = fonts.emoji.as_ref().expect("the emoji slot is filled");
+        assert_eq!(emoji.data, bundled::SYMBOL_REGULAR);
+    }
+
+    /// Asserts that `set_emoji` reports bytes that are not a font as a
+    /// font-parse error and leaves the emoji slot empty.
+    ///
+    /// Case: the system's emoji font file is damaged.
+    #[test]
+    fn set_emoji_rejects_bytes_that_are_not_a_font() {
+        let mut fonts = TerminalFonts::default();
+
+        let result = fonts.set_emoji(b"not a font", 0);
+
+        assert!(matches!(result, Err(RendererError::FontParse)));
+        assert!(fonts.emoji.is_none());
     }
 }
