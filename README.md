@@ -69,16 +69,9 @@ See [Installation](https://not-elm.github.io/orzma/installation.html) for detail
 See [Building Webview Apps](https://not-elm.github.io/orzma/building-webview-apps.html)
 for a tutorial.
 
-## Generative AI Policy from v0.4.0
+## Generative AI Policy
 
-Starting with v0.4.0, the use of generative AI will be prohibited for all purposes except:
-
-- Technical research
-- Translation text
-- Bug Investigation
-- Mechanical code edits with clearly defined changes, such as simple renaming.
-- Code Review
-- Create Test Cases (However, we must use the enumerate-test-cases skill to thoroughly review the test cases ourself.)
+This policy is under reconsideration in [issue #410](https://github.com/not-elm/orzma/issues/410).
 
 ## Contributing
 
