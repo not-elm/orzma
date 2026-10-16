@@ -106,7 +106,7 @@ fn cef_command_line_config() -> CommandLineConfig {
     let config = CommandLineConfig::default();
     #[cfg(target_os = "macos")]
     let config = config.with_switch("use-mock-keychain");
-    // NOTE: Chromium 152 on Linux gates browser startup on a first-run EULA
+    // NOTE: Chromium on Linux gates browser startup on a first-run EULA
     // dialog, and CEF does not patch that gate out. The profile directory is
     // created empty on every launch, so every launch is a first run; without this
     // switch `CefInitialize` fails with result code 28 (EULA_REFUSED).

@@ -42,24 +42,24 @@ impl Plugin for ImeOverlayPlugin {
                 spawn_ime_overlay_once.after(TerminalFontInitSet::InitCellMetrics),
             )
             // NOTE: must run BEFORE `UiSystems::Content`. Bevy's
-            // `detect_text_needs_rerender` and `measure_text_system`
-            // run in `UiSystems::Content` (`bevy_ui-0.19.0/src/lib.rs:236-252`)
-            // and that's where changed ECS `TextSpan`s are detected
-            // (`bevy_text-0.19.0/src/text.rs:1223`). If we mutate
-            // `TextSpan.0` after `Content`, detection sees no change
+            // `measure_text_system` runs in `UiSystems::Content`
+            // (`bevy_ui-0.20.0/src/lib.rs:248-251`), and bevy_text's
+            // `detect_text_needs_rerender`, which Content's
+            // `update_inline_image_boxes` precedes
+            // (`bevy_ui-0.20.0/src/lib.rs:244-247`), is where changed ECS
+            // `TextSpan`s are detected (`bevy_text-0.20.0/src/text.rs:1562`).
+            // If we mutate `TextSpan.0` after that, detection sees no change
             // this frame, `text_system` in `PostLayout` is gated off
-            // (`bevy_ui-0.19.0/src/widget/text.rs:357`), the root's
+            // (`bevy_ui-0.20.0/src/widget/text.rs:406`), the root's
             // `ComputedNode` stays at 0×0, and `bevy_ui_render` skips empty
-            // nodes (`bevy_ui_render-0.19.0/src/lib.rs:997`) —
-            // explaining why the inline preedit was invisible.
+            // nodes (`bevy_ui_render-0.20.0/src/lib.rs:1515`), so the inline
+            // preedit is invisible.
             //
-            // Side effect of running before `Layout`: the anchor's
-            // `UiGlobalTransform` and `ComputedNode.size` we read here are
-            // from the PRIOR frame's `PostLayout`. For a stable terminal
-            // pane (no per-frame resize) this is invisible; under window
-            // drag it lags overlay placement by one frame, which is also
-            // the same cosmetic latency the caret-bar `left` calc already
-            // had.
+            // The anchor's `UiGlobalTransform` and `ComputedNode.size` read
+            // here may be from the prior frame's `PostLayout`: `UiSystems` is
+            // chained weakly, so running before `Content` does not order this
+            // system against `Layout`. For a stable pane this is invisible;
+            // under a window drag it lags the overlay by one frame.
             .add_systems(
                 PostUpdate,
                 (

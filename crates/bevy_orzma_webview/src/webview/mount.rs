@@ -338,7 +338,7 @@ fn spawn_webview(
     // plus exactly those components; adding one double-attaches input
     // forwarding and display allocation on top of orzma's inline routing.
     // The same goes for picking components: bevy_cef writes `FocusedWebview`
-    // on `Pointer<Press>`, which would bypass orzma's focus handling.
+    // on `PointerPress`, which would bypass orzma's focus handling.
     let mut entity = params.commands.spawn((
         ChildOf(pane),
         WebviewSource::new(spec.url()),
