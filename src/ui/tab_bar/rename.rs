@@ -12,7 +12,7 @@ use bevy::input_focus::{AutoFocus, FocusedInput, InputFocus};
 use bevy::picking::PickingSettings;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems, TextCursorStyle};
-use bevy::ui_widgets::SelectAllOnFocus;
+use bevy::ui_widgets::{SelectAllOnFocus, TextInput};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_webview::RequestWebviewFocus;
 use bevy_orzmux::prelude::{
@@ -266,6 +266,7 @@ fn start_rename(
     }
     let field = commands
         .spawn((
+            TextInput,
             EditableText {
                 max_characters: Some(Tab::MAX_NAME_CHARS),
                 allow_newlines: false,
@@ -421,8 +422,13 @@ fn align_multi_click_interval(mut settings: ResMut<PickingSettings>, mouse: Res<
 mod tests {
     use super::*;
     use bevy::camera::NormalizedRenderTarget;
+    use bevy::input::InputPlugin;
+    use bevy::input_focus::{FocusCause, InputDispatchPlugin};
     use bevy::picking::backend::HitData;
+    use bevy::picking::events::{PointerRelease, PointerState};
     use bevy::picking::pointer::{Location, PointerId};
+    use bevy::ui_widgets::TextInputPlugin;
+    use bevy::window::{Ime, PrimaryWindow};
     use bevy_orzmux::prelude::TabEntry;
     use orzmux::prelude::PaneId;
 
@@ -575,6 +581,98 @@ mod tests {
             })
             .add_systems(PostUpdate, finish_rename.run_if(rename_is_ending));
         app
+    }
+
+    /// An app that runs the text-input widget and focused-input dispatch,
+    /// with a rename of tab 1 in progress whose field holds "build" and has
+    /// the keyboard focus. Returns the app and its primary window.
+    fn widget_rename_app() -> (App, Entity) {
+        let mut app = finish_app();
+        app.add_plugins((InputPlugin, InputDispatchPlugin, TextInputPlugin))
+            .add_message::<Ime>()
+            .add_message::<PointerRelease>()
+            .init_resource::<PointerState>()
+            .init_resource::<UiScale>()
+            .init_resource::<TabRename>()
+            .init_resource::<CurrentTabs>()
+            .init_resource::<PendingTabRename>()
+            .init_resource::<FocusedWebview>()
+            .add_observer(start_rename);
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        {
+            let mut tabs = app.world_mut().resource_mut::<CurrentTabs>();
+            tabs.entries = vec![TabEntry {
+                id: TabId(1),
+                name: None,
+                active_pane: PaneId(1),
+            }];
+            tabs.active = Some(TabId(1));
+        }
+        let tab = app.world_mut().spawn(TabButton { id: TabId(1) }).id();
+        app.world_mut()
+            .spawn((TabLabel, Node::default(), ChildOf(tab)));
+        app.update();
+
+        app.world_mut().trigger(StartTabRename { tab: None });
+        app.update();
+        let field = app
+            .world()
+            .resource::<TabRename>()
+            .field()
+            .expect("the rename has a field");
+        app.world_mut()
+            .entity_mut(field)
+            .insert(EditableText::new("build"));
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(field, FocusCause::Navigated);
+        (app, window)
+    }
+
+    fn press_key(app: &mut App, window: Entity, key_code: KeyCode, logical_key: Key) {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window,
+        });
+    }
+
+    /// Asserts that Enter commits the typed name while the text-input
+    /// widget also handles the field's keys.
+    ///
+    /// Case: the user renames a tab, types "build", and presses Enter.
+    #[test]
+    fn enter_commits_a_rename_the_text_input_widget_handles() {
+        let (mut app, window) = widget_rename_app();
+        press_key(&mut app, window, KeyCode::Enter, Key::Enter);
+        app.update();
+        assert!(!app.world().resource::<TabRename>().is_active());
+        assert_eq!(
+            app.world().resource::<Requested>().0,
+            vec![TabAction::Rename {
+                tab: TabId(1),
+                name: Some("build".into())
+            }]
+        );
+    }
+
+    /// Asserts that Esc discards the typed name while the text-input widget
+    /// also handles the field's keys.
+    ///
+    /// Case: the user renames a tab, types "build", and presses Esc.
+    #[test]
+    fn escape_cancels_a_rename_the_text_input_widget_handles() {
+        let (mut app, window) = widget_rename_app();
+        press_key(&mut app, window, KeyCode::Escape, Key::Escape);
+        app.update();
+        assert!(!app.world().resource::<TabRename>().is_active());
+        assert!(app.world().resource::<Requested>().0.is_empty());
     }
 
     fn press_on(entity: Entity) -> PointerPress {

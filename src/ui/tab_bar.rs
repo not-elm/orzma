@@ -605,6 +605,7 @@ mod tests {
     use bevy::text::{EditableText, TextCursorStyle, TextPlugin};
     use bevy::ui::update::update_clipping_system;
     use bevy::ui::{CalculatedClip, UiPlugin};
+    use bevy::ui_widgets::TextInput;
     use bevy_orzmux::prelude::PendingTabMove;
     use bevy_orzmux::prelude::{PaneRegistry, PendingTabRename, RenameInFlight, TtyTitle};
     use orzmux::prelude::CommandSeq;
@@ -967,6 +968,25 @@ mod tests {
             listed_tabs(&mut app),
             expected_tabs(&[(2, "vim"), (3, "Tab 2"), (1, "Tab 3")])
         );
+    }
+
+    /// Asserts that the rename field a double-click opens carries
+    /// `TextInput`.
+    ///
+    /// Case: the user double-clicks a tab to rename it and starts typing.
+    #[test]
+    fn the_rename_field_is_a_text_input() {
+        let mut app = app_with_tab_bar();
+        set_tabs(&mut app, &[1, 2], 2);
+        app.update();
+        app.update();
+        let second = tab_of(&mut app, 2);
+
+        app.world_mut().trigger(clicks(second, 2));
+        app.update();
+
+        let field = rename_field_in(app.world(), second);
+        assert!(app.world().entity(field).contains::<TextInput>());
     }
 
     /// Asserts that a committed rename shows in the label on the update
