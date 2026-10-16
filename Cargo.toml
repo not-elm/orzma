@@ -40,6 +40,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 url = "2"
+winit = { version = "0.30", default-features = false }
 
 [dev-dependencies]
 bevy_orzmux = { path = "crates/bevy_orzmux", features = ["test-support"] }
@@ -48,9 +49,6 @@ tempfile = { workspace = true }
 
 [build-dependencies]
 embed-resource = "3"
-
-[target.'cfg(any(target_os = "macos", windows))'.dependencies]
-winit = "0.30"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
