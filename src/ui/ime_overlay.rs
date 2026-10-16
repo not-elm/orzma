@@ -42,18 +42,14 @@ impl Plugin for ImeOverlayPlugin {
                 spawn_ime_overlay_once.after(TerminalFontInitSet::InitCellMetrics),
             )
             // NOTE: must run BEFORE `UiSystems::Content`. Bevy's
-            // `measure_text_system` runs in `UiSystems::Content`
-            // (`bevy_ui-0.20.0/src/lib.rs:248-251`), and bevy_text's
-            // `detect_text_needs_rerender`, which Content's
-            // `update_inline_image_boxes` precedes
-            // (`bevy_ui-0.20.0/src/lib.rs:244-247`), is where changed ECS
-            // `TextSpan`s are detected (`bevy_text-0.20.0/src/text.rs:1562`).
-            // If we mutate `TextSpan.0` after that, detection sees no change
-            // this frame, `text_system` in `PostLayout` is gated off
-            // (`bevy_ui-0.20.0/src/widget/text.rs:406`), the root's
-            // `ComputedNode` stays at 0×0, and `bevy_ui_render` skips empty
-            // nodes (`bevy_ui_render-0.20.0/src/lib.rs:1515`), so the inline
-            // preedit is invisible.
+            // `measure_text_system` runs in `UiSystems::Content`, and
+            // bevy_text's `detect_text_needs_rerender`, which Content's
+            // `update_inline_image_boxes` precedes, is where changed ECS
+            // `TextSpan`s are detected. If we mutate `TextSpan.0` after that,
+            // detection sees no change this frame, `text_system` in
+            // `PostLayout` skips the node, the root's `ComputedNode` stays at
+            // 0×0, and bevy_ui_render's `extract_text_sections` skips empty
+            // nodes, so the inline preedit is invisible.
             //
             // The anchor's `UiGlobalTransform` and `ComputedNode.size` read
             // here may be from the prior frame's `PostLayout`: `UiSystems` is

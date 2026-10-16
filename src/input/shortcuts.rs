@@ -46,9 +46,6 @@ impl Plugin for ShortcutsPlugin {
             .add_systems(
                 Update,
                 (
-                    // NOTE: intentionally not gated on `on_message::<RawWinitWindowEvent>` —
-                    // it must run on frames without key events so a mouse press (e.g.
-                    // Cmd+click mid-tap) can disarm `state.armed`; gating it would break that.
                     detect_modifier_tap
                         .in_set(LeaderGate::Detect)
                         .run_if(tap_leader_enabled),
@@ -1717,6 +1714,11 @@ mod tests {
         state: ButtonState::Released,
         repeat: false,
     };
+    const CMD_REPEAT: TapInput = TapInput::Key {
+        key_code: KeyCode::SuperLeft,
+        state: ButtonState::Pressed,
+        repeat: true,
+    };
 
     fn tap_frame(inputs: &[TapInput], now_ms: u64) -> TapFrame<'_> {
         TapFrame {
@@ -1888,14 +1890,9 @@ mod tests {
     /// briefly and releases it within the timeout.
     #[test]
     fn a_repeat_of_the_held_modifier_keeps_the_tap() {
-        let repeat = TapInput::Key {
-            key_code: KeyCode::SuperLeft,
-            state: ButtonState::Pressed,
-            repeat: true,
-        };
         let mut armed = None;
         tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta);
-        tap_frame(&[repeat], 250).step(&mut armed, TapModifier::Meta);
+        tap_frame(&[CMD_REPEAT], 250).step(&mut armed, TapModifier::Meta);
         assert_eq!(
             tap_frame(&[CMD_UP], 290).step(&mut armed, TapModifier::Meta),
             TapOutcome::Fired
@@ -1909,14 +1906,9 @@ mod tests {
     /// and releases it after the timeout.
     #[test]
     fn a_repeat_of_the_held_modifier_does_not_rearm_the_tap() {
-        let repeat = TapInput::Key {
-            key_code: KeyCode::SuperLeft,
-            state: ButtonState::Pressed,
-            repeat: true,
-        };
         let mut armed = None;
         tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta);
-        tap_frame(&[repeat], 250).step(&mut armed, TapModifier::Meta);
+        tap_frame(&[CMD_REPEAT], 250).step(&mut armed, TapModifier::Meta);
         assert_eq!(
             tap_frame(&[CMD_UP], 350).step(&mut armed, TapModifier::Meta),
             TapOutcome::None

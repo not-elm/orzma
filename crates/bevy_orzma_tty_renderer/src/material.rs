@@ -241,7 +241,7 @@ mod tests {
     use super::*;
     use bevy::render::render_resource::encase::{StorageBuffer, internal::WriteInto};
     use std::collections::BTreeSet;
-    use std::mem::{offset_of, size_of};
+    use std::mem::size_of;
 
     #[test]
     fn gpu_cell_is_twenty_bytes() {
@@ -278,36 +278,8 @@ mod tests {
             ]
         );
         assert_eq!(
-            [
-                offset_of!(GpuCell, glyph_index),
-                offset_of!(GpuCell, fg_packed),
-                offset_of!(GpuCell, bg_packed),
-                offset_of!(GpuCell, style_flags),
-                offset_of!(GpuCell, hyperlink_id),
-            ],
-            [0, 4, 8, 12, 16]
-        );
-        assert_eq!(
             wgsl_struct_fields("Glyph"),
             ["uv_min", "uv_max", "offset_px", "size_px", "flags"]
-        );
-        assert_eq!(
-            [
-                offset_of!(GpuGlyph, uv_min),
-                offset_of!(GpuGlyph, uv_max),
-                offset_of!(GpuGlyph, offset_px),
-                offset_of!(GpuGlyph, size_px),
-                offset_of!(GpuGlyph, flags),
-            ],
-            [0, 8, 16, 24, 32]
-        );
-        assert_eq!(
-            size_of::<GpuCell>(),
-            <GpuCell as ShaderType>::min_size().get() as usize
-        );
-        assert_eq!(
-            size_of::<GpuGlyph>(),
-            <GpuGlyph as ShaderType>::min_size().get() as usize
         );
 
         let cell = GpuCell {

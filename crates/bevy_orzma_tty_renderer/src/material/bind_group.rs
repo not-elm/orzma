@@ -68,56 +68,59 @@ impl AsBindGroup for TerminalUiMaterial {
             .get(&self.atlas)
             .ok_or(AsBindGroupError::RetryNextUpdate)?;
 
-        let bindings = &mut output.binding_resources;
-        bindings.reserve(OVERLAY_TEX_BINDING_BASE as usize + OVERLAY_SLOTS);
-        bindings.push((
-            0,
-            UnpreparedBindingResource::Buffer(render_device.create_buffer_with_data(
-                &BufferInitDescriptor {
-                    label: Some("terminal_params"),
-                    usage: BufferUsages::UNIFORM,
-                    contents: params_buffer.as_ref(),
-                },
-            )),
-        ));
-        bindings.push((1, UnpreparedBindingResource::Buffer(cells.buffer.clone())));
-        bindings.push((2, UnpreparedBindingResource::Buffer(glyphs.buffer.clone())));
-        bindings.push((
-            3,
-            UnpreparedBindingResource::TextureView(
-                TextureViewDimension::D2,
-                atlas.texture_view.clone(),
-            ),
-        ));
-        bindings.push((
-            4,
-            UnpreparedBindingResource::Sampler(
-                SamplerBindingType::Filtering,
-                atlas.sampler.clone(),
-            ),
-        ));
-        bindings.push((
-            5,
-            UnpreparedBindingResource::Sampler(
-                SamplerBindingType::Filtering,
-                fallback_image.d2.sampler.clone(),
-            ),
-        ));
-
         // NOTE: A `None` slot, OR a `Some` whose GpuImage is not yet loaded,
         // binds the fallback view. The shader never samples it (the `rect.z==0`
         // sentinel gates it), and this avoids stalling the whole material's bind
         // group on a single mid-load overlay texture.
-        for (i, handle) in self.overlays.iter().enumerate() {
+        let overlays = self.overlays.iter().enumerate().map(|(i, handle)| {
             let view = handle.as_ref().and_then(|h| images.get(h)).map_or_else(
                 || fallback_image.d2.texture_view.clone(),
                 |img| img.texture_view.clone(),
             );
-            bindings.push((
+            (
                 OVERLAY_TEX_BINDING_BASE + i as u32,
                 UnpreparedBindingResource::TextureView(TextureViewDimension::D2, view),
-            ));
-        }
+            )
+        });
+        output.binding_resources.extend(
+            [
+                (
+                    0,
+                    UnpreparedBindingResource::Buffer(render_device.create_buffer_with_data(
+                        &BufferInitDescriptor {
+                            label: Some("terminal_params"),
+                            usage: BufferUsages::UNIFORM,
+                            contents: params_buffer.as_ref(),
+                        },
+                    )),
+                ),
+                (1, UnpreparedBindingResource::Buffer(cells.buffer.clone())),
+                (2, UnpreparedBindingResource::Buffer(glyphs.buffer.clone())),
+                (
+                    3,
+                    UnpreparedBindingResource::TextureView(
+                        TextureViewDimension::D2,
+                        atlas.texture_view.clone(),
+                    ),
+                ),
+                (
+                    4,
+                    UnpreparedBindingResource::Sampler(
+                        SamplerBindingType::Filtering,
+                        atlas.sampler.clone(),
+                    ),
+                ),
+                (
+                    5,
+                    UnpreparedBindingResource::Sampler(
+                        SamplerBindingType::Filtering,
+                        fallback_image.d2.sampler.clone(),
+                    ),
+                ),
+            ]
+            .into_iter()
+            .chain(overlays),
+        );
         Ok(())
     }
 

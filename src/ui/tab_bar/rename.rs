@@ -602,6 +602,16 @@ mod tests {
             .world_mut()
             .spawn((Window::default(), PrimaryWindow))
             .id();
+        let field = start_rename_of_tab_one(&mut app);
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(field, FocusCause::Navigated);
+        (app, window)
+    }
+
+    /// Starts a rename of tab 1, the only tab, and types "build" into its
+    /// field. Returns the field.
+    fn start_rename_of_tab_one(app: &mut App) -> Entity {
         {
             let mut tabs = app.world_mut().resource_mut::<CurrentTabs>();
             tabs.entries = vec![TabEntry {
@@ -626,20 +636,14 @@ mod tests {
         app.world_mut()
             .entity_mut(field)
             .insert(EditableText::new("build"));
-        app.world_mut()
-            .resource_mut::<InputFocus>()
-            .set(field, FocusCause::Navigated);
-        (app, window)
+        field
     }
 
     fn press_key(app: &mut App, window: Entity, key_code: KeyCode, logical_key: Key) {
         app.world_mut().write_message(KeyboardInput {
             key_code,
-            logical_key,
-            state: ButtonState::Pressed,
-            text: None,
-            repeat: false,
             window,
+            ..key(logical_key, ButtonState::Pressed)
         });
     }
 
@@ -846,35 +850,12 @@ mod tests {
                 Update,
                 commit_on_webview_focus.run_if(resource_exists_and_changed::<FocusedWebview>),
             );
-        {
-            let mut tabs = app.world_mut().resource_mut::<CurrentTabs>();
-            tabs.entries = vec![TabEntry {
-                id: TabId(1),
-                name: None,
-                active_pane: PaneId(1),
-            }];
-            tabs.active = Some(TabId(1));
-        }
-        let tab = app.world_mut().spawn(TabButton { id: TabId(1) }).id();
-        app.world_mut()
-            .spawn((TabLabel, Node::default(), ChildOf(tab)));
         let page = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
-        app.update();
-
-        app.world_mut().trigger(StartTabRename { tab: None });
-        app.update();
+        start_rename_of_tab_one(&mut app);
 
         assert_eq!(app.world().resource::<FocusedWebview>().0, None);
         assert!(app.world().resource::<TabRename>().can_end());
-        let field = app
-            .world()
-            .resource::<TabRename>()
-            .field()
-            .expect("the rename has a field");
-        app.world_mut()
-            .entity_mut(field)
-            .insert(EditableText::new("build"));
 
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
         app.update();
