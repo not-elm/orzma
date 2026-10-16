@@ -69,6 +69,7 @@ impl AsBindGroup for TerminalUiMaterial {
             .ok_or(AsBindGroupError::RetryNextUpdate)?;
 
         let bindings = &mut output.binding_resources;
+        bindings.reserve(OVERLAY_TEX_BINDING_BASE as usize + OVERLAY_SLOTS);
         bindings.push((
             0,
             UnpreparedBindingResource::Buffer(render_device.create_buffer_with_data(

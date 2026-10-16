@@ -1930,7 +1930,6 @@ mod tests {
     /// state changes.
     #[test]
     fn only_key_events_and_focus_losses_reach_the_tap_detector() {
-        use winit::event::WindowEvent;
         use winit::keyboard::ModifiersState;
 
         assert_eq!(
