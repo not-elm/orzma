@@ -27,7 +27,7 @@ impl Plugin for SurfacePlugin {
 /// Injects a `MaterialNode<TerminalUiMaterial>` whenever `OrzmaTerminal` is
 /// added to an entity, allocating the GPU material on demand.
 fn on_add_inject_render(
-    ev: On<Add, OrzmaTerminal>,
+    ev: On<Add<OrzmaTerminal>>,
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
 ) {
@@ -59,7 +59,7 @@ mod tests {
             app.world()
                 .entity(entity)
                 .contains::<MaterialNode<TerminalUiMaterial>>(),
-            "On<Add, OrzmaTerminal> must inject MaterialNode<TerminalUiMaterial>",
+            "On<Add<OrzmaTerminal>> must inject MaterialNode<TerminalUiMaterial>",
         );
     }
 }

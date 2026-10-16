@@ -290,6 +290,7 @@ fn start_rename(
                 selection_color: SELECTION_BG,
                 unfocused_selection_color: Color::NONE,
                 selected_text_color: None,
+                ..default()
             },
             Node {
                 flex_grow: 1.0,
@@ -329,7 +330,7 @@ fn on_field_key(
 }
 
 /// Asks to commit when a press lands anywhere but the field.
-fn commit_on_outside_press(ev: On<Pointer<Press>>, mut rename: ResMut<TabRename>) {
+fn commit_on_outside_press(ev: On<PointerPress>, mut rename: ResMut<TabRename>) {
     let origin = ev.original_event_target();
     if ev.entity != origin || rename.field() == Some(origin) || !rename.can_end() {
         return;
@@ -582,20 +583,23 @@ mod tests {
         app
     }
 
-    fn press_on(entity: Entity) -> Pointer<Press> {
-        let event = Press {
+    fn press_on(entity: Entity) -> PointerPress {
+        PointerPress {
+            entity,
+            pointer: Pointer::new(
+                PointerId::Mouse,
+                Location {
+                    target: NormalizedRenderTarget::None {
+                        width: 800,
+                        height: 600,
+                    },
+                    position: Vec2::ZERO,
+                },
+            ),
             button: PointerButton::Primary,
             hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
             count: 1,
-        };
-        let location = Location {
-            target: NormalizedRenderTarget::None {
-                width: 800,
-                height: 600,
-            },
-            position: Vec2::ZERO,
-        };
-        Pointer::new(PointerId::Mouse, location, event, entity)
+        }
     }
 
     /// Asserts that finishing a committed rename sends the field's name,

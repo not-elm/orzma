@@ -21,7 +21,7 @@ impl Plugin for WindowMonitorPlugin {
 // TODO: remove this plugin once Bevy includes bevyengine/bevy#25427 (0.19.2 /
 // 0.20), which stops despawning a monitor's windows along with the monitor.
 fn detach_windows_from_lost_monitor(
-    event: On<Despawn, HasWindows>,
+    event: On<Despawn<HasWindows>>,
     mut commands: Commands,
     mut monitors: Query<&mut HasWindows>,
 ) {

@@ -128,7 +128,7 @@ fn refresh_indicator(
 /// chip flips to `Display::None` before the next render — no per-frame poll
 /// needed.
 fn hide_indicator_on_vi_mode_exit(
-    ev: On<Remove, ViModeState>,
+    ev: On<Remove<ViModeState>>,
     hosts: Query<&Children>,
     mut chips: Query<&mut Node, With<ViModeIndicator>>,
 ) {

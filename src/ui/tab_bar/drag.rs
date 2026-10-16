@@ -176,7 +176,7 @@ fn passes_threshold(dx: f32) -> bool {
 /// Starts following a primary press on a tab once the pointer moves,
 /// unless the tab is being renamed.
 fn on_drag_start(
-    ev: On<Pointer<DragStart>>,
+    ev: On<PointerDragStart>,
     mut drag: ResMut<TabDrag>,
     buttons: Query<&TabButton>,
     strips: Query<&ScrollPosition, With<TabStrip>>,
@@ -203,7 +203,7 @@ fn on_drag_start(
 /// pointer, and, once the press is a drag, draws the tab above its
 /// neighbours and scrolls the strip near its edges.
 fn on_drag(
-    ev: On<Pointer<Drag>>,
+    ev: On<PointerDrag>,
     mut drag: ResMut<TabDrag>,
     mut placements: Query<(&mut UiTransform, &mut ZIndex), With<TabButton>>,
     mut strips: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<TabStrip>>,
@@ -231,7 +231,7 @@ fn on_drag(
     let strip_left =
         strip_transform.translation.x * strip_node.inverse_scale_factor - strip_width / 2.0;
     let first_left = strip_left + TAB_STRIP_LEFT_PADDING_PX;
-    let pointer_x = ev.pointer_location.position.x;
+    let pointer_x = ev.pointer.position.x;
     let dx = ev.distance.x;
     let target = drop_index(
         pointer_x,
@@ -270,7 +270,7 @@ fn on_drag(
 /// strip's stacking, and sends the move when the press was a drag to
 /// another slot.
 fn on_drag_end(
-    ev: On<Pointer<DragEnd>>,
+    ev: On<PointerDragEnd>,
     mut commands: Commands,
     mut drag: ResMut<TabDrag>,
     mut placements: Query<(&mut UiTransform, &mut ZIndex), With<TabButton>>,
