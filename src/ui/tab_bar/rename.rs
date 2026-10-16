@@ -12,7 +12,6 @@ use bevy::input_focus::{AutoFocus, FocusedInput, InputFocus};
 use bevy::picking::PickingSettings;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems, TextCursorStyle};
-use bevy::ui::widget::measure_text_system;
 use bevy::ui_widgets::SelectAllOnFocus;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_webview::RequestWebviewFocus;
@@ -90,8 +89,7 @@ impl TabRename {
 }
 
 /// The `PostUpdate` slot where an ending rename is committed or discarded,
-/// after the field's edits of the frame are applied and before the UI
-/// measures text, so the tab shows the committed name in the same frame.
+/// after the field's edits of the frame are applied.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum RenameSystems {
     /// Committing or discarding the ending rename.
@@ -171,12 +169,7 @@ pub(crate) struct TabRenamePlugin;
 impl Plugin for TabRenamePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TabRename>()
-            .configure_sets(
-                PostUpdate,
-                RenameSystems::Finish
-                    .after(EditableTextSystems)
-                    .before(measure_text_system),
-            )
+            .configure_sets(PostUpdate, RenameSystems::Finish.after(EditableTextSystems))
             .add_observer(start_rename)
             .add_observer(commit_on_outside_press)
             .add_systems(
@@ -347,7 +340,8 @@ fn commit_on_webview_focus(mut rename: ResMut<TabRename>, focused: Res<FocusedWe
 
 /// Commits or discards the ending rename, restores the label, removes the
 /// field, and takes the keyboard focus off it. A committed name is sent as
-/// a rename request; the tab bar shows it in the same frame.
+/// a rename request; the tab bar lays out the restored label and the
+/// committed name on the next frame.
 fn finish_rename(
     mut commands: Commands,
     mut rename: ResMut<TabRename>,

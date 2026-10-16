@@ -5,7 +5,7 @@ use crate::font::TerminalUiFont;
 use crate::session::spawn::PaneSpawnRequest;
 use crate::ui::UiRoot;
 use crate::ui::tab_bar::drag::{TabDrag, TabDragPlugin};
-use crate::ui::tab_bar::rename::{RenameSystems, StartTabRename, TabRename, TabRenamePlugin};
+use crate::ui::tab_bar::rename::{StartTabRename, TabRename, TabRenamePlugin};
 use bevy::input::mouse::MouseScrollPixelsPerLine;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
@@ -88,16 +88,13 @@ impl Plugin for TabBarPlugin {
             )
             .add_systems(
                 PostUpdate,
-                label_tabs
-                    .after(RenameSystems::Finish)
-                    .before(measure_text_system)
-                    .run_if(
-                        resource_exists_and_changed::<CurrentTabs>
-                            .or_eager(resource_exists_and_changed::<PendingTabRename>)
-                            .or_eager(resource_exists_and_changed::<TabDrag>)
-                            .or_eager(any_match_filter::<Added<TabButton>>)
-                            .or_eager(any_match_filter::<Changed<TtyTitle>>),
-                    ),
+                label_tabs.before(measure_text_system).run_if(
+                    resource_exists_and_changed::<CurrentTabs>
+                        .or_eager(resource_exists_and_changed::<PendingTabRename>)
+                        .or_eager(resource_exists_and_changed::<TabDrag>)
+                        .or_eager(any_match_filter::<Added<TabButton>>)
+                        .or_eager(any_match_filter::<Changed<TtyTitle>>),
+                ),
             )
             .add_systems(
                 PostUpdate,
@@ -601,13 +598,13 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::input::mouse::MouseScrollUnit;
     use bevy::input::touch::TouchPhase;
-    use bevy::input_focus::InputFocus;
+    use bevy::input_focus::{InputFocus, InputFocusPlugin};
     use bevy::math::Affine2;
     use bevy::picking::backend::HitData;
     use bevy::picking::pointer::{Location, PointerId};
-    use bevy::text::{EditableText, TextCursorStyle};
-    use bevy::ui::CalculatedClip;
+    use bevy::text::{EditableText, TextCursorStyle, TextPlugin};
     use bevy::ui::update::update_clipping_system;
+    use bevy::ui::{CalculatedClip, UiPlugin};
     use bevy_orzmux::prelude::PendingTabMove;
     use bevy_orzmux::prelude::{PaneRegistry, PendingTabRename, RenameInFlight, TtyTitle};
     use orzmux::prelude::CommandSeq;
@@ -972,12 +969,12 @@ mod tests {
         );
     }
 
-    /// Asserts that a committed rename shows in the label in the same
-    /// update, before the backend answers.
+    /// Asserts that a committed rename shows in the label on the update
+    /// after the commit, before the backend answers.
     ///
     /// Case: the user renames the first tab to "logs" and presses Enter.
     #[test]
-    fn a_committed_rename_shows_in_the_same_update() {
+    fn a_committed_rename_shows_on_the_next_update() {
         let mut app = app_with_tab_bar();
         app.add_observer(
             |ev: On<RequestTabAction>, mut pending: ResMut<PendingTabRename>| {
@@ -1000,7 +997,35 @@ mod tests {
         let field = app.world_mut().spawn(EditableText::new("logs")).id();
         app.insert_resource(TabRename::ending_for_test(TabId(1), field, label, true));
         app.update();
+        app.update();
         assert_eq!(listed_tabs(&mut app), expected_tabs(&[(1, "logs")]));
+    }
+
+    /// Asserts that the tab bar's `PostUpdate` systems order against Bevy
+    /// UI's text measuring and text editing systems without a cycle.
+    ///
+    /// Case: orzma starts with the UI, text, and input focus plugins, and
+    /// the first frame builds the `PostUpdate` schedule.
+    #[test]
+    fn the_tab_bar_orders_against_the_ui_text_systems_without_a_cycle() {
+        let mut app = app_with_tab_bar();
+        app.add_plugins((
+            AssetPlugin::default(),
+            TextPlugin,
+            UiPlugin,
+            InputFocusPlugin,
+        ));
+        app.finish();
+        app.cleanup();
+        let built = app
+            .world_mut()
+            .schedule_scope(PostUpdate, |world, schedule| {
+                schedule
+                    .initialize(world)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string(schedule.graph(), world))
+            });
+        assert_eq!(built, Ok(()));
     }
 
     /// Asserts that one button per tab exists in display order, and
