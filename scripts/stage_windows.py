@@ -21,7 +21,7 @@ TARGET_TRIPLE = "x86_64-pc-windows-msvc"
 CARGO_PROFILE = "dist"
 COMPANION_BINS = ("orzbrowser", "orzmd")
 RENDER_PROCESS_BIN = "bevy_cef_render_process"
-RENDER_PROCESS_VERSION = "0.13.0"
+RENDER_PROCESS_VERSION = "0.14.0"
 # The render process must be built from the same bevy_cef release orzma links, so the
 # pin above is checked against what Cargo.lock resolves for this crate.
 RENDER_PROCESS_CRATE = "bevy_cef_core"

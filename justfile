@@ -2,11 +2,10 @@
 # docs/superpowers/specs/2026-06-21-makefile-to-just-migration-design.md.
 # https://just.systems/
 
-# Must match what Cargo resolves for bevy_cef_core's `cef` requirement, not the
-# version its manifest names: that is a caret requirement and Cargo ignores the
-# `+build` metadata when comparing, so it always resolves to the range maximum.
-# A lower pin ships a framework whose ABI the linked bindings do not match.
-cef_version := "152.4.0+152.0.8"
+# Must equal the exact `cef` version bevy_cef_core pins with `=`, including the
+# `+build` metadata Cargo.lock records for `cef-dll-sys`. A different pin ships a
+# framework whose ABI the linked bindings do not match.
+cef_version := "154.5.0+154.0.34"
 cef_dir := home_directory() / ".local/share/cef"
 cef_framework_lib := cef_dir / "Chromium Embedded Framework.framework" / "Libraries"
 # cef-dll-sys downloads the pinned CEF into a versioned subdir here and reuses it.
@@ -14,7 +13,7 @@ cef_framework_lib := cef_dir / "Chromium Embedded Framework.framework" / "Librar
 cef_cache_dir := home_directory() / ".cache" / "orzma" / "cef"
 cef_debug_render_process := "bevy_cef_debug_render_process"
 bevy_cef_render_process := "bevy_cef_render_process"
-bevy_cef_version := "0.13.0"
+bevy_cef_version := "0.14.0"
 # Must match .config/dotnet-tools.json. WiX 7 requires accepting the OSMF EULA before
 # any build runs; v6 does not, so the MSI toolchain stays on 6.x.
 wix_version := "6.0.2"
