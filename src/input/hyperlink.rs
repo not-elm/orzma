@@ -323,7 +323,7 @@ struct CursorIconInserted;
 /// Records the system cursor inserted on the primary window as CEF's latest
 /// choice, and reports every insert as a `CursorIconInserted`.
 fn record_cef_cursor(
-    ev: On<Insert, CursorIcon>,
+    ev: On<Insert<CursorIcon>>,
     mut cef_cursor: ResMut<CefCursor>,
     mut inserted: MessageWriter<CursorIconInserted>,
     windows: Query<&CursorIcon, With<PrimaryWindow>>,

@@ -122,7 +122,7 @@ fn mirror_host_focus(
 
 /// Releases the webview focus when the webview that holds it is removed,
 /// whether the host ended its mount or its pane was despawned.
-fn release_removed_focus(ev: On<Remove, Webview>, mut focused: ResMut<FocusedWebview>) {
+fn release_removed_focus(ev: On<Remove<Webview>>, mut focused: ResMut<FocusedWebview>) {
     if focused.0 == Some(ev.entity) {
         set_focused_webview(&mut focused, None);
     }

@@ -5,8 +5,8 @@ use crate::font::TerminalUiFont;
 use crate::session::spawn::PaneSpawnRequest;
 use crate::ui::UiRoot;
 use crate::ui::tab_bar::drag::{TabDrag, TabDragPlugin};
-use crate::ui::tab_bar::rename::{RenameSystems, StartTabRename, TabRename, TabRenamePlugin};
-use bevy::input::mouse::MouseScrollUnit;
+use crate::ui::tab_bar::rename::{StartTabRename, TabRename, TabRenamePlugin};
+use bevy::input::mouse::MouseScrollPixelsPerLine;
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy::ui::widget::measure_text_system;
@@ -88,16 +88,13 @@ impl Plugin for TabBarPlugin {
             )
             .add_systems(
                 PostUpdate,
-                label_tabs
-                    .after(RenameSystems::Finish)
-                    .before(measure_text_system)
-                    .run_if(
-                        resource_exists_and_changed::<CurrentTabs>
-                            .or_eager(resource_exists_and_changed::<PendingTabRename>)
-                            .or_eager(resource_exists_and_changed::<TabDrag>)
-                            .or_eager(any_match_filter::<Added<TabButton>>)
-                            .or_eager(any_match_filter::<Changed<TtyTitle>>),
-                    ),
+                label_tabs.before(measure_text_system).run_if(
+                    resource_exists_and_changed::<CurrentTabs>
+                        .or_eager(resource_exists_and_changed::<PendingTabRename>)
+                        .or_eager(resource_exists_and_changed::<TabDrag>)
+                        .or_eager(any_match_filter::<Added<TabButton>>)
+                        .or_eager(any_match_filter::<Changed<TtyTitle>>),
+                ),
             )
             .add_systems(
                 PostUpdate,
@@ -482,7 +479,7 @@ fn label_tabs(
 /// a primary double-click starts renaming it instead; a click that ends a
 /// drag of that tab, or lands on a tab being renamed, does nothing.
 fn on_tab_click(
-    ev: On<Pointer<Click>>,
+    ev: On<PointerClick>,
     mut commands: Commands,
     buttons: Query<&TabButton>,
     drag: Res<TabDrag>,
@@ -509,7 +506,7 @@ fn on_tab_click(
 /// A primary click on a close button requests its tab's close, unless the
 /// click ends a drag of that tab; no click on it reaches the tab.
 fn on_close_click(
-    mut ev: On<Pointer<Click>>,
+    mut ev: On<PointerClick>,
     mut commands: Commands,
     parents: Query<&ChildOf>,
     buttons: Query<&TabButton>,
@@ -535,41 +532,39 @@ fn on_close_click(
 }
 
 /// A primary click on the plus button requests a new tab.
-fn on_new_tab_click(ev: On<Pointer<Click>>, mut commands: Commands) {
+fn on_new_tab_click(ev: On<PointerClick>, mut commands: Commands) {
     if ev.button == PointerButton::Primary {
         commands.trigger(PaneSpawnRequest { at: NewPaneAt::Tab });
     }
 }
 
 /// Marks the tab the pointer entered as hovered.
-fn on_tab_enter(ev: On<Pointer<Enter>>, mut commands: Commands) {
+fn on_tab_enter(ev: On<PointerEnter>, mut commands: Commands) {
     commands.entity(ev.entity).try_insert(TabHovered);
 }
 
 /// Clears the hover mark of the tab the pointer left.
-fn on_tab_leave(ev: On<Pointer<Leave>>, mut commands: Commands) {
+fn on_tab_leave(ev: On<PointerLeave>, mut commands: Commands) {
     commands.entity(ev.entity).try_remove::<TabHovered>();
 }
 
 /// Maps a purely vertical wheel over the strip to horizontal scrolling,
 /// clamped to the strip's overflow; a wheel with horizontal travel is left
-/// alone.
+/// alone. A line-unit wheel scrolls by [`MouseScrollPixelsPerLine`] per line.
 fn scroll_strip_vertically(
-    ev: On<Pointer<Scroll>>,
+    ev: On<PointerScroll>,
     mut strips: Query<(&mut ScrollPosition, &ComputedNode), With<TabStrip>>,
+    pixels_per_line: Res<MouseScrollPixelsPerLine>,
 ) {
-    if ev.x != 0.0 || ev.y == 0.0 {
+    let scroll = ev.to_pixels(&pixels_per_line);
+    if scroll.x != 0.0 || scroll.y == 0.0 {
         return;
     }
     let Ok((mut position, node)) = strips.get_mut(ev.entity) else {
         return;
     };
-    let unit = match ev.unit {
-        MouseScrollUnit::Line => MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
-        MouseScrollUnit::Pixel => 1.0,
-    };
     let max = ((node.content_size().x - node.size().x) * node.inverse_scale_factor).max(0.0);
-    let next = (position.x - ev.y * unit).clamp(0.0, max);
+    let next = (position.x - scroll.y).clamp(0.0, max);
     if position.x != next {
         position.x = next;
     }
@@ -601,19 +596,21 @@ mod tests {
     use super::*;
     use bevy::camera::NormalizedRenderTarget;
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::input_focus::InputFocus;
+    use bevy::input::mouse::MouseScrollUnit;
+    use bevy::input::touch::TouchPhase;
+    use bevy::input_focus::{InputFocus, InputFocusPlugin};
     use bevy::math::Affine2;
     use bevy::picking::backend::HitData;
     use bevy::picking::pointer::{Location, PointerId};
-    use bevy::text::{EditableText, TextCursorStyle};
-    use bevy::ui::CalculatedClip;
+    use bevy::text::{EditableText, TextCursorStyle, TextPlugin};
     use bevy::ui::update::update_clipping_system;
+    use bevy::ui::{CalculatedClip, UiPlugin};
+    use bevy::ui_widgets::TextInput;
     use bevy_orzmux::prelude::PendingTabMove;
     use bevy_orzmux::prelude::{PaneRegistry, PendingTabRename, RenameInFlight, TtyTitle};
     use orzmux::prelude::CommandSeq;
     use orzmux::prelude::PaneId;
     use orzmux::prelude::Tab;
-    use std::fmt::Debug;
     use std::time::Duration;
 
     /// A request the tab bar sent, in the order it was sent.
@@ -803,7 +800,7 @@ mod tests {
         }
     }
 
-    fn pointer_at<E: Debug + Clone + Reflect>(entity: Entity, x: f32, event: E) -> Pointer<E> {
+    fn pointer_at(x: f32) -> Pointer {
         Pointer::new(
             PointerId::Mouse,
             Location {
@@ -813,35 +810,35 @@ mod tests {
                 },
                 position: Vec2::new(x, 14.0),
             },
-            event,
-            entity,
         )
     }
 
-    fn drag_start(entity: Entity, x: f32) -> Pointer<DragStart> {
-        let hit = HitData::new(Entity::PLACEHOLDER, 0.0, None, None);
-        let event = DragStart {
+    fn drag_start(entity: Entity, x: f32) -> PointerDragStart {
+        PointerDragStart {
+            entity,
+            pointer: pointer_at(x),
             button: PointerButton::Primary,
-            hit,
-        };
-        pointer_at(entity, x, event)
+            hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+        }
     }
 
-    fn drag_to(entity: Entity, x: f32, distance: f32) -> Pointer<Drag> {
-        let event = Drag {
+    fn drag_to(entity: Entity, x: f32, distance: f32) -> PointerDrag {
+        PointerDrag {
+            entity,
+            pointer: pointer_at(x),
             button: PointerButton::Primary,
             distance: Vec2::new(distance, 0.0),
             delta: Vec2::new(distance, 0.0),
-        };
-        pointer_at(entity, x, event)
+        }
     }
 
-    fn drag_end(entity: Entity, x: f32, distance: f32) -> Pointer<DragEnd> {
-        let event = DragEnd {
+    fn drag_end(entity: Entity, x: f32, distance: f32) -> PointerDragEnd {
+        PointerDragEnd {
+            entity,
+            pointer: pointer_at(x),
             button: PointerButton::Primary,
             distance: Vec2::new(distance, 0.0),
-        };
-        pointer_at(entity, x, event)
+        }
     }
 
     fn expected_tabs(tabs: &[(u32, &str)]) -> Vec<(TabId, String)> {
@@ -850,18 +847,19 @@ mod tests {
             .collect()
     }
 
-    fn click(entity: Entity) -> Pointer<Click> {
+    fn click(entity: Entity) -> PointerClick {
         clicks(entity, 1)
     }
 
-    fn clicks(entity: Entity, count: u8) -> Pointer<Click> {
-        let event = Click {
+    fn clicks(entity: Entity, count: u8) -> PointerClick {
+        PointerClick {
+            entity,
+            pointer: pointer_at(0.0),
             button: PointerButton::Primary,
             hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
             duration: Duration::ZERO,
             count,
-        };
-        pointer_at(entity, 0.0, event)
+        }
     }
 
     /// Asserts the label rule: a name wins, then the active pane's title,
@@ -972,12 +970,31 @@ mod tests {
         );
     }
 
-    /// Asserts that a committed rename shows in the label in the same
-    /// update, before the backend answers.
+    /// Asserts that the rename field a double-click opens carries
+    /// `TextInput`.
+    ///
+    /// Case: the user double-clicks a tab to rename it and starts typing.
+    #[test]
+    fn the_rename_field_is_a_text_input() {
+        let mut app = app_with_tab_bar();
+        set_tabs(&mut app, &[1, 2], 2);
+        app.update();
+        app.update();
+        let second = tab_of(&mut app, 2);
+
+        app.world_mut().trigger(clicks(second, 2));
+        app.update();
+
+        let field = rename_field_in(app.world(), second);
+        assert!(app.world().entity(field).contains::<TextInput>());
+    }
+
+    /// Asserts that a committed rename shows in the label on the update
+    /// after the commit, before the backend answers.
     ///
     /// Case: the user renames the first tab to "logs" and presses Enter.
     #[test]
-    fn a_committed_rename_shows_in_the_same_update() {
+    fn a_committed_rename_shows_on_the_next_update() {
         let mut app = app_with_tab_bar();
         app.add_observer(
             |ev: On<RequestTabAction>, mut pending: ResMut<PendingTabRename>| {
@@ -1000,7 +1017,35 @@ mod tests {
         let field = app.world_mut().spawn(EditableText::new("logs")).id();
         app.insert_resource(TabRename::ending_for_test(TabId(1), field, label, true));
         app.update();
+        app.update();
         assert_eq!(listed_tabs(&mut app), expected_tabs(&[(1, "logs")]));
+    }
+
+    /// Asserts that the tab bar's `PostUpdate` systems order against Bevy
+    /// UI's text measuring and text editing systems without a cycle.
+    ///
+    /// Case: orzma starts with the UI, text, and input focus plugins, and
+    /// the first frame builds the `PostUpdate` schedule.
+    #[test]
+    fn the_tab_bar_orders_against_the_ui_text_systems_without_a_cycle() {
+        let mut app = app_with_tab_bar();
+        app.add_plugins((
+            AssetPlugin::default(),
+            TextPlugin,
+            UiPlugin,
+            InputFocusPlugin,
+        ));
+        app.finish();
+        app.cleanup();
+        let built = app
+            .world_mut()
+            .schedule_scope(PostUpdate, |world, schedule| {
+                schedule
+                    .initialize(world)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string(schedule.graph(), world))
+            });
+        assert_eq!(built, Ok(()));
     }
 
     /// Asserts that one button per tab exists in display order, and
@@ -1282,9 +1327,16 @@ mod tests {
         let clip = app
             .world()
             .get::<CalculatedClip>(text)
-            .expect("the label text is clipped")
-            .clip;
-        assert_eq!((clip.min.x, clip.max.x), (12.0, 53.0));
+            .expect("the label text is clipped");
+        let visible = |x: f32| clip.contains_point(Vec2::new(x, 14.0));
+        assert!(
+            visible(12.25) && visible(52.75),
+            "the label box's span stays visible"
+        );
+        assert!(
+            !visible(11.75) && !visible(53.25),
+            "text past the label box is clipped"
+        );
     }
 
     /// Asserts that the bar's physical height is 28 logical px rounded to
@@ -1544,6 +1596,51 @@ mod tests {
         assert_eq!(
             app.world().resource::<ScrolledIntoView>().0,
             vec![second, third]
+        );
+    }
+
+    /// Asserts that one line-unit vertical wheel notch over the tab strip
+    /// scrolls it horizontally by the configured pixels per line, 100 by
+    /// default.
+    ///
+    /// Case: the user has more tabs than fit in the bar and turns a notched
+    /// mouse wheel once over the strip.
+    #[test]
+    fn a_line_wheel_notch_scrolls_the_strip_by_one_line_of_pixels() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<MouseScrollPixelsPerLine>();
+        let strip = app
+            .world_mut()
+            .spawn((
+                TabStrip,
+                ScrollPosition::default(),
+                ComputedNode {
+                    size: Vec2::new(100.0, 28.0),
+                    content_size: Vec2::new(500.0, 28.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+            ))
+            .observe(scroll_strip_vertically)
+            .id();
+
+        app.world_mut().trigger(PointerScroll {
+            entity: strip,
+            pointer: pointer_at(0.0),
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y: -1.0,
+            hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+            phase: TouchPhase::Moved,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .get::<ScrollPosition>(strip)
+                .map(|position| position.x),
+            Some(100.0)
         );
     }
 }

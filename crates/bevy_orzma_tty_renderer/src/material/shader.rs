@@ -9,7 +9,7 @@
 /// right half.
 #[test]
 fn wgsl_cursor_covers_both_halves_of_a_wide_glyph() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     let body = wgsl_fn_body(src, "cursor_covers");
     assert!(body.contains("col == params.cursor_pos.x + 1u && wide_right_half_at(row, col)"));
     assert!(body.contains(
@@ -35,7 +35,7 @@ fn wgsl_cursor_covers_both_halves_of_a_wide_glyph() {
 /// wide-character filler.
 #[test]
 fn wgsl_underlines_only_the_non_blank_cells_of_the_hovered_url() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     let in_url = wgsl_fn_body(src, "in_hovered_url");
     assert!(in_url.contains("index >= params.hover_span.x"));
     assert!(in_url.contains("index <= params.hover_span.y"));
@@ -74,7 +74,7 @@ fn wgsl_fn_body_ends_at_the_closing_brace_under_crlf() {
 /// or faint.
 #[test]
 fn wgsl_concealment_is_the_last_color_resolution_stage() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     assert!(wgsl_fn_body(src, "conceal").contains("STYLE_HIDDEN"));
     assert!(!wgsl_fn_body(src, "resolve_visible_colors").contains("STYLE_HIDDEN"));
     assert!(
@@ -90,7 +90,7 @@ fn wgsl_concealment_is_the_last_color_resolution_stage() {
 /// a pane that then loses focus and takes the inactive-pane tint.
 #[test]
 fn wgsl_concealment_follows_the_inactive_pane_tint() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     assert!(wgsl_fn_body(src, "conceal").contains("CellColors(tint_bg(colors.bg), colors.bg)"));
 }
 
@@ -101,7 +101,7 @@ fn wgsl_concealment_follows_the_inactive_pane_tint() {
 /// background, and its glyph takes the colour that background paints.
 #[test]
 fn wgsl_reverse_video_materializes_the_default_background_through_the_helper() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     let visible = wgsl_fn_body(src, "resolve_visible_colors");
     assert!(visible.contains("reverse_video(colors)"));
     assert!(!visible.contains("bg_padding_color"));
@@ -119,7 +119,7 @@ fn wgsl_reverse_video_materializes_the_default_background_through_the_helper() {
 /// grid path and the right-strip path both paint it.
 #[test]
 fn wgsl_block_cursor_is_resolved_into_the_cell_colors() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     assert!(wgsl_fn_body(src, "paint_grid_cell").contains("resolve_painted_colors("));
     assert!(wgsl_fn_body(src, "paint_right_strip").contains("resolve_painted_colors("));
     assert_eq!(
@@ -141,7 +141,7 @@ fn wgsl_block_cursor_is_resolved_into_the_cell_colors() {
 /// the caret is drawn as an outline.
 #[test]
 fn wgsl_a_hollow_block_caret_does_not_fill_the_cell() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     assert!(wgsl_fn_body(src, "block_cursor_covers").contains("!cursor_is_hollow()"));
     assert!(wgsl_fn_body(src, "cursor_is_hollow").contains("CURSOR_HOLLOW"));
 }
@@ -155,7 +155,7 @@ fn wgsl_a_hollow_block_caret_does_not_fill_the_cell() {
 /// pane, which also draws its caret hollow.
 #[test]
 fn wgsl_cursor_strips_take_the_guarded_fill_color() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     let painter = wgsl_fn_body(src, "paint_cursor");
     assert!(painter.contains("!on_cursor_stroke(col, in_cell_px)"));
     assert!(painter.contains("return cursor_stroke_fill(cell);"));
@@ -180,7 +180,7 @@ fn wgsl_cursor_strips_take_the_guarded_fill_color() {
 /// a reverse-video cell's ground.
 #[test]
 fn wgsl_cursor_fill_is_guarded_against_the_ground() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     assert!(
         wgsl_fn_body(src, "resolve_painted_colors")
             .contains("colors = under_block_cursor(colors);")
@@ -205,7 +205,7 @@ fn wgsl_cursor_fill_is_guarded_against_the_ground() {
 /// cursor lands on it.
 #[test]
 fn wgsl_block_cursor_paints_a_glyph_that_melts_into_its_ground_in_the_fill() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     let block = wgsl_fn_body(src, "under_block_cursor");
     assert!(block.contains(
         "let glyph_melts = contrast_ratio(colors.fg.rgb, ground.rgb) < MIN_CURSOR_CONTRAST;"
@@ -221,10 +221,23 @@ fn wgsl_block_cursor_paints_a_glyph_that_melts_into_its_ground_in_the_fill() {
 /// character.
 #[test]
 fn the_hollow_caret_spans_a_wide_pair_without_an_inner_seam() {
-    let src = include_str!("../shaders/terminal_ui_material.wgsl");
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
     assert!(src.contains("fn cursor_span_left("));
     assert!(src.contains("fn cursor_span_right("));
     let outline = wgsl_fn_body(src, "on_hollow_outline");
     assert!(outline.contains("col == cursor_span_left()"));
     assert!(outline.contains("col == cursor_span_right()"));
+}
+
+/// Asserts that the terminal shader imports `UiVertexOutput` with WESL's
+/// `import` statement from `bevy_ui_render`, and carries no naga_oil
+/// directive.
+///
+/// Case: orzma starts and Bevy compiles the terminal pipeline from the
+/// embedded shader.
+#[test]
+fn the_shader_imports_ui_vertex_output_as_wesl() {
+    let src = include_str!("../shaders/terminal_ui_material.wesl");
+    assert!(src.contains("import bevy_ui_render::ui_vertex_output::UiVertexOutput;"));
+    assert!(!src.lines().any(|line| line.trim_start().starts_with('#')));
 }

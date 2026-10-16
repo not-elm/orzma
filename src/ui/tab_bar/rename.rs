@@ -12,8 +12,7 @@ use bevy::input_focus::{AutoFocus, FocusedInput, InputFocus};
 use bevy::picking::PickingSettings;
 use bevy::prelude::*;
 use bevy::text::{EditableText, EditableTextFilter, EditableTextSystems, TextCursorStyle};
-use bevy::ui::widget::measure_text_system;
-use bevy::ui_widgets::SelectAllOnFocus;
+use bevy::ui_widgets::{SelectAllOnFocus, TextInput};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_webview::RequestWebviewFocus;
 use bevy_orzmux::prelude::{
@@ -90,8 +89,7 @@ impl TabRename {
 }
 
 /// The `PostUpdate` slot where an ending rename is committed or discarded,
-/// after the field's edits of the frame are applied and before the UI
-/// measures text, so the tab shows the committed name in the same frame.
+/// after the field's edits of the frame are applied.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum RenameSystems {
     /// Committing or discarding the ending rename.
@@ -171,12 +169,7 @@ pub(crate) struct TabRenamePlugin;
 impl Plugin for TabRenamePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TabRename>()
-            .configure_sets(
-                PostUpdate,
-                RenameSystems::Finish
-                    .after(EditableTextSystems)
-                    .before(measure_text_system),
-            )
+            .configure_sets(PostUpdate, RenameSystems::Finish.after(EditableTextSystems))
             .add_observer(start_rename)
             .add_observer(commit_on_outside_press)
             .add_systems(
@@ -273,6 +266,7 @@ fn start_rename(
     }
     let field = commands
         .spawn((
+            TextInput,
             EditableText {
                 max_characters: Some(Tab::MAX_NAME_CHARS),
                 allow_newlines: false,
@@ -290,6 +284,7 @@ fn start_rename(
                 selection_color: SELECTION_BG,
                 unfocused_selection_color: Color::NONE,
                 selected_text_color: None,
+                ..default()
             },
             Node {
                 flex_grow: 1.0,
@@ -329,7 +324,7 @@ fn on_field_key(
 }
 
 /// Asks to commit when a press lands anywhere but the field.
-fn commit_on_outside_press(ev: On<Pointer<Press>>, mut rename: ResMut<TabRename>) {
+fn commit_on_outside_press(ev: On<PointerPress>, mut rename: ResMut<TabRename>) {
     let origin = ev.original_event_target();
     if ev.entity != origin || rename.field() == Some(origin) || !rename.can_end() {
         return;
@@ -346,7 +341,8 @@ fn commit_on_webview_focus(mut rename: ResMut<TabRename>, focused: Res<FocusedWe
 
 /// Commits or discards the ending rename, restores the label, removes the
 /// field, and takes the keyboard focus off it. A committed name is sent as
-/// a rename request; the tab bar shows it in the same frame.
+/// a rename request; the tab bar lays out the restored label and the
+/// committed name on the next frame.
 fn finish_rename(
     mut commands: Commands,
     mut rename: ResMut<TabRename>,
@@ -426,8 +422,13 @@ fn align_multi_click_interval(mut settings: ResMut<PickingSettings>, mouse: Res<
 mod tests {
     use super::*;
     use bevy::camera::NormalizedRenderTarget;
+    use bevy::input::InputPlugin;
+    use bevy::input_focus::{FocusCause, InputDispatchPlugin};
     use bevy::picking::backend::HitData;
+    use bevy::picking::events::{PointerRelease, PointerState};
     use bevy::picking::pointer::{Location, PointerId};
+    use bevy::ui_widgets::TextInputPlugin;
+    use bevy::window::{Ime, PrimaryWindow};
     use bevy_orzmux::prelude::TabEntry;
     use orzmux::prelude::PaneId;
 
@@ -582,20 +583,119 @@ mod tests {
         app
     }
 
-    fn press_on(entity: Entity) -> Pointer<Press> {
-        let event = Press {
+    /// An app that runs the text-input widget and focused-input dispatch,
+    /// with a rename of tab 1 in progress whose field holds "build" and has
+    /// the keyboard focus. Returns the app and its primary window.
+    fn widget_rename_app() -> (App, Entity) {
+        let mut app = finish_app();
+        app.add_plugins((InputPlugin, InputDispatchPlugin, TextInputPlugin))
+            .add_message::<Ime>()
+            .add_message::<PointerRelease>()
+            .init_resource::<PointerState>()
+            .init_resource::<UiScale>()
+            .init_resource::<TabRename>()
+            .init_resource::<CurrentTabs>()
+            .init_resource::<PendingTabRename>()
+            .init_resource::<FocusedWebview>()
+            .add_observer(start_rename);
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        let field = start_rename_of_tab_one(&mut app);
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(field, FocusCause::Navigated);
+        (app, window)
+    }
+
+    /// Starts a rename of tab 1, the only tab, and types "build" into its
+    /// field. Returns the field.
+    fn start_rename_of_tab_one(app: &mut App) -> Entity {
+        {
+            let mut tabs = app.world_mut().resource_mut::<CurrentTabs>();
+            tabs.entries = vec![TabEntry {
+                id: TabId(1),
+                name: None,
+                active_pane: PaneId(1),
+            }];
+            tabs.active = Some(TabId(1));
+        }
+        let tab = app.world_mut().spawn(TabButton { id: TabId(1) }).id();
+        app.world_mut()
+            .spawn((TabLabel, Node::default(), ChildOf(tab)));
+        app.update();
+
+        app.world_mut().trigger(StartTabRename { tab: None });
+        app.update();
+        let field = app
+            .world()
+            .resource::<TabRename>()
+            .field()
+            .expect("the rename has a field");
+        app.world_mut()
+            .entity_mut(field)
+            .insert(EditableText::new("build"));
+        field
+    }
+
+    fn press_key(app: &mut App, window: Entity, key_code: KeyCode, logical_key: Key) {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            window,
+            ..key(logical_key, ButtonState::Pressed)
+        });
+    }
+
+    /// Asserts that Enter commits the typed name while the text-input
+    /// widget also handles the field's keys.
+    ///
+    /// Case: the user renames a tab, types "build", and presses Enter.
+    #[test]
+    fn enter_commits_a_rename_the_text_input_widget_handles() {
+        let (mut app, window) = widget_rename_app();
+        press_key(&mut app, window, KeyCode::Enter, Key::Enter);
+        app.update();
+        assert!(!app.world().resource::<TabRename>().is_active());
+        assert_eq!(
+            app.world().resource::<Requested>().0,
+            vec![TabAction::Rename {
+                tab: TabId(1),
+                name: Some("build".into())
+            }]
+        );
+    }
+
+    /// Asserts that Esc discards the typed name while the text-input widget
+    /// also handles the field's keys.
+    ///
+    /// Case: the user renames a tab, types "build", and presses Esc.
+    #[test]
+    fn escape_cancels_a_rename_the_text_input_widget_handles() {
+        let (mut app, window) = widget_rename_app();
+        press_key(&mut app, window, KeyCode::Escape, Key::Escape);
+        app.update();
+        assert!(!app.world().resource::<TabRename>().is_active());
+        assert!(app.world().resource::<Requested>().0.is_empty());
+    }
+
+    fn press_on(entity: Entity) -> PointerPress {
+        PointerPress {
+            entity,
+            pointer: Pointer::new(
+                PointerId::Mouse,
+                Location {
+                    target: NormalizedRenderTarget::None {
+                        width: 800,
+                        height: 600,
+                    },
+                    position: Vec2::ZERO,
+                },
+            ),
             button: PointerButton::Primary,
             hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
             count: 1,
-        };
-        let location = Location {
-            target: NormalizedRenderTarget::None {
-                width: 800,
-                height: 600,
-            },
-            position: Vec2::ZERO,
-        };
-        Pointer::new(PointerId::Mouse, location, event, entity)
+        }
     }
 
     /// Asserts that finishing a committed rename sends the field's name,
@@ -750,35 +850,12 @@ mod tests {
                 Update,
                 commit_on_webview_focus.run_if(resource_exists_and_changed::<FocusedWebview>),
             );
-        {
-            let mut tabs = app.world_mut().resource_mut::<CurrentTabs>();
-            tabs.entries = vec![TabEntry {
-                id: TabId(1),
-                name: None,
-                active_pane: PaneId(1),
-            }];
-            tabs.active = Some(TabId(1));
-        }
-        let tab = app.world_mut().spawn(TabButton { id: TabId(1) }).id();
-        app.world_mut()
-            .spawn((TabLabel, Node::default(), ChildOf(tab)));
         let page = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
-        app.update();
-
-        app.world_mut().trigger(StartTabRename { tab: None });
-        app.update();
+        start_rename_of_tab_one(&mut app);
 
         assert_eq!(app.world().resource::<FocusedWebview>().0, None);
         assert!(app.world().resource::<TabRename>().can_end());
-        let field = app
-            .world()
-            .resource::<TabRename>()
-            .field()
-            .expect("the rename has a field");
-        app.world_mut()
-            .entity_mut(field)
-            .insert(EditableText::new("build"));
 
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(page);
         app.update();

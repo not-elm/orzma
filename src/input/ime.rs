@@ -44,6 +44,11 @@ pub(super) struct ImePlugin;
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ImeState>()
+            // NOTE: `ime_policy_system` must run unconditionally every frame.
+            // Bevy's text-input plugin resets `Window::ime_enabled` every
+            // `PreUpdate` whenever no `TextInput` has focus, so gating this
+            // system with `run_if` would switch IME off in the terminal and in
+            // webviews.
             .add_systems(
                 Update,
                 (ime_policy_system, read_ime_events)
@@ -264,16 +269,14 @@ fn ime_policy_system(
     // anchors one row down because macOS treats the rect
     // `set_ime_cursor_area(origin, size)` as the marked-text
     // bounding box and places the candidate window just below
-    // `origin.y + size.height`. Bevy 0.19 hard-codes that size to
-    // `PhysicalSize::new(10, 10)`
-    // (`bevy_winit-0.19.0/src/system.rs:544-546`) with no way for us
-    // to pass the actual cell height. Net effect: candidate window
+    // `origin.y + size.height`. bevy_winit's `changed_windows`
+    // hard-codes that size to `PhysicalSize::new(10, 10)` with no way
+    // for us to pass the actual cell height. Net effect: candidate window
     // appears one full row below the cursor — i.e. one row below
     // the preedit row, which is what users expect.
     //
     // NOTE: `UiGlobalTransform.translation` is the CENTER of the
-    // node in PHYSICAL pixels (verified via Bevy 0.19 source:
-    // `bevy_ui-0.19.0/src/layout/mod.rs:269-299` writes
+    // node in PHYSICAL pixels (bevy_ui's `ui_layout_system` writes
     // `local_center` into the global transform; `ComputedNode.size`
     // is also physical px). To get the node's top-left in physical
     // px, subtract `0.5 * node.size()`. Do NOT multiply translation

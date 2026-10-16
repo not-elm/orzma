@@ -15,6 +15,7 @@ use bevy::{
     render::{render_resource::ShaderType, storage::ShaderBuffer},
     shader::ShaderRef,
 };
+use bytemuck::{Pod, Zeroable};
 use orzma_vt::prelude::{Rgb, Style};
 
 mod bind_group;
@@ -27,7 +28,7 @@ mod upload;
 pub use overlay::{OVERLAY_SLOTS, TerminalOverlays};
 pub use params::TerminalPaddingFallback;
 
-/// Registers the custom material and embeds its WGSL shader into the binary.
+/// Registers the custom material and embeds its WESL shader into the binary.
 #[derive(Default)]
 pub struct TerminalMaterialPlugin;
 
@@ -36,8 +37,8 @@ impl Plugin for TerminalMaterialPlugin {
         load_internal_asset!(
             app,
             TERMINAL_SHADER_HANDLE,
-            "shaders/terminal_ui_material.wgsl",
-            Shader::from_wgsl
+            "shaders/terminal_ui_material.wesl",
+            Shader::from_wesl
         );
         app.add_plugins((
             UiMaterialPlugin::<TerminalUiMaterial>::default(),
@@ -103,7 +104,8 @@ impl TerminalUiMaterial {
 const TERMINAL_SHADER_HANDLE: Handle<Shader> = uuid_handle!("98195199-3092-42b6-b370-77dfc2ef83f9");
 
 /// One GPU-side cell — 20 bytes, indexed `row * cols + col` in the storage buffer.
-#[derive(Clone, Copy, ShaderType, Debug)]
+#[repr(C)]
+#[derive(Clone, Copy, ShaderType, Pod, Zeroable, PartialEq, Debug)]
 struct GpuCell {
     /// Index into the glyph LUT, or `u32::MAX` for an empty cell (space / blank).
     glyph_index: u32,
@@ -148,7 +150,8 @@ impl Default for GpuCell {
 }
 
 /// Per-glyph atlas record in the glyph storage buffer.
-#[derive(Clone, Copy, ShaderType, Default, Debug)]
+#[repr(C)]
+#[derive(Clone, Copy, ShaderType, Pod, Zeroable, Default, PartialEq, Debug)]
 struct GpuGlyph {
     /// Top-left of the glyph rect in atlas physical px.
     uv_min: Vec2,
@@ -161,6 +164,8 @@ struct GpuGlyph {
     /// [`GpuGlyph::COLOR`] when the sprite holds the glyph's own colors,
     /// otherwise 0.
     flags: u32,
+    /// Zero padding up to the 40-byte stride of the shader's `Glyph` array.
+    _pad: u32,
 }
 
 impl GpuGlyph {
@@ -177,6 +182,7 @@ impl GpuGlyph {
             offset_px: Vec2::new(rect.offset_x as f32, rect.offset_y as f32),
             size_px: Vec2::new(rect.w as f32, rect.h as f32),
             flags: if rect.color { Self::COLOR } else { 0 },
+            _pad: 0,
         }
     }
 }
@@ -191,7 +197,7 @@ fn pack_linear(rgb: Rgb) -> u32 {
 /// upload cache for those buffers. A node whose material asset is missing
 /// is left uninitialized.
 fn init_material_node(
-    add: On<Add, MaterialNode<TerminalUiMaterial>>,
+    add: On<Add<MaterialNode<TerminalUiMaterial>>>,
     mut commands: Commands,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
@@ -218,12 +224,8 @@ fn init_material_node(
     //       zero-sized storage buffers at bind time, so the bind group would
     //       fail to materialize before the first wire snapshot arrived and
     //       the whole material would silently drop out of the UI pass.
-    let mut cells_seed = ShaderBuffer::default();
-    cells_seed.set_data(vec![GpuCell::default()]);
-    let mut glyphs_seed = ShaderBuffer::default();
-    glyphs_seed.set_data(vec![GpuGlyph::default()]);
-    let cells_buffer = buffers.add(cells_seed);
-    let glyphs_buffer = buffers.add(glyphs_seed);
+    let cells_buffer = buffers.add(ShaderBuffer::from(vec![GpuCell::default()]));
+    let glyphs_buffer = buffers.add(ShaderBuffer::from(vec![GpuGlyph::default()]));
 
     material.params = TerminalParams::default();
     material.cells = cells_buffer.clone();
@@ -237,6 +239,7 @@ fn init_material_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::render::render_resource::encase::{StorageBuffer, internal::WriteInto};
     use std::collections::BTreeSet;
     use std::mem::size_of;
 
@@ -254,6 +257,71 @@ mod tests {
     #[test]
     fn gpu_glyph_is_forty_bytes() {
         assert_eq!(<GpuGlyph as ShaderType>::min_size().get(), 40);
+    }
+
+    /// Asserts that `GpuCell` and `GpuGlyph` hold the shader's `Cell` and
+    /// `Glyph` fields in the shader's order and at the shader's offsets, and
+    /// that their bytes equal their shader encoding.
+    ///
+    /// Case: a pane shows an emoji next to underlined text, so the shader
+    /// reads the color flag and the style bits from records the CPU wrote.
+    #[test]
+    fn gpu_records_match_the_shader_layout() {
+        assert_eq!(
+            wgsl_struct_fields("Cell"),
+            [
+                "glyph_index",
+                "fg_packed",
+                "bg_packed",
+                "style_flags",
+                "hyperlink_id"
+            ]
+        );
+        assert_eq!(
+            wgsl_struct_fields("Glyph"),
+            ["uv_min", "uv_max", "offset_px", "size_px", "flags"]
+        );
+
+        let cell = GpuCell {
+            glyph_index: 1,
+            fg_packed: 2,
+            bg_packed: 3,
+            style_flags: 4,
+            hyperlink_id: 5,
+        };
+        let glyph = GpuGlyph {
+            uv_min: Vec2::new(1.0, 2.0),
+            uv_max: Vec2::new(3.0, 4.0),
+            offset_px: Vec2::new(5.0, 6.0),
+            size_px: Vec2::new(7.0, 8.0),
+            flags: GpuGlyph::COLOR,
+            _pad: 0,
+        };
+        assert_eq!(shader_encoding(&cell), bytemuck::bytes_of(&cell));
+        assert_eq!(shader_encoding(&glyph), bytemuck::bytes_of(&glyph));
+    }
+
+    /// The bytes encase writes for `value` in a storage buffer.
+    fn shader_encoding<T: ShaderType + WriteInto>(value: &T) -> Vec<u8> {
+        let mut buffer = StorageBuffer::new(Vec::<u8>::new());
+        buffer
+            .write(value)
+            .expect("a Vec-backed buffer grows to fit");
+        buffer.into_inner()
+    }
+
+    /// The field names of the shader struct `name`, in declaration order.
+    fn wgsl_struct_fields(name: &str) -> Vec<&'static str> {
+        include_str!("shaders/terminal_ui_material.wesl")
+            .split(&format!("struct {name} {{"))
+            .nth(1)
+            .and_then(|rest| rest.split("};").next())
+            .expect("the shader declares the struct")
+            .lines()
+            .filter_map(|line| line.trim().split(':').next())
+            .map(str::trim)
+            .filter(|field| !field.is_empty())
+            .collect()
     }
 
     #[test]
@@ -288,7 +356,7 @@ mod tests {
     #[test]
     fn wgsl_style_constants_track_the_style_bits() {
         const FONT_SELECTED: Style = Style::BOLD.union(Style::ITALIC);
-        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let src = include_str!("shaders/terminal_ui_material.wesl");
         let declared: BTreeSet<String> = src
             .lines()
             .map(str::trim)
@@ -332,7 +400,7 @@ mod tests {
             .flags,
             0
         );
-        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let src = include_str!("shaders/terminal_ui_material.wesl");
         assert!(src.contains(&format!("const GLYPH_COLOR: u32 = {}u;", GpuGlyph::COLOR)));
     }
 
@@ -379,8 +447,7 @@ mod tests {
             assert!(
                 buffers
                     .get(buffer)
-                    .and_then(|seed| seed.data.as_ref())
-                    .is_some_and(|data| !data.is_empty()),
+                    .is_some_and(|seed| seed.buffer_size() > 0),
                 "a seeded buffer holds one element"
             );
         }
@@ -422,11 +489,6 @@ mod tests {
             .spawn((MaterialNode(material.clone()), view, cells));
         app.update();
 
-        let mut cell_seed = ShaderBuffer::default();
-        cell_seed.set_data(vec![GpuCell::default()]);
-        let mut glyph_seed = ShaderBuffer::default();
-        glyph_seed.set_data(vec![GpuGlyph::default()]);
-
         let seeded = app
             .world()
             .resource::<Assets<TerminalUiMaterial>>()
@@ -438,23 +500,23 @@ mod tests {
             .get(&seeded.glyphs)
             .expect("the glyphs asset exists");
 
+        let cells = cells_buffer
+            .cast_slice::<GpuCell>()
+            .expect("the upload wrote the cell buffer");
+        assert_eq!(cells.len(), 1, "one cell for a 1×1 view");
         assert_ne!(
-            cells_buffer.data, cell_seed.data,
+            cells,
+            [GpuCell::default()],
             "the upload must replace the seed cell"
         );
-        assert_eq!(
-            cells_buffer.data.as_ref().map(Vec::len),
-            cell_seed.data.as_ref().map(Vec::len),
-            "a handle swap would land the glyph array's length here instead"
-        );
+        let glyphs = glyphs_buffer
+            .cast_slice::<GpuGlyph>()
+            .expect("the upload wrote the glyph buffer");
+        assert_eq!(glyphs.len(), 1, "one glyph for one character");
         assert_ne!(
-            glyphs_buffer.data, glyph_seed.data,
+            glyphs,
+            [GpuGlyph::default()],
             "the upload must replace the seed glyph"
-        );
-        assert_eq!(
-            glyphs_buffer.data.as_ref().map(Vec::len),
-            glyph_seed.data.as_ref().map(Vec::len),
-            "a handle swap would land the cell array's length here instead"
         );
     }
 }

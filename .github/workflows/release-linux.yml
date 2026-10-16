@@ -36,7 +36,7 @@ permissions:
   contents: read
 
 env:
-  CEF_VERSION: "152.4.0+152.0.8"
+  CEF_VERSION: "154.5.0+154.0.34"
 
 jobs:
   build:

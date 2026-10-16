@@ -8,17 +8,19 @@ use crate::input::keyboard::key_effect::KeyEffect;
 use crate::input::shortcuts::apply::ShortcutsApplyPlugin;
 use crate::ui::tab_bar::rename::TabRename;
 use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
+use bevy::winit::RawWinitWindowEvent;
+use bevy::winit::converters::{convert_element_state, convert_physical_key_code};
 use bevy_cef::prelude::FocusedWebview;
 use orzma_configs::shortcuts::{
     Key as ConfigKey, KeyChord, Leader, Modifiers, Shortcut, TapModifier,
 };
 use std::iter::once;
 use std::time::Duration;
+use winit::event::WindowEvent;
 
 mod apply;
 
@@ -34,6 +36,7 @@ impl Plugin for ShortcutsPlugin {
                     .in_set(InputPhase::FocusedKey),
             )
             .add_message::<KeyEffectMessage>()
+            .add_message::<RawWinitWindowEvent>()
             .init_resource::<Shortcuts>()
             .init_resource::<LeaderPhase>()
             .init_resource::<HeldRepeatKey>()
@@ -43,9 +46,6 @@ impl Plugin for ShortcutsPlugin {
             .add_systems(
                 Update,
                 (
-                    // NOTE: intentionally not gated on `on_message::<KeyboardInput>` — must run
-                    // on keyboard-less frames so a mouse press (e.g. Cmd+click mid-tap) can
-                    // disarm `state.armed`; gating it on `on_message` would silently break it.
                     detect_modifier_tap
                         .in_set(LeaderGate::Detect)
                         .run_if(tap_leader_enabled),
@@ -539,61 +539,42 @@ fn tap_leader_enabled(shortcuts: Res<Shortcuts>) -> bool {
     shortcuts.tap_modifier().is_some()
 }
 
-/// Detects a bare modifier tap (press+release within the timeout, no
-/// intervening key or mouse press) and engages `LeaderPhase::Pending`.
-/// Mode-agnostic.
+/// Detects a bare modifier tap, a press and a release within the timeout
+/// with no key or mouse press between them, and engages
+/// `LeaderPhase::Pending` in every input mode.
 ///
-/// Reads press AND release `KeyboardInput` (the dispatchers only read
-/// `Pressed`), so it owns the tap gesture; the second key is handled by
-/// the existing `step_leader` pending arm.
+/// Reads winit's own key events, so a key event Bevy synthesizes from a
+/// reported modifier state never arms or fires the tap.
 fn detect_modifier_tap(
     mut state: ResMut<ModifierTapState>,
     mut leader_phase: ResMut<LeaderPhase>,
-    mut keys: MessageReader<KeyboardInput>,
+    mut raw_events: MessageReader<RawWinitWindowEvent>,
     mouse: Res<ButtonInput<MouseButton>>,
     time: Res<Time<Real>>,
     shortcuts: Res<Shortcuts>,
     rename: Option<Res<TabRename>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    // `run_if(tap_leader_enabled)` guarantees this is `Some`.
     let Some(modifier) = shortcuts.tap_modifier() else {
         return;
     };
-    let focused = windows.single().map(|w| w.focused).unwrap_or(false);
+    let inputs: Vec<TapInput> = raw_events
+        .read()
+        .filter_map(|raw| TapInput::from_raw(&raw.event))
+        .collect();
+    let frame = TapFrame {
+        focused: windows.single().map(|w| w.focused).unwrap_or(false),
+        renaming: rename.as_deref().is_some_and(TabRename::is_active),
+        mouse_pressed: mouse.get_just_pressed().next().is_some(),
+        inputs: &inputs,
+        now: time.elapsed(),
+        timeout: shortcuts.tap_timeout,
+    };
     let mut armed = state.armed;
-    let renaming = rename.as_deref().is_some_and(TabRename::is_active);
-    if !focused || renaming || mouse.get_just_pressed().next().is_some() {
-        // NOTE: a mouse press anywhere this frame (or lost focus, or a tab rename
-        // in progress) invalidates the tap gesture — disarm and drain this frame's
-        // key events without arming or firing. Draining here (own reader cursor)
-        // prevents a same-frame `Cmd-down` + click from arming and firing on the
-        // next `Cmd-up`.
-        armed = None;
-        keys.clear();
-    } else {
-        let now = time.elapsed();
-        let timeout = shortcuts.tap_timeout;
-        for ev in keys.read() {
-            if ev.repeat {
-                continue;
-            }
-            let event = if is_tap_modifier_key(ev.key_code, modifier) {
-                match ev.state {
-                    ButtonState::Pressed => TapEvent::TargetDown,
-                    ButtonState::Released => TapEvent::TargetUp,
-                }
-            } else if ev.state == ButtonState::Pressed {
-                TapEvent::OtherDown
-            } else {
-                continue;
-            };
-            if step_tap(&mut armed, event, now, timeout) == TapOutcome::Fired
-                && *leader_phase != LeaderPhase::Pending
-            {
-                *leader_phase = LeaderPhase::Pending;
-            }
-        }
+    if frame.step(&mut armed, modifier) == TapOutcome::Fired
+        && *leader_phase != LeaderPhase::Pending
+    {
+        *leader_phase = LeaderPhase::Pending;
     }
     if armed != state.armed {
         state.armed = armed;
@@ -750,6 +731,97 @@ fn step_tap(
     }
 }
 
+/// One winit window event the tap detector reads, in arrival order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TapInput {
+    /// A physical key changed state.
+    Key {
+        key_code: KeyCode,
+        state: ButtonState,
+        repeat: bool,
+    },
+    /// The window lost keyboard focus.
+    FocusLost,
+}
+
+impl TapInput {
+    /// Reads a winit window event, or `None` for an event the tap detector
+    /// ignores, including a key event winit synthesizes for a key already
+    /// held when the window gains focus.
+    fn from_raw(raw: &WindowEvent) -> Option<Self> {
+        match raw {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic: false,
+                ..
+            } => Some(Self::Key {
+                key_code: convert_physical_key_code(event.physical_key),
+                state: convert_element_state(event.state),
+                repeat: event.repeat,
+            }),
+            WindowEvent::Focused(false) => Some(Self::FocusLost),
+            _ => None,
+        }
+    }
+}
+
+/// One frame of input to the modifier-tap machine.
+struct TapFrame<'a> {
+    /// Whether the primary window has focus at the end of the frame.
+    focused: bool,
+    /// Whether a tab rename is in progress.
+    renaming: bool,
+    /// Whether any mouse button was pressed this frame.
+    mouse_pressed: bool,
+    /// The frame's winit inputs, in arrival order.
+    inputs: &'a [TapInput],
+    /// The frame's real time.
+    now: Duration,
+    /// The longest press a tap may last.
+    timeout: Duration,
+}
+
+impl TapFrame<'_> {
+    /// Steps the tap machine over this frame, leaving `armed` at the
+    /// machine's next state, and reports whether a tap completed.
+    ///
+    /// A frame without focus, during a rename, or with a mouse press disarms
+    /// the machine and reads none of its inputs. A [`TapInput::FocusLost`]
+    /// disarms it at its place in the sequence. Auto-repeat presses are
+    /// ignored.
+    fn step(&self, armed: &mut Option<Duration>, modifier: TapModifier) -> TapOutcome {
+        if !self.focused || self.renaming || self.mouse_pressed {
+            *armed = None;
+            return TapOutcome::None;
+        }
+        let mut outcome = TapOutcome::None;
+        for input in self.inputs {
+            let event = match *input {
+                TapInput::FocusLost => {
+                    *armed = None;
+                    continue;
+                }
+                TapInput::Key { repeat: true, .. } => continue,
+                TapInput::Key {
+                    key_code, state, ..
+                } if is_tap_modifier_key(key_code, modifier) => match state {
+                    ButtonState::Pressed => TapEvent::TargetDown,
+                    ButtonState::Released => TapEvent::TargetUp,
+                },
+                TapInput::Key {
+                    state: ButtonState::Pressed,
+                    ..
+                } => TapEvent::OtherDown,
+                TapInput::Key { .. } => continue,
+            };
+            if step_tap(armed, event, self.now, self.timeout) == TapOutcome::Fired {
+                outcome = TapOutcome::Fired;
+            }
+        }
+        outcome
+    }
+}
+
 /// True when `keycode` is a left/right variant of `modifier`.
 fn is_tap_modifier_key(keycode: KeyCode, modifier: TapModifier) -> bool {
     match modifier {
@@ -845,12 +917,12 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::input::keyboard::Key;
-    use bevy_orzmux::prelude::TabId;
+    use bevy::input::keyboard::{Key, KeyboardInput};
     use orzma_configs::OrzmaConfigs;
     use orzma_configs::shortcuts::{
         Binding, FontSizeStep, PaneDirection, Shortcuts as ConfigShortcuts,
     };
+    use winit::window::WindowId;
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -1598,6 +1670,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<KeyboardInput>()
+            .add_message::<RawWinitWindowEvent>()
             .init_resource::<ButtonInput<MouseButton>>()
             .insert_resource(ModifierTapState::default())
             .init_resource::<LeaderPhase>()
@@ -1631,75 +1704,269 @@ mod tests {
         });
     }
 
+    const CMD_DOWN: TapInput = TapInput::Key {
+        key_code: KeyCode::SuperLeft,
+        state: ButtonState::Pressed,
+        repeat: false,
+    };
+    const CMD_UP: TapInput = TapInput::Key {
+        key_code: KeyCode::SuperLeft,
+        state: ButtonState::Released,
+        repeat: false,
+    };
+    const CMD_REPEAT: TapInput = TapInput::Key {
+        key_code: KeyCode::SuperLeft,
+        state: ButtonState::Pressed,
+        repeat: true,
+    };
+
+    fn tap_frame(inputs: &[TapInput], now_ms: u64) -> TapFrame<'_> {
+        TapFrame {
+            focused: true,
+            renaming: false,
+            mouse_pressed: false,
+            inputs,
+            now: ms(now_ms),
+            timeout: ms(300),
+        }
+    }
+
+    /// Asserts that a press and a release of the tap modifier within the
+    /// timeout fire the leader.
+    ///
+    /// Case: the user taps Cmd alone to start a leader chord.
     #[test]
-    fn detect_modifier_tap_fires_on_quick_tap() {
-        let mut app = tap_app();
-        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Pressed);
-        app.update();
-        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
-        app.update();
+    fn a_quick_modifier_tap_fires_the_leader() {
+        let mut armed = None;
         assert_eq!(
-            *app.world().resource::<LeaderPhase>(),
-            LeaderPhase::Pending,
-            "a quick modifier tap must engage LeaderPhase::Pending"
+            tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
+        );
+        assert_eq!(
+            tap_frame(&[CMD_UP], 100).step(&mut armed, TapModifier::Meta),
+            TapOutcome::Fired
         );
     }
 
+    /// Asserts that a mouse press in a frame between the modifier's press
+    /// and release disarms the tap.
+    ///
+    /// Case: the user holds Cmd, clicks a link, and lets go of Cmd.
     #[test]
-    fn detect_modifier_tap_mouse_press_on_keyboardless_frame_disarms() {
-        let mut app = tap_app();
-        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Pressed);
-        app.update();
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Left);
-        app.update();
-        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
-        app.update();
+    fn a_mouse_press_between_press_and_release_disarms_the_tap() {
+        let mut armed = None;
+        tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta);
+        TapFrame {
+            mouse_pressed: true,
+            ..tap_frame(&[], 50)
+        }
+        .step(&mut armed, TapModifier::Meta);
         assert_eq!(
-            *app.world().resource::<LeaderPhase>(),
-            LeaderPhase::Idle,
-            "mouse press in a keyboard-less frame must disarm the tap and suppress the leader"
+            tap_frame(&[CMD_UP], 100).step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
         );
     }
 
+    /// Asserts that a mouse press in the same frame as the modifier's press
+    /// keeps the tap from arming.
+    ///
+    /// Case: the user presses Cmd and clicks at the same instant to
+    /// Cmd+click a link.
     #[test]
-    fn detect_modifier_tap_same_frame_mouse_press_suppresses_tap() {
-        let mut app = tap_app();
-        // Same frame: target-modifier down AND a mouse press.
-        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Pressed);
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Left);
-        app.update();
-        // Next frame: the mouse is no longer just-pressed; only the release arrives.
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .clear();
-        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
-        app.update();
+    fn a_mouse_press_in_the_press_frame_suppresses_the_tap() {
+        let mut armed = None;
+        TapFrame {
+            mouse_pressed: true,
+            ..tap_frame(&[CMD_DOWN], 0)
+        }
+        .step(&mut armed, TapModifier::Meta);
+        assert_eq!(armed, None);
         assert_eq!(
-            *app.world().resource::<LeaderPhase>(),
-            LeaderPhase::Idle,
-            "a mouse press in the same frame as the modifier press must suppress the tap"
+            tap_frame(&[CMD_UP], 100).step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
         );
     }
 
     /// Asserts that a modifier tap during a rename neither arms nor fires
-    /// the leader, and that its key events are consumed.
+    /// the leader.
     ///
     /// Case: the user presses and releases Cmd alone while the rename field
     /// has focus.
     #[test]
     fn a_modifier_tap_while_renaming_does_nothing() {
+        let mut armed = None;
+        TapFrame {
+            renaming: true,
+            ..tap_frame(&[CMD_DOWN], 0)
+        }
+        .step(&mut armed, TapModifier::Meta);
+        assert_eq!(armed, None);
+        assert_eq!(
+            TapFrame {
+                renaming: true,
+                ..tap_frame(&[CMD_UP], 100)
+            }
+            .step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
+        );
+    }
+
+    /// Asserts that a focus loss inside a frame disarms the tap at its place
+    /// in the sequence, so a later release in that frame does not fire.
+    ///
+    /// Case: the user holds Cmd, Cmd+Tabs to another app and straight back
+    /// within one frame, and releases Cmd.
+    #[test]
+    fn a_focus_loss_inside_a_frame_disarms_the_tap() {
+        let mut armed = None;
+        tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta);
+        assert_eq!(
+            tap_frame(&[TapInput::FocusLost, CMD_UP], 100).step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
+        );
+        assert_eq!(armed, None);
+    }
+
+    /// Asserts that an unfocused frame reads none of its inputs and disarms
+    /// the tap, so neither an unfocused release nor a later focused release
+    /// fires.
+    ///
+    /// Case: the user presses Cmd, another app takes focus, and Cmd is
+    /// released while orzma is in the background.
+    #[test]
+    fn an_unfocused_frame_disarms_the_tap() {
+        let mut armed = None;
+        tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta);
+        assert_eq!(
+            TapFrame {
+                focused: false,
+                ..tap_frame(&[CMD_UP], 50)
+            }
+            .step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
+        );
+        assert_eq!(armed, None);
+
+        tap_frame(&[CMD_DOWN], 100).step(&mut armed, TapModifier::Meta);
+        TapFrame {
+            focused: false,
+            ..tap_frame(&[], 150)
+        }
+        .step(&mut armed, TapModifier::Meta);
+        assert_eq!(
+            tap_frame(&[CMD_UP], 200).step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
+        );
+    }
+
+    /// Asserts that a character typed while AltGr is held disarms the Alt
+    /// tap.
+    ///
+    /// Case: on a German layout the user types `@` with AltGr+Q while the
+    /// leader is an Alt tap.
+    #[test]
+    fn an_altgr_character_disarms_the_alt_tap() {
+        let key = |key_code, state| TapInput::Key {
+            key_code,
+            state,
+            repeat: false,
+        };
+        let mut armed = None;
+        tap_frame(&[key(KeyCode::AltRight, ButtonState::Pressed)], 0)
+            .step(&mut armed, TapModifier::Alt);
+        tap_frame(&[key(KeyCode::KeyQ, ButtonState::Pressed)], 30)
+            .step(&mut armed, TapModifier::Alt);
+        assert_eq!(
+            tap_frame(&[key(KeyCode::AltRight, ButtonState::Released)], 80)
+                .step(&mut armed, TapModifier::Alt),
+            TapOutcome::None
+        );
+    }
+
+    /// Asserts that auto-repeat presses of the held tap modifier neither
+    /// re-arm nor cancel the tap.
+    ///
+    /// Case: on a platform that repeats modifier keys, the user holds Cmd
+    /// briefly and releases it within the timeout.
+    #[test]
+    fn a_repeat_of_the_held_modifier_keeps_the_tap() {
+        let mut armed = None;
+        tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta);
+        tap_frame(&[CMD_REPEAT], 250).step(&mut armed, TapModifier::Meta);
+        assert_eq!(
+            tap_frame(&[CMD_UP], 290).step(&mut armed, TapModifier::Meta),
+            TapOutcome::Fired
+        );
+    }
+
+    /// Asserts that an auto-repeat press does not re-arm the tap, so a
+    /// release past the timeout of the first press does not fire.
+    ///
+    /// Case: the user holds Cmd long enough for the platform to repeat it
+    /// and releases it after the timeout.
+    #[test]
+    fn a_repeat_of_the_held_modifier_does_not_rearm_the_tap() {
+        let mut armed = None;
+        tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta);
+        tap_frame(&[CMD_REPEAT], 250).step(&mut armed, TapModifier::Meta);
+        assert_eq!(
+            tap_frame(&[CMD_UP], 350).step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
+        );
+    }
+
+    /// Asserts that a focus loss reads as `FocusLost`, and that other
+    /// non-key window events read as nothing.
+    ///
+    /// Case: the user Cmd+Tabs away from orzma and back while the modifier
+    /// state changes.
+    #[test]
+    fn only_key_events_and_focus_losses_reach_the_tap_detector() {
+        use winit::keyboard::ModifiersState;
+
+        assert_eq!(
+            TapInput::from_raw(&WindowEvent::Focused(false)),
+            Some(TapInput::FocusLost)
+        );
+        assert_eq!(TapInput::from_raw(&WindowEvent::Focused(true)), None);
+        assert_eq!(
+            TapInput::from_raw(&WindowEvent::ModifiersChanged(ModifiersState::SUPER.into())),
+            None
+        );
+    }
+
+    /// Asserts that a Bevy `KeyboardInput` with no winit key event behind it
+    /// neither arms nor fires the tap leader.
+    ///
+    /// Case: the user holds Cmd while Cmd+Tabbing back into orzma and then
+    /// releases it, and Bevy synthesizes the Cmd press and release from the
+    /// reported modifier state alone.
+    #[test]
+    fn a_keyboard_input_without_a_winit_key_event_does_not_tap() {
         let mut app = tap_app();
-        app.insert_resource(TabRename::active_for_test(TabId(1)));
         tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Pressed);
         app.update();
         assert_eq!(app.world().resource::<ModifierTapState>().armed, None);
         tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
         app.update();
-        assert_ne!(*app.world().resource::<LeaderPhase>(), LeaderPhase::Pending);
+        assert_eq!(*app.world().resource::<LeaderPhase>(), LeaderPhase::Idle);
+    }
+
+    /// Asserts that a winit focus loss read from `RawWinitWindowEvent`
+    /// disarms an armed tap even while the window still reports focus at
+    /// the end of the frame.
+    ///
+    /// Case: the user presses Cmd and switches to another app before
+    /// releasing it, and winit reports the focus loss in the same frame.
+    #[test]
+    fn a_raw_winit_focus_loss_disarms_an_armed_tap() {
+        let mut app = tap_app();
+        app.world_mut().resource_mut::<ModifierTapState>().armed = Some(ms(0));
+        app.world_mut().write_message(RawWinitWindowEvent {
+            window_id: WindowId::dummy(),
+            event: WindowEvent::Focused(false),
+        });
+        app.update();
         assert_eq!(app.world().resource::<ModifierTapState>().armed, None);
     }
 

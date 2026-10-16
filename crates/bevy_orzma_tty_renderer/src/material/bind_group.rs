@@ -7,10 +7,10 @@ use bevy::{
     render::{
         render_asset::RenderAssets,
         render_resource::{
-            AsBindGroup, AsBindGroupError, BindGroupLayout, BindGroupLayoutEntry, BindingResources,
-            BindingType, BufferBindingType, BufferInitDescriptor, BufferUsages,
-            OwnedBindingResource, SamplerBindingType, ShaderStages, ShaderType, TextureSampleType,
-            TextureViewDimension, UnpreparedBindGroup, encase::UniformBuffer,
+            AsBindGroup, AsBindGroupError, BindGroupBuilder, BindGroupLayout, BindGroupLayoutEntry,
+            BindingType, BufferBindingType, BufferInitDescriptor, BufferUsages, SamplerBindingType,
+            ShaderStages, ShaderType, TextureSampleType, TextureViewDimension,
+            UnpreparedBindingResource, encase::UniformBuffer,
         },
         renderer::RenderDevice,
         storage::GpuShaderBuffer,
@@ -37,15 +37,26 @@ impl AsBindGroup for TerminalUiMaterial {
 
     fn bind_group_data(&self) -> Self::Data {}
 
-    fn unprepared_bind_group(
+    fn build_bind_group(
         &self,
         _layout: &BindGroupLayout,
         render_device: &RenderDevice,
         (images, fallback_image, storage_buffers): &mut SystemParamItem<'_, '_, Self::Param>,
         _force_no_bindless: bool,
-    ) -> Result<UnpreparedBindGroup, AsBindGroupError> {
+        output: &mut BindGroupBuilder,
+    ) -> Result<(), AsBindGroupError> {
         let mut params_buffer = UniformBuffer::new(Vec::new());
-        params_buffer.write(&self.params).unwrap();
+        // NOTE: encase fails a write only when a fixed-size buffer is too
+        // small, and this buffer is a Vec that grows to fit, so the expect
+        // never fires. `AsBindGroupError` has no variant for an encoding
+        // failure to return instead.
+        #[expect(
+            clippy::expect_used,
+            reason = "encoding into a growable Vec cannot fail"
+        )]
+        params_buffer
+            .write(&self.params)
+            .expect("a Vec-backed uniform buffer grows to fit");
 
         let cells = storage_buffers
             .get(&self.cells)
@@ -57,58 +68,60 @@ impl AsBindGroup for TerminalUiMaterial {
             .get(&self.atlas)
             .ok_or(AsBindGroupError::RetryNextUpdate)?;
 
-        let mut bindings = vec![
-            (
-                0,
-                OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
-                    &BufferInitDescriptor {
-                        label: Some("terminal_params"),
-                        usage: BufferUsages::UNIFORM,
-                        contents: params_buffer.as_ref(),
-                    },
-                )),
-            ),
-            (1, OwnedBindingResource::Buffer(cells.buffer.clone())),
-            (2, OwnedBindingResource::Buffer(glyphs.buffer.clone())),
-            (
-                3,
-                OwnedBindingResource::TextureView(
-                    TextureViewDimension::D2,
-                    atlas.texture_view.clone(),
-                ),
-            ),
-            (
-                4,
-                OwnedBindingResource::Sampler(SamplerBindingType::Filtering, atlas.sampler.clone()),
-            ),
-            (
-                5,
-                OwnedBindingResource::Sampler(
-                    SamplerBindingType::Filtering,
-                    fallback_image.d2.sampler.clone(),
-                ),
-            ),
-        ];
-        bindings.reserve(OVERLAY_SLOTS);
-
         // NOTE: A `None` slot, OR a `Some` whose GpuImage is not yet loaded,
         // binds the fallback view. The shader never samples it (the `rect.z==0`
         // sentinel gates it), and this avoids stalling the whole material's bind
         // group on a single mid-load overlay texture.
-        for (i, handle) in self.overlays.iter().enumerate() {
+        let overlays = self.overlays.iter().enumerate().map(|(i, handle)| {
             let view = handle.as_ref().and_then(|h| images.get(h)).map_or_else(
                 || fallback_image.d2.texture_view.clone(),
                 |img| img.texture_view.clone(),
             );
-            bindings.push((
+            (
                 OVERLAY_TEX_BINDING_BASE + i as u32,
-                OwnedBindingResource::TextureView(TextureViewDimension::D2, view),
-            ));
-        }
-
-        Ok(UnpreparedBindGroup {
-            bindings: BindingResources(bindings),
-        })
+                UnpreparedBindingResource::TextureView(TextureViewDimension::D2, view),
+            )
+        });
+        output.binding_resources.extend(
+            [
+                (
+                    0,
+                    UnpreparedBindingResource::Buffer(render_device.create_buffer_with_data(
+                        &BufferInitDescriptor {
+                            label: Some("terminal_params"),
+                            usage: BufferUsages::UNIFORM,
+                            contents: params_buffer.as_ref(),
+                        },
+                    )),
+                ),
+                (1, UnpreparedBindingResource::Buffer(cells.buffer.clone())),
+                (2, UnpreparedBindingResource::Buffer(glyphs.buffer.clone())),
+                (
+                    3,
+                    UnpreparedBindingResource::TextureView(
+                        TextureViewDimension::D2,
+                        atlas.texture_view.clone(),
+                    ),
+                ),
+                (
+                    4,
+                    UnpreparedBindingResource::Sampler(
+                        SamplerBindingType::Filtering,
+                        atlas.sampler.clone(),
+                    ),
+                ),
+                (
+                    5,
+                    UnpreparedBindingResource::Sampler(
+                        SamplerBindingType::Filtering,
+                        fallback_image.d2.sampler.clone(),
+                    ),
+                ),
+            ]
+            .into_iter()
+            .chain(overlays),
+        );
+        Ok(())
     }
 
     fn bind_group_layout_entries(
@@ -170,9 +183,16 @@ impl AsBindGroup for TerminalUiMaterial {
 mod tests {
     use super::*;
 
+    /// Asserts that the shader declares the atlas texture plus one texture
+    /// per overlay slot at the bindings the Rust constants assign, sizes its
+    /// overlay rect array to the slot count, and samples each slot from its
+    /// own texture.
+    ///
+    /// Case: a program in a pane displays several inline images at once, so
+    /// each image occupies its own overlay slot.
     #[test]
     fn wgsl_overlay_bindings_track_overlay_slots() {
-        let src = include_str!("../shaders/terminal_ui_material.wgsl");
+        let src = include_str!("../shaders/terminal_ui_material.wesl");
         let texture_decls = src.matches("_tex: texture_2d<f32>").count();
         assert_eq!(
             texture_decls,
