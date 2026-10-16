@@ -14,7 +14,7 @@ glibc 2.35 or later).
 You need:
 
 - Rust, installed with [rustup](https://rustup.rs). The repository pins the
-  toolchain (1.95) in `rust-toolchain.toml`, and rustup installs it on first use.
+  toolchain (1.97) in `rust-toolchain.toml`, and rustup installs it on first use.
 - Node.js 22 or later, and pnpm 10.30.2 (the `packageManager` in
   `package.json`): `npm install -g pnpm@10.30.2`.
 - [just](https://just.systems).

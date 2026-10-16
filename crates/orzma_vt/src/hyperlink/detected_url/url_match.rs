@@ -139,8 +139,7 @@ fn voids_url(c: char) -> bool {
 /// `end` moved back over trailing punctuation, never before `body`.
 fn trimmed_end(bytes: &[u8], body: usize, end: usize) -> usize {
     /// The characters trimmed from the end of a URL.
-    const TRAILING_TRIM: [u8; 9] = [b'.', b',', b':', b';', b'!', b'?', b'\'', b'(', b'['];
-
+    const TRAILING_TRIM: [u8; 9] = *b".,:;!?'([";
     let mut end = end;
     while end > body
         && bytes

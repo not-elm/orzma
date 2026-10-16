@@ -1,6 +1,6 @@
 # Rust Coding Rules
 
-Rust code in this repo (`src/`, `crates/*`) follows the rules below. Edition 2024, toolchain pinned to 1.95. These rules complement the conventions documented in `CLAUDE.md`.
+Rust code in this repo (`src/`, `crates/*`) follows the rules below. Edition 2024, toolchain pinned to 1.97. These rules complement the conventions documented in `CLAUDE.md`.
 
 ## Module layout — no `mod.rs`
 
