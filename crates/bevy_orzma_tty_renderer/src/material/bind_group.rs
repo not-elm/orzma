@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn wgsl_overlay_bindings_track_overlay_slots() {
-        let src = include_str!("../shaders/terminal_ui_material.wgsl");
+        let src = include_str!("../shaders/terminal_ui_material.wesl");
         let texture_decls = src.matches("_tex: texture_2d<f32>").count();
         assert_eq!(
             texture_decls,

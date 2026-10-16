@@ -666,7 +666,7 @@ mod tests {
     /// otherwise idle.
     #[test]
     fn the_shader_declares_no_time_uniform() {
-        let src = include_str!("../shaders/terminal_ui_material.wgsl");
+        let src = include_str!("../shaders/terminal_ui_material.wesl");
         assert!(!src.contains("time_seconds"));
     }
 
@@ -677,7 +677,7 @@ mod tests {
     /// goes inactive so the caret is drawn hollow as well.
     #[test]
     fn the_shader_cursor_bits_match_the_rust_constants() {
-        let src = include_str!("../shaders/terminal_ui_material.wgsl");
+        let src = include_str!("../shaders/terminal_ui_material.wesl");
         assert!(src.contains(&format!(
             "const CURSOR_VISIBLE: u32 = {}u;",
             PackedCursorStyle::VISIBLE.bits()
@@ -700,7 +700,7 @@ mod tests {
     /// The trimmed, non-empty lines of the shader's `TerminalParams`
     /// declaration, one field per line.
     fn wgsl_terminal_params_fields() -> Vec<&'static str> {
-        include_str!("../shaders/terminal_ui_material.wgsl")
+        include_str!("../shaders/terminal_ui_material.wesl")
             .split("struct TerminalParams {")
             .nth(1)
             .and_then(|rest| rest.split("};").next())

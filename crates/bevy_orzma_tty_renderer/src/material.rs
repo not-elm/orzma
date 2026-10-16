@@ -28,7 +28,7 @@ mod upload;
 pub use overlay::{OVERLAY_SLOTS, TerminalOverlays};
 pub use params::TerminalPaddingFallback;
 
-/// Registers the custom material and embeds its WGSL shader into the binary.
+/// Registers the custom material and embeds its WESL shader into the binary.
 #[derive(Default)]
 pub struct TerminalMaterialPlugin;
 
@@ -37,8 +37,8 @@ impl Plugin for TerminalMaterialPlugin {
         load_internal_asset!(
             app,
             TERMINAL_SHADER_HANDLE,
-            "shaders/terminal_ui_material.wgsl",
-            Shader::from_wgsl
+            "shaders/terminal_ui_material.wesl",
+            Shader::from_wesl
         );
         app.add_plugins((
             UiMaterialPlugin::<TerminalUiMaterial>::default(),
@@ -340,7 +340,7 @@ mod tests {
 
     /// The field names of the shader struct `name`, in declaration order.
     fn wgsl_struct_fields(name: &str) -> Vec<&'static str> {
-        include_str!("shaders/terminal_ui_material.wgsl")
+        include_str!("shaders/terminal_ui_material.wesl")
             .split(&format!("struct {name} {{"))
             .nth(1)
             .and_then(|rest| rest.split("};").next())
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn wgsl_style_constants_track_the_style_bits() {
         const FONT_SELECTED: Style = Style::BOLD.union(Style::ITALIC);
-        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let src = include_str!("shaders/terminal_ui_material.wesl");
         let declared: BTreeSet<String> = src
             .lines()
             .map(str::trim)
@@ -428,7 +428,7 @@ mod tests {
             .flags,
             0
         );
-        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        let src = include_str!("shaders/terminal_ui_material.wesl");
         assert!(src.contains(&format!("const GLYPH_COLOR: u32 = {}u;", GpuGlyph::COLOR)));
     }
 
