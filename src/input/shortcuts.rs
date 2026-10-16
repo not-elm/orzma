@@ -1824,8 +1824,9 @@ mod tests {
         assert_eq!(armed, None);
     }
 
-    /// Asserts that a frame in which the window is not focused disarms the
-    /// tap.
+    /// Asserts that an unfocused frame reads none of its inputs and disarms
+    /// the tap, so neither an unfocused release nor a later focused release
+    /// fires.
     ///
     /// Case: the user presses Cmd, another app takes focus, and Cmd is
     /// released while orzma is in the background.
@@ -1833,12 +1834,26 @@ mod tests {
     fn an_unfocused_frame_disarms_the_tap() {
         let mut armed = None;
         tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta);
+        assert_eq!(
+            TapFrame {
+                focused: false,
+                ..tap_frame(&[CMD_UP], 50)
+            }
+            .step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
+        );
+        assert_eq!(armed, None);
+
+        tap_frame(&[CMD_DOWN], 100).step(&mut armed, TapModifier::Meta);
         TapFrame {
             focused: false,
-            ..tap_frame(&[CMD_UP], 100)
+            ..tap_frame(&[], 150)
         }
         .step(&mut armed, TapModifier::Meta);
-        assert_eq!(armed, None);
+        assert_eq!(
+            tap_frame(&[CMD_UP], 200).step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
+        );
     }
 
     /// Asserts that a character typed while AltGr is held disarms the Alt
@@ -1883,6 +1898,27 @@ mod tests {
         assert_eq!(
             tap_frame(&[CMD_UP], 290).step(&mut armed, TapModifier::Meta),
             TapOutcome::Fired
+        );
+    }
+
+    /// Asserts that an auto-repeat press does not re-arm the tap, so a
+    /// release past the timeout of the first press does not fire.
+    ///
+    /// Case: the user holds Cmd long enough for the platform to repeat it
+    /// and releases it after the timeout.
+    #[test]
+    fn a_repeat_of_the_held_modifier_does_not_rearm_the_tap() {
+        let repeat = TapInput::Key {
+            key_code: KeyCode::SuperLeft,
+            state: ButtonState::Pressed,
+            repeat: true,
+        };
+        let mut armed = None;
+        tap_frame(&[CMD_DOWN], 0).step(&mut armed, TapModifier::Meta);
+        tap_frame(&[repeat], 250).step(&mut armed, TapModifier::Meta);
+        assert_eq!(
+            tap_frame(&[CMD_UP], 350).step(&mut armed, TapModifier::Meta),
+            TapOutcome::None
         );
     }
 
