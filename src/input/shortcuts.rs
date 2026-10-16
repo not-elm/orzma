@@ -925,6 +925,7 @@ mod tests {
     use orzma_configs::shortcuts::{
         Binding, FontSizeStep, PaneDirection, Shortcuts as ConfigShortcuts,
     };
+    use winit::window::WindowId;
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -1958,6 +1959,24 @@ mod tests {
         tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
         app.update();
         assert_eq!(*app.world().resource::<LeaderPhase>(), LeaderPhase::Idle);
+    }
+
+    /// Asserts that a winit focus loss read from `RawWinitWindowEvent`
+    /// disarms an armed tap even while the window still reports focus at
+    /// the end of the frame.
+    ///
+    /// Case: the user presses Cmd and switches to another app before
+    /// releasing it, and winit reports the focus loss in the same frame.
+    #[test]
+    fn a_raw_winit_focus_loss_disarms_an_armed_tap() {
+        let mut app = tap_app();
+        app.world_mut().resource_mut::<ModifierTapState>().armed = Some(ms(0));
+        app.world_mut().write_message(RawWinitWindowEvent {
+            window_id: WindowId::dummy(),
+            event: WindowEvent::Focused(false),
+        });
+        app.update();
+        assert_eq!(app.world().resource::<ModifierTapState>().armed, None);
     }
 
     fn resolved_shortcuts(config: OrzmaConfigs) -> Shortcuts {

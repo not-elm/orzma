@@ -40,6 +40,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 url = "2"
+# NOTE: keep winit's default features off. Turning them back on enables `wayland-dlopen` on Linux,
+# which switches libwayland-client to runtime loading, while bevy_winit itself builds winit without
+# default features.
 winit = { version = "0.30", default-features = false }
 
 [dev-dependencies]

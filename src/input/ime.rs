@@ -44,6 +44,11 @@ pub(super) struct ImePlugin;
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ImeState>()
+            // NOTE: `ime_policy_system` must run unconditionally every frame.
+            // Bevy's text-input plugin resets `Window::ime_enabled` every
+            // `PreUpdate` whenever no `TextInput` has focus, so gating this
+            // system with `run_if` would switch IME off in the terminal and in
+            // webviews.
             .add_systems(
                 Update,
                 (ime_policy_system, read_ime_events)

@@ -37,10 +37,6 @@ impl AsBindGroup for TerminalUiMaterial {
 
     fn bind_group_data(&self) -> Self::Data {}
 
-    #[expect(
-        clippy::expect_used,
-        reason = "encoding into a growable Vec cannot fail"
-    )]
     fn build_bind_group(
         &self,
         _layout: &BindGroupLayout,
@@ -54,6 +50,10 @@ impl AsBindGroup for TerminalUiMaterial {
         // small, and this buffer is a Vec that grows to fit, so the expect
         // never fires. `AsBindGroupError` has no variant for an encoding
         // failure to return instead.
+        #[expect(
+            clippy::expect_used,
+            reason = "encoding into a growable Vec cannot fail"
+        )]
         params_buffer
             .write(&self.params)
             .expect("a Vec-backed uniform buffer grows to fit");
@@ -179,6 +179,13 @@ impl AsBindGroup for TerminalUiMaterial {
 mod tests {
     use super::*;
 
+    /// Asserts that the shader declares the atlas texture plus one texture
+    /// per overlay slot at the bindings the Rust constants assign, sizes its
+    /// overlay rect array to the slot count, and samples each slot from its
+    /// own texture.
+    ///
+    /// Case: a program in a pane displays several inline images at once, so
+    /// each image occupies its own overlay slot.
     #[test]
     fn wgsl_overlay_bindings_track_overlay_slots() {
         let src = include_str!("../shaders/terminal_ui_material.wesl");
