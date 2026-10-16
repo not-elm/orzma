@@ -96,9 +96,6 @@ struct PageAddress(String);
 /// layer derives its cookie and Local State encryption key from a mock
 /// keychain rather than the real login keychain.
 ///
-/// On Windows the config always carries `disable-gpu-compositing`, so the
-/// embedded pages composite on the CPU rather than on the GPU.
-///
 /// On Linux the config always carries `no-first-run`, so CEF starts without
 /// Chromium's first-run flow, including its EULA prompt.
 ///
@@ -109,16 +106,6 @@ fn cef_command_line_config() -> CommandLineConfig {
     let config = CommandLineConfig::default();
     #[cfg(target_os = "macos")]
     let config = config.with_switch("use-mock-keychain");
-    // NOTE: CEF wedges an off-screen browser permanently when the frame for a
-    // resize never arrives (chromiumembedded/cef#3826). The Viz capture oracle stops
-    // completing captures, so `hold_resize_` is never released and every later
-    // `WasResized` becomes a no-op. Software compositing never creates the video
-    // consumer, so `InvalidateInternal` paints synchronously and that oracle is out
-    // of the picture. The upstream fix landed on CEF branch 8037, which is later than
-    // the pinned CEF 152 (Chromium build 7977), so this switch must stay until the
-    // pinned CEF carries it.
-    #[cfg(target_os = "windows")]
-    let config = config.with_switch("disable-gpu-compositing");
     // NOTE: Chromium 152 on Linux gates browser startup on a first-run EULA
     // dialog, and CEF does not patch that gate out. The profile directory is
     // created empty on every launch, so every launch is a first run; without this
