@@ -59,12 +59,13 @@ fn set_cells(app: &mut App, pane: Entity, text: &str) {
         .expect("the pane's cells") = row_of(text);
 }
 
-fn encoded_cells(app: &App, pane: Entity) -> Option<Vec<u8>> {
+fn encoded_cells(app: &App, pane: Entity) -> Option<Vec<GpuCell>> {
     let state = state_of(app, pane);
     app.world()
         .resource::<Assets<ShaderBuffer>>()
         .get(&state.cells_buffer)
-        .and_then(|buffer| buffer.data.clone())
+        .and_then(|buffer| buffer.cast_slice::<GpuCell>())
+        .map(<[GpuCell]>::to_vec)
 }
 
 #[derive(Resource, Default)]
@@ -97,11 +98,9 @@ fn a_cell_change_is_uploaded_without_a_primary_window() {
     set_cells(&mut app, pane, "cd");
     app.update();
 
-    let mut expected = ShaderBuffer::default();
-    expected.set_data(&state_of(&app, pane).cpu_cells);
     let after = encoded_cells(&app, pane);
     assert_ne!(after, before);
-    assert_eq!(after, expected.data);
+    assert_eq!(after, Some(state_of(&app, pane).cpu_cells.clone()));
 }
 
 /// Asserts that a glyph newly rasterized for one pane, which grows the

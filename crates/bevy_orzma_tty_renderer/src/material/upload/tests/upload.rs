@@ -5,6 +5,7 @@ use crate::material::upload::{
     palette::{PackedPalette, TRANSPARENT_BG},
     test_support::{cell_with_link, gpu_cell_fingerprint, state_for},
 };
+use bevy::render::storage::ShaderBufferData;
 use orzma_vt::prelude::{Color as CellColor, Palette};
 
 /// The fingerprint a default cell packs to under the default palette:
@@ -116,12 +117,10 @@ fn an_upload_keeps_its_cpu_cell_table_across_uploads() {
     for cells in [&painted, &blanked] {
         uploaded(&mut state, &mut buffers, cells, (2, 2));
         assert_eq!(state.cpu_cells.len(), 4);
-        let mut expected = ShaderBuffer::default();
-        expected.set_data(&state.cpu_cells);
         let encoded = buffers
             .get(&state.cells_buffer)
-            .and_then(|buffer| buffer.data.as_ref());
-        assert_eq!(encoded, expected.data.as_ref());
+            .and_then(|buffer| buffer.cast_slice::<GpuCell>());
+        assert_eq!(encoded, Some(state.cpu_cells.as_slice()));
     }
     assert_eq!(
         gpu_cell_fingerprint(&state.cpu_cells)[3],
@@ -276,7 +275,7 @@ fn an_upload_rewrites_the_glyph_buffer_only_when_the_table_changed() {
     buffers
         .get_mut(&state.glyphs_buffer)
         .expect("the glyph buffer exists")
-        .data = None;
+        .data = ShaderBufferData::Uninitialized(0);
 
     state
         .upload(&mut atlas, &mut buffers, &row_of("ba"), &fonts, basis)
@@ -284,7 +283,8 @@ fn an_upload_rewrites_the_glyph_buffer_only_when_the_table_changed() {
     let encoded_glyphs = |buffers: &Assets<ShaderBuffer>, state: &TerminalMaterialState| {
         buffers
             .get(&state.glyphs_buffer)
-            .and_then(|buffer| buffer.data.clone())
+            .and_then(|buffer| buffer.cast_slice::<GpuGlyph>())
+            .map(<[GpuGlyph]>::to_vec)
     };
     assert_eq!(
         encoded_glyphs(&buffers, &state),
@@ -295,9 +295,10 @@ fn an_upload_rewrites_the_glyph_buffer_only_when_the_table_changed() {
     state
         .upload(&mut atlas, &mut buffers, &row_of("bc"), &fonts, basis)
         .expect("both buffers exist");
-    let mut expected = ShaderBuffer::default();
-    expected.set_data(&state.cpu_glyphs);
-    assert_eq!(encoded_glyphs(&buffers, &state), expected.data);
+    assert_eq!(
+        encoded_glyphs(&buffers, &state),
+        Some(state.cpu_glyphs.clone())
+    );
 }
 
 /// Asserts that a pane with no visible cells uploads one-element cell
@@ -324,6 +325,6 @@ fn a_zero_sized_pane_uploads_one_element_buffers() {
     assert_eq!(state.cpu_glyphs.len(), 1);
     let encoded = buffers
         .get(&state.cells_buffer)
-        .and_then(|buffer| buffer.data.as_ref());
-    assert!(encoded.is_some_and(|data| !data.is_empty()));
+        .and_then(|buffer| buffer.cast_slice::<GpuCell>());
+    assert!(encoded.is_some_and(|cells| !cells.is_empty()));
 }

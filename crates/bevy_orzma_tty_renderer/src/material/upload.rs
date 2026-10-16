@@ -121,7 +121,8 @@ impl TerminalMaterialState {
             self.cpu_glyphs.push(GpuGlyph::default());
         }
         if let Some(mut buffer) = buffers.get_mut(&self.cells_buffer) {
-            buffer.set_data(&self.cpu_cells);
+            buffer.clear();
+            buffer.extend_from_slice(&self.cpu_cells);
         }
         // NOTE: Skipping the write relies on the glyph table being
         //       append-only between clears. A kept table is the one the
@@ -130,7 +131,8 @@ impl TerminalMaterialState {
         if kept_glyph_count != Some(self.cpu_glyphs.len())
             && let Some(mut buffer) = buffers.get_mut(&self.glyphs_buffer)
         {
-            buffer.set_data(&self.cpu_glyphs);
+            buffer.clear();
+            buffer.extend_from_slice(&self.cpu_glyphs);
         }
         self.uploaded = (atlas.restarts == basis.atlas_restarts).then_some(basis);
         Ok(())
