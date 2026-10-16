@@ -83,7 +83,7 @@ jobs:
       - name: Trust the workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - uses: dtolnay/rust-toolchain@1.95
+      - uses: dtolnay/rust-toolchain@1.97
         with:
           targets: x86_64-unknown-linux-gnu
 

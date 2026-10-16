@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: dtolnay/rust-toolchain@1.95
+      - uses: dtolnay/rust-toolchain@1.97
         with:
           targets: x86_64-pc-windows-msvc
 
