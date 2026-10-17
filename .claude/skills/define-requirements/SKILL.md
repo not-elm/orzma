@@ -57,13 +57,18 @@ with no list of example answers. Ask in the human's language and vocabulary.
   scope, what would count as failure.
 - **What you found is reported as what a user sees today:** "a bell in a
   background tab does nothing today", not file paths, type names, or how the
-  code is arranged. When a fact raises a decision, give the fact and ask the
+  code is arranged. Say how you know it. A documented fact is stated plainly.
+  What the OS, an IME, or another program puts on screen is only predicted by
+  the code, so mark it as read from the code, not seen; what the human saw
+  outranks it. When a fact raises a decision, give the fact and ask the
   decision. When the repository cannot settle a fact, say what you checked
   before you ask.
 - **Defaults are not questions.** A change applies on every platform orzma
-  supports, and behavior the human has not complained about stays as it is.
+  supports, and behavior outside the outcome the human stated stays as it is.
   Neither needs a question or a line in the document; only a departure the
-  human asks for does.
+  human asks for does. Where that outcome ends is still theirs: when their
+  words leave a situation open (a background tab, when they only spoke of the
+  active one), ask about that situation.
 - **Suggesting an alternative** is allowed after the human has stated the
   outcome they want, or when they ask. Suggest one at a time, at the level of
   outcome or scope ("would a mark on the tab be enough, without an OS
