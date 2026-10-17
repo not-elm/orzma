@@ -18,7 +18,8 @@ Two structurally different mocks must both be able to satisfy it.
 **Every requirement, constraint and non-goal in the document is the human's.**
 You ask questions, play back what you heard, and, when it helps, suggest an
 alternative. You never fill in an answer for them, in the conversation or in
-the document.
+the document. How orzma behaves today is not one of their answers: you find
+that out yourself.
 
 This skill ends when the document is handed over. It does not write mock code,
 plans, tests, or implementation, and it invokes no other skill.
@@ -45,10 +46,24 @@ with no list of example answers. Ask in the human's language and vocabulary.
 - **Play back as you go.** When you understand one part well enough, describe
   it back in about 200–300 words, separating what they said from what you
   guessed, and end by asking what is wrong or missing.
-- **Current behavior, when it matters, is described as what a user sees
-  today:** "a bell in a background tab does nothing today". You may read
-  anything in the repository, but what you report is behavior, not file
-  paths, type names, or how the code is arranged.
+- **Look up what the repository answers; ask only what the human alone
+  knows.** Before each question, check whether the code, the docs, or the
+  conversation already answers it. Facts about orzma today are yours to find:
+  what a user sees now, which platforms orzma supports, whether the same thing
+  happens elsewhere (another input field, another way to trigger it), whether
+  a setting or key binding exists. Read them, then state what you found
+  instead of asking. The human's questions are about their experience and
+  judgement: what got in their way, what outcome they want, what is out of
+  scope, what would count as failure.
+- **What you found is reported as what a user sees today:** "a bell in a
+  background tab does nothing today", not file paths, type names, or how the
+  code is arranged. When a fact raises a decision, give the fact and ask the
+  decision. When the repository cannot settle a fact, say what you checked
+  before you ask.
+- **Defaults are not questions.** A change applies on every platform orzma
+  supports, and behavior the human has not complained about stays as it is.
+  Neither needs a question or a line in the document; only a departure the
+  human asks for does.
 - **Suggesting an alternative** is allowed after the human has stated the
   outcome they want, or when they ask. Suggest one at a time, at the level of
   outcome or scope ("would a mark on the tab be enough, without an OS
@@ -64,7 +79,9 @@ order, and write one document per change.
 ### When the human says to skip the questions
 
 Write the document from what they have already said. Everything they have not
-said goes under the open questions, as a question with no proposed answer.
+said goes under the open questions, as a question with no proposed answer. A
+fact the repository answers is looked up, not listed, and a default stays out
+of the document.
 Skipping questions never moves the session past this skill: if they also ask
 for mock code or implementation, say that Step 2 is theirs and that this skill
 stops at the document.
@@ -77,6 +94,9 @@ stops at the document.
 | "A draft with my proposals filled in, which they only need to tick, keeps them in charge" | Ticking your answers makes the decisions yours. Open questions carry no proposed answer. |
 | "It is labelled as my proposal, so it can be a requirement" | A requirement holds only what the human said or explicitly accepted. |
 | "Sharing what I found in the code helps them decide" | File paths and type names pull the conversation into design. Say what a user sees today. |
+| "Asking instead of assuming keeps the decision theirs" | A fact the repository settles is not a decision. Look it up and say what you found. |
+| "Platform scope is theirs to set, so I'll ask which platforms" | A change applies on every platform orzma supports. The human narrows it if they want to. |
+| "I'll ask whether it also happens elsewhere, and whether to include it" | Find out whether it happens elsewhere first. Then give the fact and ask about including it. |
 | "Acceptance criteria make the requirements testable" | Test cases are Step 4. Each requirement is already an observable statement. |
 | "Comparing approaches by effort helps them scope it" | Effort depends on a design nobody has made yet. That comparison belongs to Step 2. |
 | "They said no more questions, so I'll fill the gaps with sensible assumptions" | An assumption you choose is a requirement you wrote. Each gap becomes an open question. |
