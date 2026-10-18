@@ -1302,7 +1302,7 @@ checksum = "bff34eb29ff4b8a8688bc7299f14fb6b597461ca80fec03ed7d22939ab33e48f"
 
 [[package]]
 name = "bevy_orzma_tty_renderer"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "bevy_orzmux",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "bevy_orzma_webview"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "bevy_cef",
@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "bevy_orzmux"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bevy",
  "crossbeam-channel",
@@ -2315,7 +2315,7 @@ dependencies = [
 
 [[package]]
 name = "cef_render_process"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bevy_cef_core",
 ]
@@ -5033,7 +5033,7 @@ dependencies = [
 
 [[package]]
 name = "orzbrowser"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5048,7 +5048,7 @@ dependencies = [
 
 [[package]]
 name = "orzma"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -5081,7 +5081,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_configs"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "dirs",
  "serde",
@@ -5094,7 +5094,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_tty"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5108,7 +5108,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_vt"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64",
  "bitflags 2.13.0",
@@ -5121,7 +5121,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_webview_host"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "crossbeam-channel",
  "data-encoding",
@@ -5140,7 +5140,7 @@ dependencies = [
 
 [[package]]
 name = "orzmd"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -5157,7 +5157,7 @@ dependencies = [
 
 [[package]]
 name = "orzmux"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5606,7 +5606,7 @@ dependencies = [
 
 [[package]]
 name = "ratatui_orzma"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "crossbeam-channel",
  "ratatui",
