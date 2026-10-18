@@ -7,6 +7,7 @@ use crate::input::focus::KeyboardFocused;
 use crate::surface::OrzmaTerminal;
 use crate::ui::tab_bar::rename::{RenameSystems, TabRename};
 use bevy::app::{App, Last, MainScheduleOrder, Plugin, PostUpdate, Update};
+use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::hierarchy::ChildOf;
@@ -16,7 +17,7 @@ use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleLabel};
-use bevy::ecs::system::{Commands, Query, Res, ResMut, SystemParam};
+use bevy::ecs::system::{Commands, NonSendMarker, Query, Res, ResMut, SystemParam};
 use bevy::math::{Rect, Vec2};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
@@ -142,16 +143,8 @@ impl ImeState {
     }
 }
 
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug, Default, PartialEq)]
 struct ImeCandidateArea(Option<Rect>);
-
-impl ImeCandidateArea {
-    fn set_if_neq(&mut self, area: ImeCandidateArea) {
-        if self.0 != area.0 {
-            self.0 = area.0;
-        }
-    }
-}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, ScheduleLabel)]
 struct ImeCandidateSync;
@@ -179,7 +172,7 @@ struct ImePolicyParams<'w, 's> {
 }
 
 impl ImePolicyParams<'_, '_> {
-    fn decide(&self) -> ImeTarget {
+    fn decide(&self, scale_factor: f32) -> ImeTarget {
         todo!("現在の入力状態などからImeTargetへの解決")
     }
 }
@@ -245,7 +238,7 @@ fn ime_policy_system(
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
-    let target = params.decide();
+    let target = params.decide(window.resolution.scale_factor());
     let enabled = !matches!(target, ImeTarget::Disabled);
     if window.ime_enabled != enabled {
         window.ime_enabled = enabled;
@@ -257,7 +250,11 @@ fn ime_policy_system(
     area.set_if_neq(ImeCandidateArea(rect));
 }
 
-fn sync_ime_candidate_area(area: Res<ImeCandidateArea>) {
+fn sync_ime_candidate_area(
+    area: Res<ImeCandidateArea>,
+    primary_window: Query<Entity, With<PrimaryWindow>>,
+    _non_send_marker: NonSendMarker,
+) {
     todo!("IMEの候補ウィンドウをWINIT側と同期する");
 }
 
