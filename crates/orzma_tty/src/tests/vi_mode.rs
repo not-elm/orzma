@@ -457,7 +457,7 @@ fn a_vi_scroll_after_the_app_enters_the_alternate_screen_is_forwarded() {
 }
 
 /// Asserts that a forwarded vi scroll the PTY refuses is reported as an
-/// error.
+/// error and sets no key-forward deadline, so the next one is not held back.
 ///
 /// Case: Claude Code's PTY fails a write, and the user keeps pressing
 /// `Ctrl+Y` in vi mode.
@@ -467,10 +467,12 @@ fn a_refused_vi_scroll_forward_is_reported() {
     term.vi_scroll(Scroll::Delta(1))
         .expect("the reports are queued before the writer fails");
     term.settle_writes();
+    term.key_forward_deadline = None;
     assert!(matches!(
         term.vi_scroll(Scroll::Delta(1)),
         Err(OrzmaTtyError::PtyWrite(_))
     ));
+    assert_eq!(term.key_forward_deadline, None);
     assert!(matches!(
         term.vi_scroll(Scroll::Delta(1)),
         Err(OrzmaTtyError::PtyWriterClosed)
@@ -536,7 +538,8 @@ fn cursor_up_below_the_top_row_moves_the_vi_cursor_without_forwarding() {
     );
 }
 
-/// Asserts that an edge forward the PTY refuses is reported as an error.
+/// Asserts that an edge forward the PTY refuses is reported as an error
+/// and sets no key-forward deadline.
 ///
 /// Case: Claude Code's PTY fails a write, and the user keeps pressing `k`
 /// at the top of its chat in vi mode.
@@ -547,10 +550,12 @@ fn a_refused_edge_forward_is_reported() {
     term.vi_motion(ViMotion::Up)
         .expect("the report is queued before the writer fails");
     term.settle_writes();
+    term.key_forward_deadline = None;
     assert!(matches!(
         term.vi_motion(ViMotion::Up),
         Err(OrzmaTtyError::PtyWrite(_))
     ));
+    assert_eq!(term.key_forward_deadline, None);
 }
 
 /// Asserts that an edge forward clears the selection and leaves vi mode
@@ -587,6 +592,143 @@ fn cursor_up_on_the_top_row_stays_local_while_a_selection_press_is_held() {
     );
     term.vi_motion(ViMotion::Up).expect("vi_motion");
     term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+}
+
+/// Asserts that a forward holds the next one back for exactly
+/// `KEY_FORWARD_INTERVAL`: one a microsecond sooner is dropped without
+/// moving the deadline, and one at the deadline goes out.
+///
+/// Case: the user holds `Ctrl+Y` in vi mode over Claude Code's fullscreen
+/// chat, and the key repeats on both sides of the interval.
+#[test]
+fn a_forward_holds_the_next_back_for_exactly_the_key_forward_interval() {
+    let (mut term, sink) = app_scroll_term(12);
+    let up = WheelDecision::Report {
+        button: MouseButton::WheelUp,
+        count: 1,
+    };
+    let start = Instant::now();
+    let deadline = start + OrzmaTty::<OrzmaVt>::KEY_FORWARD_INTERVAL;
+    term.forward_wheel_to_app(up.clone(), start)
+        .expect("forward_wheel_to_app");
+    assert_eq!(term.key_forward_deadline, Some(deadline));
+    term.forward_wheel_to_app(up.clone(), deadline - Duration::from_micros(1))
+        .expect("forward_wheel_to_app");
+    assert_eq!(term.key_forward_deadline, Some(deadline));
+    term.forward_wheel_to_app(up, deadline)
+        .expect("forward_wheel_to_app");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<64;2;3M".repeat(2));
+}
+
+/// Asserts that a forwarded vi scroll and a forwarded edge motion each hold
+/// the next forward back until `KEY_FORWARD_INTERVAL` after they were sent.
+///
+/// Case: over Claude Code's fullscreen chat in vi mode the user presses
+/// `Ctrl+Y` once, or `k` once on the top line.
+#[test]
+fn vi_scroll_and_edge_forwards_start_the_key_forward_interval() {
+    let interval = OrzmaTty::<OrzmaVt>::KEY_FORWARD_INTERVAL;
+    let (mut scrolled, _sink) = app_scroll_term(12);
+    let before = Instant::now();
+    scrolled.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    let after = Instant::now();
+    let deadline = scrolled
+        .key_forward_deadline
+        .expect("a forwarded vi scroll sets a deadline");
+    assert!(before + interval <= deadline && deadline <= after + interval);
+    let (mut moved, _sink) = real_term(12);
+    moved
+        .feed_bytes(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[1;2H")
+        .expect("the VT interprets the bytes");
+    moved.switch_vi_mode(ViModeSwitch::Enter);
+    let before = Instant::now();
+    moved.vi_motion(ViMotion::Up).expect("vi_motion");
+    let after = Instant::now();
+    let deadline = moved
+        .key_forward_deadline
+        .expect("a forwarded edge motion sets a deadline");
+    assert!(before + interval <= deadline && deadline <= after + interval);
+}
+
+/// Asserts that a vi scroll before the key-forward deadline is dropped
+/// rather than queued, and keeps the selection and the deadline.
+///
+/// Case: the user holds `Ctrl+Y` in vi mode over Claude Code's fullscreen
+/// chat, and the key repeats faster than the interval.
+#[test]
+fn a_vi_scroll_before_the_key_forward_deadline_is_dropped() {
+    let (mut term, sink) = app_scroll_term(12);
+    let held = Instant::now() + Duration::from_secs(60);
+    term.key_forward_deadline = Some(held);
+    term.toggle_vi_selection(SelectionKind::Simple);
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+    assert_eq!(term.vt.selection_text().as_deref(), Some("e"));
+    assert_eq!(term.key_forward_deadline, Some(held));
+}
+
+/// Asserts that an edge motion before the key-forward deadline is dropped,
+/// leaving the vi cursor on the top row.
+///
+/// Case: the user holds `k` in vi mode at the top of Claude Code's
+/// fullscreen chat right after pressing `Ctrl+Y`.
+#[test]
+fn an_edge_motion_before_the_key_forward_deadline_is_dropped() {
+    let (mut term, sink) = real_term(12);
+    term.feed_bytes(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[1;2H")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.key_forward_deadline = Some(Instant::now() + Duration::from_secs(60));
+    term.vi_motion(ViMotion::Up).expect("vi_motion");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+    assert_eq!(
+        term.vt.vi_cursor().map(|cursor| cursor.point.line),
+        Some(GridLine(0))
+    );
+}
+
+/// Asserts that the wheel is neither held back by the key-forward deadline
+/// nor sets one.
+///
+/// Case: in vi mode over Claude Code's fullscreen chat the user spins the
+/// wheel, presses `Ctrl+Y`, and spins the wheel again at once.
+#[test]
+fn the_wheel_ignores_the_key_forward_deadline() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.send_wheel(wheel(1, 0), &WheelConfig::default())
+        .expect("send_wheel");
+    assert_eq!(term.key_forward_deadline, None);
+    let held = Instant::now() + Duration::from_secs(60);
+    term.key_forward_deadline = Some(held);
+    term.send_wheel(wheel(1, 0), &WheelConfig::default())
+        .expect("send_wheel");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<64;6;4M".repeat(2));
+    assert_eq!(term.key_forward_deadline, Some(held));
+}
+
+/// Asserts that a vi scroll that stays on the terminal's own screen is not
+/// held back by the key-forward deadline.
+///
+/// Case: the user is holding `Ctrl+Y` over Claude Code's fullscreen chat in
+/// vi mode when Claude Code exits, and the held key goes on to scroll the
+/// shell history.
+#[test]
+fn a_local_vi_scroll_ignores_the_key_forward_deadline() {
+    let (mut term, sink) = real_term(3);
+    term.feed_bytes(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\x1b[?1049h\x1b[?1002h\x1b[?1006h")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.key_forward_deadline = Some(Instant::now() + Duration::from_secs(60));
+    term.feed_bytes(b"\x1b[?1049l")
+        .expect("the VT interprets the bytes");
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(term.vt.display_offset(), DisplayOffset(1));
     assert_eq!(sink.contents(), b"");
 }
 

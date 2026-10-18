@@ -1757,8 +1757,8 @@ mod tests {
     /// Asserts that a vi-mode scroll and an edge motion the pane's PTY
     /// refuses come back as PTY write errors for that pane.
     ///
-    /// Case: Claude Code's PTY fails a write, and the user keeps pressing
-    /// `Ctrl+Y` and `k` at the top of its chat in vi mode.
+    /// Case: Claude Code's PTY fails the write of a paste, and the user then
+    /// presses `Ctrl+Y` and `k` at the top of its chat in vi mode.
     #[test]
     fn refused_vi_forwards_are_pty_write_errors() {
         let mut h = Harness::new();
@@ -1772,8 +1772,8 @@ mod tests {
         });
         h.event_loop_mut()
             .backend_mut()
-            .scroll(root, Scroll::Delta(1))
-            .expect("the reports are queued before the writer fails");
+            .paste(PaneTarget::Id(root), "hello".to_string())
+            .expect("the paste is queued before the writer fails");
         h.settle_writes();
         assert!(matches!(
             h.event_loop_mut().backend_mut().scroll(root, Scroll::Delta(1)),

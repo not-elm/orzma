@@ -157,6 +157,9 @@ pub struct OrzmaTty<V: Vt> {
     /// marks an update that timed out and is not reopened until the VT
     /// reports it closed.
     sync_deadline: Option<Instant>,
+    /// The earliest time a vi scroll or an edge motion may next send the
+    /// application wheel reports; `None` while nothing holds them back.
+    key_forward_deadline: Option<Instant>,
 }
 
 impl<V: Vt> OrzmaTty<V> {
@@ -170,6 +173,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// The shortest time between a frame and the frame taken when a
     /// synchronized update closes.
     pub const SYNC_EMIT_INTERVAL: Duration = Duration::from_millis(12);
+
+    /// The shortest time between two vi scrolls or edge motions that reach
+    /// the application as wheel reports; a sooner one is dropped.
+    pub const KEY_FORWARD_INTERVAL: Duration = Duration::from_millis(100);
 
     /// Spawns `options.shell` under a new PTY and sizes the injected VT
     /// to the spawn geometry.
@@ -310,8 +317,11 @@ impl<V: Vt> OrzmaTty<V> {
     /// The reports go out for a line, half-page or page scroll while vi mode
     /// is on over an alternate-screen application that tracks the mouse and
     /// no selection press is held; the selection is cleared first, even when
-    /// the write is then refused. `Ok` means the reports were queued, not
-    /// that they reached the PTY.
+    /// the write is then refused. When the reports of a vi scroll or an edge
+    /// motion were queued less than [`Self::KEY_FORWARD_INTERVAL`] earlier,
+    /// this scroll is dropped instead, leaving the viewport and the selection
+    /// as they are. `Ok` means the reports were queued or dropped, not that
+    /// they reached the PTY.
     ///
     /// # Errors
     ///
@@ -322,7 +332,7 @@ impl<V: Vt> OrzmaTty<V> {
         if self.scrolls_app() {
             let decision = WheelDecision::for_vi_scroll(scroll, self.vt.grid_size().rows);
             if decision != WheelDecision::Noop {
-                return self.forward_wheel_to_app(decision);
+                return self.forward_wheel_to_app(decision, Instant::now());
             }
         }
         self.scroll(scroll);
@@ -367,7 +377,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// The report goes out while vi mode is on over an alternate-screen
     /// application that tracks the mouse and no selection press is held;
     /// the selection is cleared first, even when the write is then refused.
-    /// `Ok` means the report was queued, not that it reached the PTY.
+    /// When the reports of a vi scroll or an edge motion were queued less
+    /// than [`Self::KEY_FORWARD_INTERVAL`] earlier, this motion is dropped
+    /// instead, leaving the vi cursor and the selection as they are. `Ok`
+    /// means the report was queued or dropped, not that it reached the PTY.
     ///
     /// # Errors
     ///
@@ -376,7 +389,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn vi_motion(&mut self, motion: ViMotion) -> OrzmaTtyResult {
         if let Some(button) = self.edge_wheel_button(motion) {
-            return self.forward_wheel_to_app(WheelDecision::Report { button, count: 1 });
+            return self
+                .forward_wheel_to_app(WheelDecision::Report { button, count: 1 }, Instant::now());
         }
         if self.vt.vi_motion(motion) {
             self.coalescer.arm_or_extend(Instant::now());
@@ -739,6 +753,7 @@ impl<V: Vt> OrzmaTty<V> {
             focused: false,
             pointer: PointerState::default(),
             sync_deadline: None,
+            key_forward_deadline: None,
         }
     }
 
@@ -834,15 +849,25 @@ impl<V: Vt> OrzmaTty<V> {
         )
     }
 
-    /// Clears the selection and queues `decision`'s wheel reports at the vi
-    /// cursor's cell; does neither when there is nothing to send.
+    /// Clears the selection, queues `decision`'s wheel reports at the vi
+    /// cursor's cell, and holds the next forward back until
+    /// [`Self::KEY_FORWARD_INTERVAL`] after `now`.
+    ///
+    /// Does nothing when there is nothing to send or `now` is still before
+    /// the deadline an earlier forward set; a refused write sets no deadline.
     ///
     /// # Errors
     ///
     /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
     /// the reports (nothing is queued), `PtyWrite` once after the writer
     /// thread's write failed, and `PtyWriterClosed` after that.
-    fn forward_wheel_to_app(&mut self, decision: WheelDecision) -> OrzmaTtyResult {
+    fn forward_wheel_to_app(&mut self, decision: WheelDecision, now: Instant) -> OrzmaTtyResult {
+        if self
+            .key_forward_deadline
+            .is_some_and(|deadline| now < deadline)
+        {
+            return Ok(());
+        }
         let modes = self.vt.modes();
         let cell = self.vi_cursor_cell();
         let input = WheelInput {
@@ -857,7 +882,9 @@ impl<V: Vt> OrzmaTty<V> {
             return Ok(());
         }
         self.clear_selection();
-        self.pty.enqueue_write(bytes)
+        self.pty.enqueue_write(bytes)?;
+        self.key_forward_deadline = now.checked_add(Self::KEY_FORWARD_INTERVAL);
+        Ok(())
     }
 
     /// Moves a held selection drag's moving end onto the grid point its
