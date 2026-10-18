@@ -233,9 +233,9 @@ fn ime_policy_system(
             }
             return;
         }
-        if let Ok((node, ui_xform)) = webview_anchors.get(target) {
+        if let Ok((focused_pane_node, ui_xform)) = webview_anchors.get(target) {
             let scale = window.resolution.scale_factor();
-            let top_left_phys = ui_xform.translation - 0.5 * node.size();
+            let top_left_phys = node_top_left_phys(focused_pane_node, ui_xform);
             let pos = top_left_phys / scale;
             if window.ime_position != pos {
                 window.ime_position = pos;
@@ -274,19 +274,12 @@ fn ime_policy_system(
     // for us to pass the actual cell height. Net effect: candidate window
     // appears one full row below the cursor — i.e. one row below
     // the preedit row, which is what users expect.
-    //
-    // NOTE: `UiGlobalTransform.translation` is the CENTER of the
-    // node in PHYSICAL pixels (bevy_ui's `ui_layout_system` writes
-    // `local_center` into the global transform; `ComputedNode.size`
-    // is also physical px). To get the node's top-left in physical
-    // px, subtract `0.5 * node.size()`. Do NOT multiply translation
-    // by `scale` — it's already physical.
-    let Ok((node, ui_xform, view)) = anchors.get(entity) else {
+    let Ok((focused_pane_node, ui_xform, view)) = anchors.get(entity) else {
         return;
     };
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
     let (cursor_col, cursor_row) = view.cursor_viewport_cell_or_top();
-    let host_origin_phys = ui_xform.translation - 0.5 * node.size();
+    let host_origin_phys = node_top_left_phys(focused_pane_node, ui_xform);
     let cell_origin_phys = host_origin_phys
         + Vec2::new(f32::from(cursor_col), f32::from(cursor_row) + 1.0) * metrics.metrics.cell_size;
     let pos_logical = cell_origin_phys / scale;
@@ -370,9 +363,40 @@ fn webview_ime_position(
     if rect.z == 0 {
         return None;
     }
-    let host_origin_phys = ui_xform.translation - 0.5 * node.size();
+    let host_origin_phys = node_top_left_phys(node, ui_xform);
     let rect_origin_phys = Vec2::new(rect.y as f32, rect.x as f32) * metrics.metrics.cell_size;
     Some((host_origin_phys + rect_origin_phys) / scale_factor.max(f32::EPSILON))
+}
+
+/// The top-left corner of `node`, in physical pixels of window space.
+///
+/// Window space has its origin at the window's top-left corner and its y
+/// axis pointing down. `transform` places the center of `node` in that
+/// space, and `node`'s size is measured in the same physical pixels. The
+/// result is not divided by the window's scale factor; a caller that needs
+/// logical pixels divides it. A node whose `UiTransform` rotates or scales
+/// it gets a point that is not the corner it is drawn at.
+///
+/// ```text
+///  (0, 0)
+///    ┼───────────────────────────────────────────▶ x
+///    │
+///    │   ●─────────────────────┐ ← the returned corner
+///    │   │                     │
+///    │   │          ×          │ ← transform.translation
+///    │   │                     │
+///    │   └─────────────────────┘
+///    │   ←─── node.size().x ───→
+///    ▼
+///    y
+/// ```
+///
+/// # Examples
+///
+/// A 1600 × 1200 node whose center sits at (1000, 700) has its top-left
+/// corner at (200, 100).
+fn node_top_left_phys(node: &ComputedNode, transform: &UiGlobalTransform) -> Vec2 {
+    transform.translation - 0.5 * node.size()
 }
 
 /// Drops an open composition when a tab rename starts or ends, so a
