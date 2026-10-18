@@ -16,8 +16,18 @@ the mouse: a click moves the vi cursor, and a drag selects text (and moves the
 vi cursor to where the drag ends). A selection started with the mouse can be
 extended with the motion keys, while a click or a drag always starts a new
 selection. On the primary screen, where the shell runs, the wheel scrolls the
-scrollback. On the alternate screen, where full-screen programs such as nvim
-and less run, the wheel sends arrow keys to the program.
+scrollback.
+
+On the alternate screen, where full-screen programs such as nvim and Claude
+Code run, there is no scrollback for vi mode to move through. When the program
+tracks the mouse, vi mode lets it scroll its own content instead, except while
+you drag a mouse selection: the scroll keys (`Ctrl+Y`, `Ctrl+E`, `Ctrl+U`,
+`Ctrl+D`, `Ctrl+B`, `Ctrl+F`) and `k` on the top line or `j` on the bottom line
+send the program wheel events at the vi cursor, and the wheel without Shift
+reaches the program at the pointer. Any selection is cleared before the
+program scrolls, and how far each event scrolls is up to the program. A program
+that does not track the mouse, such as less, is not scrolled: there the wheel
+does nothing while vi mode is on.
 
 ## Actions
 

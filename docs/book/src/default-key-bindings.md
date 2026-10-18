@@ -73,7 +73,10 @@ macOS `Cmd+C`, always copies.
 ## Vi mode
 
 These keys work only in [vi mode](vi-mode.md). They are set in the `[vi-mode]`
-table (see [Vi mode keys](key-bindings.md#vi-mode-keys-vi-mode)).
+table (see [Vi mode keys](key-bindings.md#vi-mode-keys-vi-mode)). Over a
+full-screen program that tracks the mouse, `scroll-up`, `scroll-down`,
+`half-page-up`, `half-page-down`, `page-up` and `page-down` send the program
+wheel events instead, so how far they move is up to the program.
 
 <!-- ANCHOR: vi-mode-actions -->
 
