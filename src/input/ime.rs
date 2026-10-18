@@ -370,12 +370,13 @@ mod tests {
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::math::IVec4;
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
     use bevy_orzma_tty_renderer::prelude::{Baseline, CellMetrics, Thickness, Underline};
     use bevy_orzmux::prelude::TabId;
-    use orzma_vt::prelude::{Cursor, InstanceId};
+    use orzma_vt::prelude::{Cursor, GridColumn, GridLine, GridPoint, InstanceId};
     use orzma_webview_host::prelude::MountId;
 
     #[test]
@@ -1078,5 +1079,237 @@ mod tests {
         let window = windows.single(app.world()).expect("one window");
         assert!(window.ime_enabled);
         assert_eq!(window.ime_position, sentinel);
+    }
+
+    /// The `ime_position` the primary window starts with, distinct from
+    /// every anchor a case expects.
+    const UNTOUCHED_POSITION: Vec2 = Vec2::new(-7.0, -7.0);
+
+    /// An app holding every resource `ime_policy_system` reads, with 8×16 px
+    /// cells and a primary window at a scale factor of 2 whose IME starts off
+    /// at `UNTOUCHED_POSITION`.
+    fn system_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_resource::<FocusedWebview>();
+        app.init_resource::<ImeCandidateArea>();
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                cell_size: Vec2::new(8.0, 16.0),
+                baseline: Baseline::new(12.0),
+                underline: Underline {
+                    position: -2.0,
+                    thickness: Thickness::new(1.0),
+                },
+                max_overflow: 0.0,
+            },
+            phys_font_size: 12,
+        });
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(1600, 1200).with_scale_factor_override(2.0),
+                ime_enabled: false,
+                ime_position: UNTOUCHED_POSITION,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app
+    }
+
+    fn switch_window_ime_on(app: &mut App) {
+        let mut windows = app
+            .world_mut()
+            .query_filtered::<&mut Window, With<PrimaryWindow>>();
+        windows
+            .single_mut(app.world_mut())
+            .expect("one primary window")
+            .ime_enabled = true;
+    }
+
+    /// Spawns a keyboard-focused terminal whose node's top-left corner sits
+    /// at (100, 100) physical px, with the cursor at column 5, row 10 of a
+    /// 80×24 viewport.
+    fn spawn_cursor_surface(app: &mut App) -> Entity {
+        app.world_mut()
+            .spawn((
+                OrzmaTerminal,
+                KeyboardFocused,
+                ComputedNode {
+                    size: Vec2::new(800.0, 600.0),
+                    ..ComputedNode::DEFAULT
+                },
+                UiGlobalTransform::from_xy(500.0, 400.0),
+                TerminalView {
+                    cols: 80,
+                    rows: 24,
+                    cursor: Some(Cursor {
+                        point: GridPoint {
+                            line: GridLine(10),
+                            column: GridColumn(5),
+                        },
+                        ..Cursor::default()
+                    }),
+                    ..default()
+                },
+                TerminalOverlays::default(),
+            ))
+            .id()
+    }
+
+    /// Gives `surface`'s overlay slot 0 the cell rect `rect`
+    /// (`row, col, rows, cols`), spawns a webview on that slot as its child,
+    /// and focuses the webview.
+    fn focus_inline_child(app: &mut App, surface: Entity, rect: IVec4) {
+        app.world_mut()
+            .get_mut::<TerminalOverlays>(surface)
+            .expect("the surface carries overlays")
+            .rects[0] = rect;
+        let webview = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
+    }
+
+    /// Runs the policy once and returns the primary window's IME switch and
+    /// anchor.
+    fn run_policy(app: &mut App) -> (bool, Vec2) {
+        app.world_mut()
+            .run_system_once(ime_policy_system)
+            .expect("the policy runs");
+        let mut windows = app
+            .world_mut()
+            .query_filtered::<&Window, With<PrimaryWindow>>();
+        let window = windows.single(app.world()).expect("one primary window");
+        (window.ime_enabled, window.ime_position)
+    }
+
+    /// Asserts that a keyboard-focused terminal switches the window's IME on
+    /// and anchors the candidate window at its cursor cell in logical pixels.
+    ///
+    /// Case: orzma has just opened with the IME off, and the first frame with
+    /// a focused shell pane runs on a display with a scale factor of 2.
+    #[test]
+    fn a_focused_surface_switches_the_window_ime_on_at_its_cursor_cell() {
+        let mut app = system_app();
+        spawn_cursor_surface(&mut app);
+
+        let (enabled, position) = run_policy(&mut app);
+
+        assert!(
+            enabled,
+            "the first focused-surface tick switches the IME on"
+        );
+        assert!(
+            position.abs_diff_eq(Vec2::new(70.0, 130.0), 1e-3),
+            "the anchor is the cursor cell's top-left in logical px, got {position:?}",
+        );
+    }
+
+    /// Asserts that a focused inline webview moves the window's anchor to its
+    /// overlay rect origin in logical pixels.
+    ///
+    /// Case: the user clicks into an inline webview the active pane mounted
+    /// at row 2, column 3, on a display with a scale factor of 2.
+    #[test]
+    fn a_focused_inline_webview_moves_the_window_anchor_to_its_overlay_rect() {
+        let mut app = system_app();
+        let surface = spawn_cursor_surface(&mut app);
+        focus_inline_child(&mut app, surface, IVec4::new(2, 3, 4, 10));
+
+        let (enabled, position) = run_policy(&mut app);
+
+        assert!(enabled, "a focused webview keeps the IME on");
+        assert!(
+            position.abs_diff_eq(Vec2::new(62.0, 66.0), 1e-3),
+            "the anchor is the overlay rect origin in logical px, got {position:?}",
+        );
+    }
+
+    /// Asserts that a tab rename switches the window's IME on and leaves the
+    /// anchor to the rename field.
+    ///
+    /// Case: the user double-clicks a tab to rename it while the shell pane
+    /// below still holds keyboard focus.
+    #[test]
+    fn a_tab_rename_switches_the_window_ime_on_without_moving_its_anchor() {
+        let mut app = system_app();
+        app.insert_resource(TabRename::active_for_test(TabId(1)));
+        spawn_cursor_surface(&mut app);
+
+        let (enabled, position) = run_policy(&mut app);
+
+        assert!(enabled, "a tab rename keeps the IME on");
+        assert_eq!(position, UNTOUCHED_POSITION);
+    }
+
+    /// Asserts that the window's IME switches off when neither a terminal nor
+    /// a webview holds keyboard focus.
+    ///
+    /// Case: the last pane with focus goes away while the IME was on.
+    #[test]
+    fn no_focused_surface_and_no_webview_switches_the_window_ime_off() {
+        let mut app = system_app();
+        switch_window_ime_on(&mut app);
+
+        let (enabled, _) = run_policy(&mut app);
+
+        assert!(!enabled);
+    }
+
+    /// Asserts that a keyboard-focused terminal in vi mode switches the
+    /// window's IME off.
+    ///
+    /// Case: the user enters vi mode in the focused pane while the IME was
+    /// on.
+    #[test]
+    fn a_vi_mode_surface_switches_the_window_ime_off() {
+        let mut app = system_app();
+        switch_window_ime_on(&mut app);
+        let surface = spawn_cursor_surface(&mut app);
+        app.world_mut().entity_mut(surface).insert(ViModeState);
+
+        let (enabled, _) = run_policy(&mut app);
+
+        assert!(!enabled);
+    }
+
+    /// Asserts that an inline webview on an inactive overlay slot keeps the
+    /// window's IME on but leaves its anchor where it was.
+    ///
+    /// Case: the user focuses an inline webview in the frame its pane
+    /// released the overlay slot, before the focus moves away.
+    #[test]
+    fn an_inline_webview_on_an_inactive_slot_leaves_the_window_anchor_unchanged() {
+        let mut app = system_app();
+        let surface = spawn_cursor_surface(&mut app);
+        focus_inline_child(&mut app, surface, IVec4::new(2, 3, 0, 10));
+
+        let (enabled, position) = run_policy(&mut app);
+
+        assert!(enabled, "a focused webview keeps the IME on");
+        assert_eq!(position, UNTOUCHED_POSITION);
+    }
+
+    /// Asserts that a focused inline webview keeps the window's IME on even
+    /// when its terminal is in vi mode.
+    ///
+    /// Case: the user enters vi mode in a pane, then clicks into the inline
+    /// webview that pane mounted.
+    #[test]
+    fn a_focused_inline_webview_keeps_the_window_ime_on_over_a_vi_mode_surface() {
+        let mut app = system_app();
+        let surface = spawn_cursor_surface(&mut app);
+        app.world_mut().entity_mut(surface).insert(ViModeState);
+        focus_inline_child(&mut app, surface, IVec4::new(2, 3, 4, 10));
+
+        let (enabled, _) = run_policy(&mut app);
+
+        assert!(enabled);
     }
 }
