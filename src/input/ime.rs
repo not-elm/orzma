@@ -17,12 +17,13 @@ use bevy::ecs::message::MessageReader;
 use bevy::ecs::observer::On;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
-use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
-use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleLabel};
+use bevy::ecs::schedule::common_conditions::{on_message, resource_exists_and_changed};
+use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleLabel, SystemCondition};
 use bevy::ecs::system::{Commands, NonSendMarker, Query, Res, ResMut};
 use bevy::math::{Rect, Vec2};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use bevy::window::{Ime, PrimaryWindow, Window};
+use bevy::window::{Ime, PrimaryWindow, Window, WindowBackendScaleFactorChanged};
+use bevy::winit::WINIT_WINDOWS;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_tty_renderer::prelude::{
     TerminalCellMetricsResource, TerminalOverlays, TerminalView,
@@ -31,6 +32,7 @@ use bevy_orzma_webview::Webview;
 use bevy_orzmux::prelude::RequestActiveKeyInput;
 use ime_target::{ImePolicyParams, ImeTarget};
 use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
+use winit::dpi::{LogicalPosition, LogicalSize};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
@@ -73,7 +75,16 @@ impl Plugin for ImePlugin {
             )
             .add_systems(
                 ImeCandidateSync,
-                sync_ime_candidate_area.run_if(resource_exists_and_changed::<ImeCandidateArea>),
+                // NOTE: on Windows, winit converts the area to physical pixels with the
+                // scale factor current at the call and never converts it again. A move to a
+                // monitor with another scale factor can leave the logical area unchanged, so
+                // the area is sent again on every backend scale-factor change; without this,
+                // the IME keeps the old physical position. A one-frame layout lag often
+                // resends the area anyway, which hides a missing condition in manual testing.
+                sync_ime_candidate_area.run_if(
+                    resource_exists_and_changed::<ImeCandidateArea>
+                        .or_eager(on_message::<WindowBackendScaleFactorChanged>),
+                ),
             )
             .add_observer(apply_ime_commit_to_terminal);
     }
@@ -246,7 +257,23 @@ fn sync_ime_candidate_area(
     primary_window: Query<Entity, With<PrimaryWindow>>,
     _non_send_marker: NonSendMarker,
 ) {
-    todo!("IMEの候補ウィンドウをWINIT側と同期する");
+    let Some(rect) = area.0 else {
+        return;
+    };
+    let Ok(entity) = primary_window.single() else {
+        return;
+    };
+    // NOTE: bevy_winit keeps `WinitWindows` in a main-thread thread-local, not
+    // in the world. `NonSendMarker` pins this system to the main thread, so the
+    // borrow sees the populated instance rather than an empty one.
+    WINIT_WINDOWS.with_borrow(|winit_windows| {
+        if let Some(window) = winit_windows.get_window(entity) {
+            window.set_ime_cursor_area(
+                LogicalPosition::new(rect.min.x, rect.min.y),
+                LogicalSize::new(rect.width(), rect.height()),
+            );
+        }
+    });
 }
 
 /// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
