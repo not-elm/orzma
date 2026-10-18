@@ -27,7 +27,7 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_tty_renderer::prelude::{
     TerminalCellMetricsResource, TerminalOverlays, TerminalView,
 };
-use bevy_orzma_webview::{Webview, focused_webview_of};
+use bevy_orzma_webview::Webview;
 use bevy_orzmux::prelude::RequestActiveKeyInput;
 use ime_target::{ImePolicyParams, ImeTarget};
 use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};

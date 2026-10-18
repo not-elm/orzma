@@ -1,6 +1,7 @@
 //! Resolves which IME target the window policy serves from the current
 //! keyboard focus.
 
+use super::{node_top_left_phys, resolve_focused_surface, webview_ime_position};
 use crate::action::vi::mode::ViModeState;
 use crate::input::focus::KeyboardFocused;
 use crate::ui::tab_bar::rename::TabRename;
@@ -14,7 +15,7 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_orzma_tty_renderer::prelude::{
     TerminalCellMetricsResource, TerminalOverlays, TerminalView,
 };
-use bevy_orzma_webview::Webview;
+use bevy_orzma_webview::{Webview, focused_webview_of};
 
 #[derive(SystemParam)]
 pub(super) struct ImePolicyParams<'w, 's> {
@@ -32,7 +33,6 @@ pub(super) struct ImePolicyParams<'w, 's> {
     >,
     metrics: Res<'w, TerminalCellMetricsResource>,
     focused_webview: Res<'w, FocusedWebview>,
-    webview_anchors: Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform)>,
     webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
     webview_slots: Query<'w, 's, &'static Webview>,
     overlays: Query<'w, 's, &'static TerminalOverlays>,
@@ -40,15 +40,69 @@ pub(super) struct ImePolicyParams<'w, 's> {
 
 impl ImePolicyParams<'_, '_> {
     pub fn decide(&self, scale_factor: f32) -> ImeTarget {
-        todo!("現在の入力状態などからImeTargetへの解決")
+        if self.rename.as_deref().is_some_and(TabRename::is_active) {
+            return ImeTarget::Rename;
+        }
+        // NOTE: the webview check must stay ahead of the vi-mode and no-surface
+        // checks. A focused CEF webview receives IME input through bevy_cef's `Ime`
+        // bridge; switching the IME off makes bevy_winit call
+        // `set_ime_allowed(false)`, so the OS delivers no `Ime` events and webview
+        // IME input silently breaks.
+        if self.focused_webview.0.is_some() {
+            return ImeTarget::Webview(self.webview_anchor(scale_factor));
+        }
+        let Some(surface) = resolve_focused_surface(&self.focused) else {
+            return ImeTarget::Disabled;
+        };
+        if self.vi_modes.contains(surface) {
+            return ImeTarget::Disabled;
+        }
+        ImeTarget::Terminal(self.cursor_cell_rect(surface, scale_factor))
+    }
+
+    fn webview_anchor(&self, scale_factor: f32) -> Option<Vec2> {
+        let surface = resolve_focused_surface(&self.focused);
+        let child =
+            focused_webview_of(Some(&self.focused_webview), &self.webview_parents, surface)?;
+        webview_ime_position(
+            scale_factor,
+            &self.webview_parents,
+            &self.webview_slots,
+            &self.anchors,
+            &self.overlays,
+            &self.metrics,
+            child,
+        )
+    }
+
+    fn cursor_cell_rect(&self, surface: Entity, scale_factor: f32) -> Option<Rect> {
+        let (node, transform, view) = self.anchors.get(surface).ok()?;
+        let (col, row) = view.cursor_viewport_cell_or_top();
+        let cell_size = self.metrics.metrics.cell_size;
+        let origin_phys =
+            node_top_left_phys(node, transform) + Vec2::new(col.into(), row.into()) * cell_size;
+        let scale = scale_factor.max(f32::EPSILON);
+        Some(Rect::from_corners(
+            origin_phys / scale,
+            (origin_phys + cell_size) / scale,
+        ))
     }
 }
 
 pub(super) enum ImeTarget {
-    Rename,                 // ime_enabled = true。ime_position は Bevy の入力欄に任せる
-    Webview(Option<Vec2>),  // ime_enabled = true。位置が取れれば ime_position に書く
-    Terminal(Option<Rect>), // ime_enabled = true。矩形が取れれば起点を ime_position、area は Some
-    Disabled,               // ime_enabled = false(vi モード、フォーカスなし)
+    /// A tab rename is in progress, and the rename field positions the
+    /// candidate window.
+    Rename,
+    /// A webview holds keyboard focus; the anchor is in logical pixels and
+    /// is `None` when no anchor can be derived.
+    Webview(Option<Vec2>),
+    /// A terminal outside vi mode holds keyboard focus; the rectangle is its
+    /// cursor cell in logical pixels and is `None` when the terminal has no
+    /// laid-out node.
+    Terminal(Option<Rect>),
+    /// Nothing that takes IME input holds keyboard focus, or the focused
+    /// terminal is in vi mode.
+    Disabled,
 }
 
 #[cfg(test)]
@@ -284,5 +338,36 @@ mod tests {
         let target = decide_in(&mut app, 2.0);
 
         assert!(matches!(target, ImeTarget::Webview(Some(_))));
+    }
+
+    /// Asserts that a cursor scrolled out of the viewport anchors the
+    /// candidate area on the top row, in the cursor's column.
+    ///
+    /// Case: the user scrolls back through history and starts composing while
+    /// the prompt's row is out of view.
+    #[test]
+    fn a_cursor_scrolled_out_of_view_anchors_the_candidate_area_on_the_top_row() {
+        let mut app = policy_app();
+        let surface = spawn_focused_surface(&mut app);
+        app.world_mut()
+            .get_mut::<TerminalView>(surface)
+            .expect("the surface carries a view")
+            .display_offset = 20;
+
+        let target = decide_in(&mut app, 2.0);
+
+        let ImeTarget::Terminal(Some(rect)) = target else {
+            panic!("a focused terminal outside vi mode yields a candidate area");
+        };
+        assert!(
+            rect.min.abs_diff_eq(Vec2::new(70.0, 50.0), 1e-3),
+            "the area starts on the top row in the cursor's column, got {:?}",
+            rect.min,
+        );
+        assert!(
+            rect.size().abs_diff_eq(Vec2::new(4.0, 8.0), 1e-3),
+            "the area is one cell in logical px, got {:?}",
+            rect.size(),
+        );
     }
 }
