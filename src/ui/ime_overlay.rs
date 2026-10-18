@@ -221,7 +221,7 @@ fn position_ime_overlay(
         return;
     };
 
-    // NOTE: clamp the scale away from zero (matching `ime_policy_system`); a 0
+    // NOTE: clamp the scale away from zero (matching the IME candidate area); a 0
     // scale factor would make every cell metric inf/NaN and fling the overlay
     // off-screen during composition.
     let scale = window.resolution.scale_factor().max(f32::EPSILON);

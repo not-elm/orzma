@@ -1,7 +1,7 @@
 //! Resolves which IME target the window policy serves from the current
 //! keyboard focus.
 
-use super::{node_top_left_phys, resolve_focused_surface, webview_ime_position};
+use super::resolve_focused_surface;
 use crate::action::vi::mode::ViModeState;
 use crate::input::focus::KeyboardFocused;
 use crate::ui::tab_bar::rename::TabRename;
@@ -60,18 +60,34 @@ impl ImePolicyParams<'_, '_> {
         ImeTarget::Terminal(self.cursor_cell_rect(surface, scale_factor))
     }
 
+    /// The focused inline webview's overlay rect origin in logical pixels.
+    ///
+    /// `None` when no terminal holds keyboard focus, the focused webview is
+    /// not a child of that terminal, the terminal has no laid-out node, or
+    /// the webview's overlay slot is inactive.
     fn webview_anchor(&self, scale_factor: f32) -> Option<Vec2> {
-        let surface = resolve_focused_surface(&self.focused);
-        let child =
-            focused_webview_of(Some(&self.focused_webview), &self.webview_parents, surface)?;
-        webview_ime_position(
-            scale_factor,
+        let terminal = resolve_focused_surface(&self.focused)?;
+        let child = focused_webview_of(
+            Some(&self.focused_webview),
             &self.webview_parents,
-            &self.webview_slots,
-            &self.anchors,
-            &self.overlays,
-            &self.metrics,
-            child,
+            Some(terminal),
+        )?;
+        let slot = self.webview_slots.get(child).ok()?.slot();
+        let (node, transform, _) = self.anchors.get(terminal).ok()?;
+        let rect = *self
+            .overlays
+            .get(terminal)
+            .ok()?
+            .rects
+            .get(usize::from(slot))?;
+        if rect.z == 0 {
+            return None;
+        }
+        let rect_origin_phys =
+            Vec2::new(rect.y as f32, rect.x as f32) * self.metrics.metrics.cell_size;
+        Some(
+            (node_top_left_phys(node, transform) + rect_origin_phys)
+                / scale_factor.max(f32::EPSILON),
         )
     }
 
@@ -105,87 +121,47 @@ pub(super) enum ImeTarget {
     Disabled,
 }
 
+/// The top-left corner of `node`, in physical pixels of window space.
+///
+/// Window space has its origin at the window's top-left corner and its y
+/// axis pointing down. `transform` places the center of `node` in that
+/// space, and `node`'s size is measured in the same physical pixels. The
+/// result is not divided by the window's scale factor; a caller that needs
+/// logical pixels divides it. A node whose `UiTransform` rotates or scales
+/// it gets a point that is not the corner it is drawn at.
+///
+/// ```text
+///  (0, 0)
+///    ┼───────────────────────────────────────────▶ x
+///    │
+///    │   ●─────────────────────┐ ← the returned corner
+///    │   │                     │
+///    │   │          ×          │ ← transform.translation
+///    │   │                     │
+///    │   └─────────────────────┘
+///    │   ←─── node.size().x ───→
+///    ▼
+///    y
+/// ```
+///
+/// # Examples
+///
+/// A 1600 × 1200 node whose center sits at (1000, 700) has its top-left
+/// corner at (200, 100).
+fn node_top_left_phys(node: &ComputedNode, transform: &UiGlobalTransform) -> Vec2 {
+    transform.translation - 0.5 * node.size()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::OrzmaTerminal;
+    use crate::input::ime::test_support::{
+        focus_inline_webview, policy_app, spawn_focused_surface,
+    };
     use bevy::app::App;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::math::IVec4;
-    use bevy::prelude::{MinimalPlugins, default};
-    use bevy::state::app::StatesPlugin;
-    use bevy_orzma_tty_renderer::prelude::{Baseline, CellMetrics, Thickness, Underline};
     use bevy_orzmux::prelude::TabId;
-    use orzma_vt::prelude::{Cursor, GridColumn, GridLine, GridPoint, InstanceId};
-    use orzma_webview_host::prelude::MountId;
-
-    fn policy_app() -> App {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.init_resource::<FocusedWebview>();
-        app.insert_resource(TerminalCellMetricsResource {
-            metrics: CellMetrics {
-                cell_size: Vec2::new(8.0, 16.0),
-                baseline: Baseline::new(12.0),
-                underline: Underline {
-                    position: -2.0,
-                    thickness: Thickness::new(1.0),
-                },
-                max_overflow: 0.0,
-            },
-            phys_font_size: 12,
-        });
-        app
-    }
-
-    /// Spawns a keyboard-focused terminal whose node's top-left corner sits
-    /// at (100, 100) physical px, with the cursor at column 5, row 10 of a
-    /// 80×24 viewport.
-    fn spawn_focused_surface(app: &mut App) -> Entity {
-        app.world_mut()
-            .spawn((
-                OrzmaTerminal,
-                KeyboardFocused,
-                ComputedNode {
-                    size: Vec2::new(800.0, 600.0),
-                    ..ComputedNode::DEFAULT
-                },
-                UiGlobalTransform::from_xy(500.0, 400.0),
-                TerminalView {
-                    cols: 80,
-                    rows: 24,
-                    cursor: Some(Cursor {
-                        point: GridPoint {
-                            line: GridLine(10),
-                            column: GridColumn(5),
-                        },
-                        ..Cursor::default()
-                    }),
-                    ..default()
-                },
-                TerminalOverlays::default(),
-            ))
-            .id()
-    }
-
-    /// Gives `surface`'s overlay slot 0 the cell rect `rect`
-    /// (`row, col, rows, cols`), spawns a webview on that slot as its child,
-    /// and focuses the webview.
-    fn focus_inline_webview(app: &mut App, surface: Entity, rect: IVec4) -> Entity {
-        app.world_mut()
-            .get_mut::<TerminalOverlays>(surface)
-            .expect("the surface carries overlays")
-            .rects[0] = rect;
-        let webview = app
-            .world_mut()
-            .spawn((
-                ChildOf(surface),
-                Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
-            ))
-            .id();
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
-        webview
-    }
 
     fn decide_in(app: &mut App, scale_factor: f32) -> ImeTarget {
         app.world_mut()

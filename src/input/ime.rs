@@ -2,6 +2,8 @@
 //! `ImeState` and derives window IME policy from keyboard focus.
 
 mod ime_target;
+#[cfg(test)]
+mod test_support;
 
 use crate::action::vi::mode::ViModeState;
 use crate::input::InputPhase;
@@ -12,7 +14,6 @@ use bevy::app::{App, Last, MainScheduleOrder, Plugin, PostUpdate, Update};
 use bevy::ecs::change_detection::DetectChangesMut;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
-use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::observer::On;
 use bevy::ecs::query::With;
@@ -20,15 +21,10 @@ use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::common_conditions::{on_message, resource_exists_and_changed};
 use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleLabel, SystemCondition};
 use bevy::ecs::system::{Commands, NonSendMarker, Query, Res, ResMut};
-use bevy::math::{Rect, Vec2};
-use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::math::Rect;
 use bevy::window::{Ime, PrimaryWindow, Window, WindowBackendScaleFactorChanged};
 use bevy::winit::WINIT_WINDOWS;
 use bevy_cef::prelude::FocusedWebview;
-use bevy_orzma_tty_renderer::prelude::{
-    TerminalCellMetricsResource, TerminalOverlays, TerminalView,
-};
-use bevy_orzma_webview::Webview;
 use bevy_orzmux::prelude::RequestActiveKeyInput;
 use ime_target::{ImePolicyParams, ImeTarget};
 use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
@@ -49,12 +45,11 @@ pub(super) struct ImePlugin;
 
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
-        app.init_schedule(ImeCandidateSync);
         app.world_mut()
             .resource_mut::<MainScheduleOrder>()
             .insert_after(Last, ImeCandidateSync);
-
-        app.init_resource::<ImeState>()
+        app.init_schedule(ImeCandidateSync)
+            .init_resource::<ImeState>()
             .init_resource::<ImeCandidateArea>()
             // NOTE: `ime_policy_system` must run unconditionally every frame.
             // Bevy's text-input plugin resets `Window::ime_enabled` every
@@ -157,12 +152,6 @@ impl ImeState {
     }
 }
 
-#[derive(Resource, Debug, Default, PartialEq)]
-struct ImeCandidateArea(Option<Rect>);
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, ScheduleLabel)]
-struct ImeCandidateSync;
-
 /// Pure-function state machine: applies one `Ime` event to `state` and
 /// returns the text that should be committed to the active pane (only set on
 /// `Ime::Commit`).
@@ -193,6 +182,12 @@ pub(crate) fn resolve_focused_surface(
 ) -> Option<Entity> {
     focused.single().ok()
 }
+
+#[derive(Resource, Debug, Default, PartialEq)]
+struct ImeCandidateArea(Option<Rect>);
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, ScheduleLabel)]
+struct ImeCandidateSync;
 
 /// Derives the window's IME policy from keyboard focus and writes it to the
 /// primary window and to `ImeCandidateArea`.
@@ -327,64 +322,6 @@ fn read_ime_events(
             text: commit_text,
         });
     }
-}
-
-/// The logical-pixel anchor for the OS candidate window when a webview
-/// owns focus: the owning terminal node's top-left (physical px) plus the
-/// child's active overlay rect origin (`rect.y × cell_w`, `rect.x × cell_h`),
-/// divided by the window scale factor. `None` when the focus chain is gone
-/// (child/terminal despawned, no terminal node, or a sentinel rect) — the
-/// caller then leaves `ime_position` unchanged rather than mis-anchoring.
-fn webview_ime_position(
-    scale_factor: f32,
-    webview_parents: &Query<&ChildOf, With<Webview>>,
-    webview_slots: &Query<&Webview>,
-    anchors: &Query<(&ComputedNode, &UiGlobalTransform, &TerminalView)>,
-    overlays: &Query<&TerminalOverlays>,
-    metrics: &TerminalCellMetricsResource,
-    child: Entity,
-) -> Option<Vec2> {
-    let terminal = webview_parents.get(child).ok()?.parent();
-    let slot = webview_slots.get(child).ok()?.slot();
-    let (node, ui_xform, _) = anchors.get(terminal).ok()?;
-    let rect = *overlays.get(terminal).ok()?.rects.get(usize::from(slot))?;
-    if rect.z == 0 {
-        return None;
-    }
-    let host_origin_phys = node_top_left_phys(node, ui_xform);
-    let rect_origin_phys = Vec2::new(rect.y as f32, rect.x as f32) * metrics.metrics.cell_size;
-    Some((host_origin_phys + rect_origin_phys) / scale_factor.max(f32::EPSILON))
-}
-
-/// The top-left corner of `node`, in physical pixels of window space.
-///
-/// Window space has its origin at the window's top-left corner and its y
-/// axis pointing down. `transform` places the center of `node` in that
-/// space, and `node`'s size is measured in the same physical pixels. The
-/// result is not divided by the window's scale factor; a caller that needs
-/// logical pixels divides it. A node whose `UiTransform` rotates or scales
-/// it gets a point that is not the corner it is drawn at.
-///
-/// ```text
-///  (0, 0)
-///    ┼───────────────────────────────────────────▶ x
-///    │
-///    │   ●─────────────────────┐ ← the returned corner
-///    │   │                     │
-///    │   │          ×          │ ← transform.translation
-///    │   │                     │
-///    │   └─────────────────────┘
-///    │   ←─── node.size().x ───→
-///    ▼
-///    y
-/// ```
-///
-/// # Examples
-///
-/// A 1600 × 1200 node whose center sits at (1000, 700) has its top-left
-/// corner at (200, 100).
-fn node_top_left_phys(node: &ComputedNode, transform: &UiGlobalTransform) -> Vec2 {
-    transform.translation - 0.5 * node.size()
 }
 
 /// Drops an open composition when a tab rename starts or ends, so a
@@ -604,15 +541,14 @@ mod tests {
 
     mod ime_policy_system {
         use super::*;
+        use crate::input::ime::test_support::{
+            focus_inline_webview, policy_app, spawn_focused_surface,
+        };
         use bevy::ecs::system::RunSystemOnce;
-        use bevy::math::IVec4;
-        use bevy::prelude::{MinimalPlugins, default};
-        use bevy::state::app::StatesPlugin;
+        use bevy::math::{IVec4, Vec2};
+        use bevy::prelude::default;
         use bevy::window::WindowResolution;
-        use bevy_orzma_tty_renderer::prelude::{Baseline, CellMetrics, Thickness, Underline};
         use bevy_orzmux::prelude::TabId;
-        use orzma_vt::prelude::{Cursor, GridColumn, GridLine, GridPoint, InstanceId};
-        use orzma_webview_host::prelude::MountId;
 
         /// Asserts that a focused webview switches the window's IME on when no
         /// terminal holds keyboard focus.
@@ -621,42 +557,12 @@ mod tests {
         /// and the window's IME is off.
         #[test]
         fn ime_stays_enabled_for_focused_webview() {
-            let mut app = App::new();
-            app.add_plugins((MinimalPlugins, StatesPlugin));
-            app.init_resource::<FocusedWebview>();
-            app.init_resource::<ImeCandidateArea>();
-            app.insert_resource(TerminalCellMetricsResource {
-                metrics: CellMetrics {
-                    cell_size: Vec2::new(8.0, 16.0),
-                    baseline: Baseline::new(12.0),
-                    underline: Underline {
-                        position: -2.0,
-                        thickness: Thickness::new(1.0),
-                    },
-                    max_overflow: 0.0,
-                },
-                phys_font_size: 12,
-            });
-
+            let mut app = system_app();
             let webview = app.world_mut().spawn_empty().id();
             app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
 
-            app.world_mut().spawn((
-                Window {
-                    focused: true,
-                    resolution: WindowResolution::new(800, 600),
-                    ime_enabled: false,
-                    ..default()
-                },
-                PrimaryWindow,
-            ));
+            let (enabled, _) = run_policy(&mut app);
 
-            app.world_mut().run_system_once(ime_policy_system).unwrap();
-
-            let mut q = app
-                .world_mut()
-                .query_filtered::<&Window, With<PrimaryWindow>>();
-            let enabled = q.single(app.world()).expect("primary window").ime_enabled;
             assert!(
                 enabled,
                 "IME must stay enabled while a CEF webview owns focus, or bevy_cef's IME bridge is starved"
@@ -671,22 +577,8 @@ mod tests {
         /// cells and a primary window at a scale factor of 2 whose IME starts off
         /// at `UNTOUCHED_POSITION`.
         fn system_app() -> App {
-            let mut app = App::new();
-            app.add_plugins((MinimalPlugins, StatesPlugin));
-            app.init_resource::<FocusedWebview>();
+            let mut app = policy_app();
             app.init_resource::<ImeCandidateArea>();
-            app.insert_resource(TerminalCellMetricsResource {
-                metrics: CellMetrics {
-                    cell_size: Vec2::new(8.0, 16.0),
-                    baseline: Baseline::new(12.0),
-                    underline: Underline {
-                        position: -2.0,
-                        thickness: Thickness::new(1.0),
-                    },
-                    max_overflow: 0.0,
-                },
-                phys_font_size: 12,
-            });
             app.world_mut().spawn((
                 Window {
                     focused: true,
@@ -710,54 +602,6 @@ mod tests {
                 .ime_enabled = true;
         }
 
-        /// Spawns a keyboard-focused terminal whose node's top-left corner sits
-        /// at (100, 100) physical px, with the cursor at column 5, row 10 of a
-        /// 80×24 viewport.
-        fn spawn_cursor_surface(app: &mut App) -> Entity {
-            app.world_mut()
-                .spawn((
-                    OrzmaTerminal,
-                    KeyboardFocused,
-                    ComputedNode {
-                        size: Vec2::new(800.0, 600.0),
-                        ..ComputedNode::DEFAULT
-                    },
-                    UiGlobalTransform::from_xy(500.0, 400.0),
-                    TerminalView {
-                        cols: 80,
-                        rows: 24,
-                        cursor: Some(Cursor {
-                            point: GridPoint {
-                                line: GridLine(10),
-                                column: GridColumn(5),
-                            },
-                            ..Cursor::default()
-                        }),
-                        ..default()
-                    },
-                    TerminalOverlays::default(),
-                ))
-                .id()
-        }
-
-        /// Gives `surface`'s overlay slot 0 the cell rect `rect`
-        /// (`row, col, rows, cols`), spawns a webview on that slot as its child,
-        /// and focuses the webview.
-        fn focus_inline_child(app: &mut App, surface: Entity, rect: IVec4) {
-            app.world_mut()
-                .get_mut::<TerminalOverlays>(surface)
-                .expect("the surface carries overlays")
-                .rects[0] = rect;
-            let webview = app
-                .world_mut()
-                .spawn((
-                    ChildOf(surface),
-                    Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
-                ))
-                .id();
-            app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
-        }
-
         /// Runs the policy once and returns the primary window's IME switch and
         /// anchor.
         fn run_policy(app: &mut App) -> (bool, Vec2) {
@@ -779,7 +623,7 @@ mod tests {
         #[test]
         fn a_focused_surface_switches_the_window_ime_on_at_its_cursor_cell() {
             let mut app = system_app();
-            spawn_cursor_surface(&mut app);
+            spawn_focused_surface(&mut app);
 
             let (enabled, position) = run_policy(&mut app);
 
@@ -801,8 +645,8 @@ mod tests {
         #[test]
         fn a_focused_inline_webview_moves_the_window_anchor_to_its_overlay_rect() {
             let mut app = system_app();
-            let surface = spawn_cursor_surface(&mut app);
-            focus_inline_child(&mut app, surface, IVec4::new(2, 3, 4, 10));
+            let surface = spawn_focused_surface(&mut app);
+            focus_inline_webview(&mut app, surface, IVec4::new(2, 3, 4, 10));
 
             let (enabled, position) = run_policy(&mut app);
 
@@ -822,7 +666,7 @@ mod tests {
         fn a_tab_rename_switches_the_window_ime_on_without_moving_its_anchor() {
             let mut app = system_app();
             app.insert_resource(TabRename::active_for_test(TabId(1)));
-            spawn_cursor_surface(&mut app);
+            spawn_focused_surface(&mut app);
 
             let (enabled, position) = run_policy(&mut app);
 
@@ -853,7 +697,7 @@ mod tests {
         fn a_vi_mode_surface_switches_the_window_ime_off() {
             let mut app = system_app();
             switch_window_ime_on(&mut app);
-            let surface = spawn_cursor_surface(&mut app);
+            let surface = spawn_focused_surface(&mut app);
             app.world_mut().entity_mut(surface).insert(ViModeState);
 
             let (enabled, _) = run_policy(&mut app);
@@ -869,8 +713,8 @@ mod tests {
         #[test]
         fn an_inline_webview_on_an_inactive_slot_leaves_the_window_anchor_unchanged() {
             let mut app = system_app();
-            let surface = spawn_cursor_surface(&mut app);
-            focus_inline_child(&mut app, surface, IVec4::new(2, 3, 0, 10));
+            let surface = spawn_focused_surface(&mut app);
+            focus_inline_webview(&mut app, surface, IVec4::new(2, 3, 0, 10));
 
             let (enabled, position) = run_policy(&mut app);
 
@@ -886,9 +730,9 @@ mod tests {
         #[test]
         fn a_focused_inline_webview_keeps_the_window_ime_on_over_a_vi_mode_surface() {
             let mut app = system_app();
-            let surface = spawn_cursor_surface(&mut app);
+            let surface = spawn_focused_surface(&mut app);
             app.world_mut().entity_mut(surface).insert(ViModeState);
-            focus_inline_child(&mut app, surface, IVec4::new(2, 3, 4, 10));
+            focus_inline_webview(&mut app, surface, IVec4::new(2, 3, 4, 10));
 
             let (enabled, _) = run_policy(&mut app);
 
@@ -903,7 +747,7 @@ mod tests {
         #[test]
         fn a_focused_surface_publishes_its_cursor_cell_as_the_candidate_area() {
             let mut app = system_app();
-            spawn_cursor_surface(&mut app);
+            spawn_focused_surface(&mut app);
 
             run_policy(&mut app);
 
@@ -933,7 +777,7 @@ mod tests {
         fn a_vi_mode_surface_clears_the_candidate_area() {
             let mut app = system_app();
             app.insert_resource(ImeCandidateArea(Some(Rect::new(70.0, 130.0, 74.0, 138.0))));
-            let surface = spawn_cursor_surface(&mut app);
+            let surface = spawn_focused_surface(&mut app);
             app.world_mut().entity_mut(surface).insert(ViModeState);
 
             run_policy(&mut app);
@@ -950,7 +794,7 @@ mod tests {
             let mut app = system_app();
             app.insert_resource(ImeCandidateArea(Some(Rect::new(70.0, 130.0, 74.0, 138.0))));
             app.insert_resource(TabRename::active_for_test(TabId(1)));
-            spawn_cursor_surface(&mut app);
+            spawn_focused_surface(&mut app);
 
             run_policy(&mut app);
 
@@ -967,8 +811,8 @@ mod tests {
         fn an_inline_webview_on_an_inactive_slot_clears_the_candidate_area() {
             let mut app = system_app();
             app.insert_resource(ImeCandidateArea(Some(Rect::new(70.0, 130.0, 74.0, 138.0))));
-            let surface = spawn_cursor_surface(&mut app);
-            focus_inline_child(&mut app, surface, IVec4::new(2, 3, 0, 10));
+            let surface = spawn_focused_surface(&mut app);
+            focus_inline_webview(&mut app, surface, IVec4::new(2, 3, 0, 10));
 
             run_policy(&mut app);
 
@@ -1010,6 +854,7 @@ mod tests {
     mod sync_ime_candidate_area {
         use super::*;
         use bevy::ecs::system::RunSystemOnce;
+        use bevy::math::Vec2;
         use bevy::prelude::MinimalPlugins;
 
         /// The terminal's cursor cell at (70, 130) in logical pixels, one 4 × 8
@@ -1078,9 +923,11 @@ mod tests {
 
     mod read_ime_events {
         use super::*;
+        use bevy::ecs::hierarchy::ChildOf;
         use bevy::prelude::{MinimalPlugins, default};
         use bevy::state::app::StatesPlugin;
         use bevy::window::WindowResolution;
+        use bevy_orzma_webview::Webview;
         use bevy_orzmux::prelude::TabId;
         use orzma_vt::prelude::InstanceId;
         use orzma_webview_host::prelude::MountId;
