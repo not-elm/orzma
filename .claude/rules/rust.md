@@ -55,19 +55,23 @@ the manuals kept there are permanent — including a section of one
 code**, doc comments included — not by path, and not by section number or
 decision ID (`spec §7`, `D17a of the engine-swap design`).
 
-Everything else in `docs/` is short-lived by design or moves around.
-`docs/todo/` holds per-task working notes that are deleted once the task
-ships, `docs/superpowers/` is not even tracked, and the pages of the user
-guide under `docs/book/` are renamed and merged as the guide is
-reorganized, so a comment that points at one becomes a dead reference the
-next reader cannot follow — and unlike a broken code path, nothing fails
-to compile when it does.
+Everything else in `docs/` is short-lived by design, moves around, or
+stops describing the code. `docs/todo/` holds per-task working notes that
+are deleted once the task ships, `docs/superpowers/` is not even tracked,
+and the pages of the user guide under `docs/book/` are renamed and merged
+as the guide is reorganized, so a comment that points at one becomes a
+dead reference the next reader cannot follow — and unlike a broken code
+path, nothing fails to compile when it does. The requirements under
+`docs/requirements/` are kept, but each records what one change set out
+to solve, and later changes do not update it, so a comment that points at
+one hands its contract to a record that no longer matches the code.
 
 | Pattern                                          | Example                                    | Instead                                                          |
 | ------------------------------------------------ | ------------------------------------------ | ---------------------------------------------------------------- |
 | Citing a working note                            | `// TODO: … (docs/todo/migrate.md item 11)` | State the blocker in the comment itself and drop the path        |
 | Citing a tracking table                          | `// NOTE: see docs/todo/vt-conformance-scope.md` | Write the decision the table records (in a doc comment, only as the contract it implies), not a pointer to it |
 | Citing a design doc by section or decision ID    | `/// … (spec §7)` / `// … (D16)`           | Drop the pointer; state the contract (doc) or the caveat (`// NOTE:`) itself |
+| Citing a requirement by its ID                   | `/// … (R3 of the tab-notification requirements)` | State the behavior the requirement asks for as the item's contract |
 | Citing a manual                                  | `/// vt510.pdf p.319 — "Default: Replace."` | **Allowed** — `docs/references/` is permanent                    |
 
 The rule is one-directional: Markdown under `docs/`, PR descriptions and

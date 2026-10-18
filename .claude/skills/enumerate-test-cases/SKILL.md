@@ -1,6 +1,6 @@
 ---
 name: enumerate-test-cases
-description: Enumerates the test cases one orzma_vt method owes, deriving every case from a citation in docs/references/ and verifying each citation before emitting it. Settles the list and any signature change with the author, then writes it to docs/todo/ as a markdown working document carrying the Rust to transcribe. Use when the user says "テストケースを洗い出して", "enumerate test cases", "/enumerate-test-cases", or asks which cases a VT method needs before writing its tests.
+description: Enumerates the test cases one orzma_vt method owes, deriving every case from a citation in docs/references/ and verifying each citation before emitting it. Writes the list to docs/todo/ as a markdown working document carrying the Rust to transcribe, marking there the cases and any signature change that need the author's decision; the author settles the list by reading that document, and the skill asks nothing in the terminal once the method is resolved. Use when the user says "テストケースを洗い出して", "enumerate test cases", "/enumerate-test-cases", or asks which cases a VT method needs before writing its tests.
 argument-hint: [Screen::method]
 allowed-tools: Read, Grep, Glob, Write, Bash(pdftotext:*), Bash(grep:*), Bash(awk:*), Bash(sed:*), Bash(head:*), Bash(wc:*), Bash(tr:*), Bash(mkdir:*), Bash(python3:*), AskUserQuestion
 ---
@@ -8,8 +8,9 @@ allowed-tools: Read, Grep, Glob, Write, Bash(pdftotext:*), Bash(grep:*), Bash(aw
 # Enumerate test cases for one method
 
 Enumerate the test cases a method owes, from the VT specification rather than
-from its implementation, settle the list with the author, and write it to
-`docs/todo/` as a working document the author transcribes tests from.
+from its implementation, and write them to `docs/todo/` as a working document
+the author reviews and transcribes tests from. The author settles the list by
+reading that document, not by answering questions in the terminal.
 
 `Edit` is deliberately absent from `allowed-tools`, and `Write` reaches exactly
 one path: `docs/todo/tdd-<file-stem>-<method>.md`, always as a whole-file
@@ -26,9 +27,9 @@ repository.
 - It does not treat an existing test as a source. A test is one author's reading
   of the contract, and seeding the list from it enumerates the tests you already
   have.
-- It does not change the method it enumerates. Phase 4 can settle with the
-  author that a signature is wrong; the agreement becomes a premise for this
-  enumeration and a record in the document, and the edit stays the author's.
+- It does not change the method it enumerates. Phase 4 can propose that a
+  signature is wrong; the proposal is a record in the document, and both the
+  decision and the edit stay the author's.
 - It handles one method per run.
 
 ## The two-stage rule
@@ -42,24 +43,26 @@ the same failure in through the neighbours.
 
 So the run has two stages, and they admit different sources.
 
-**Before the case list is settled** — Phases 0 through 4 — read only the manuals
+**Before the case list is closed** — Phases 0 through 4 — read only the manuals
 in `docs/references/`, doc comments and stated invariants through the extractors
 in 1a, signatures and the type names, variants, and constructors they mention,
 and the names of the test modules together with the file holding them, which is
 what the destination rule matches on. No method body: not the one under
 enumeration, not the ones it calls, not the bodies of tests that already exist.
 
-**After the author approves the list** — Phase 5, while writing the Rust — read
-whatever it takes to turn an approved `Setup:` / `Act:` / `Expect:` line into
+**After Phase 4 closes the list** — Phase 5, while writing the Rust — read
+whatever it takes to turn a listed `Setup:` / `Act:` / `Expect:` line into
 code: test helpers, fixture signatures, the neighbouring calls a setup has to
 make, and the implementation that decides how many of them a state needs.
 Transcription may discover that reaching "the anchor has scrolled out of the
 viewport" takes three `line_feed()` calls. It may not discover a fourth case, a
 new expectation, or a reason to drop one.
 
-**The list is closed at approval.** A case or an `Expect:` line that first occurs
-to you during transcription does not enter the document. Carry it to the author
-as a remark instead, and let them decide whether it earns another run.
+**The list is closed when Phase 4 ends**, before any body is read; the author's
+review of the document comes afterwards. A case or an `Expect:` line that first
+occurs to you during transcription does not enter the list. Record it under
+"転記中の気づき" in the appendix instead, and let the author decide whether it
+earns another run.
 
 ## Output language
 
@@ -460,9 +463,9 @@ after the High block still has every case the specification states outright.
 
 ### Obvious cases
 
-Phase 4 puts the case list in front of the author, and a list where every row
-needs a decision is a list nobody reads to the end. A case is **obvious**, and
-so is settled without asking, when all three of these hold:
+The author reviews the list in the document, and a list where every row needs a
+decision is a list nobody reads to the end. A case is **obvious**, and is marked
+自明 rather than 要確認, when all three of these hold:
 
 1. Its contract entry's `Shape` is unconditional.
 2. Its `Setup:` uses nothing outside this closed list — the type's constructor
@@ -478,9 +481,9 @@ counting it as a second source would make nearly every unconditional case on an
 second contract entry, is enough to make a case non-obvious — both carry
 judgement the author should see. A `TC-A` case is non-obvious by construction.
 
-Anything failing one of the three goes to the gate, and so does anything you are
-unsure about. A case wrongly sent to the gate costs the author one line of
-reading; a case wrongly settled without asking is the one they never see.
+Anything failing one of the three is marked 要確認, and so is anything you are
+unsure about. A case wrongly marked 要確認 costs the author one line of reading;
+a case wrongly marked 自明 is the one they skim past.
 
 ### Naming
 
@@ -570,7 +573,7 @@ that material belongs, and it stays in the document rather than entering the
 repository. Any policy line the rule also requires is the author's to write,
 because it states a decision the specification does not make.
 
-The Rust is written only after Phase 4 approves the case, under the second half
+The Rust is written only after Phase 4 closes the list, under the second half
 of the two-stage rule, and it is never promised to compile — see Phase 5.
 
 ### When a case cannot be written
@@ -624,20 +627,20 @@ buys. A proposal that enables no case buys nothing and is not asked.
 "this reaches private state over and over", "this parameter wants to be a type"
 — each may be right, and none is a specification failing to be served. Record
 them under "Unsourced suggestions" in the appendix, where the author reads them
-as remarks. They never reach the gate, and they never change a case.
+as remarks. They never enter "API 改定", and they never change a case.
 
-That partition is the guard. The gate opens on your judgement that the signature
-is wrong, which is wider than a citation that will not fit; without the partition
-that width is the one hole through which unsourced design walks into the list —
-an opinion arriving in the same frame as a citation, and settled by the same
-answer.
+That partition is the guard. "API 改定" carries your judgement that the
+signature is wrong, which is wider than a citation that will not fit; without
+the partition that width is the one hole through which unsourced design walks
+into the list — an opinion arriving in the same frame as a citation, and settled
+by the same decision.
 
 Reaching private state is not itself a defect, and it is worth saying so
 explicitly, because it looks like one. The destination rule below has a `Setup:`
 line touch `margins.top` directly, on purpose: the tests live in the same file as
 the type.
 
-A blocker goes to Phase 3 before it goes anywhere else. Phase 4 settles it on the
+A blocker goes to Phase 3 before it goes anywhere else. Phase 4 records it on the
 strength of its chain and on nothing else, so a blocker whose citation fails
 verification was never a blocker.
 
@@ -779,78 +782,76 @@ section's opposite: the specification is explicit, verified to a page and a
 line, and the API has not caught up. Calling such an entry unspecified is a
 false statement about the manual, and it buries the one thing worth
 reporting. Section 1g already says a divergence between a spec-derived case
-and the current code is a finding, not a mistake to smooth over — Phase 4 is
-where that finding gets settled.
+and the current code is a finding, not a mistake to smooth over — the
+document's "API 改定" section is where the author settles that finding.
 
-## Phase 4 — Settle the list with the author
+## Phase 4 — Close the list and mark what needs the author
 
-One gate, opened once, carrying everything that needs an answer: the non-obvious
-cases and the signature proposals together. A second gate for the signature would
-split one decision — what shape this method has, and which cases it therefore
-owes — across two answers that cannot see each other. A gate per blocker would
-turn a five-entry method into five interruptions.
+The author settles the list by reading the document Phase 5 writes, not by
+answering questions in the terminal. A case block, a citation, and a proposed
+signature do not fit inside a terminal prompt, and in the document they stay
+where the author can read them at their own pace and come back to them. So this
+phase asks nothing: it closes the list, marks what needs a decision, and hands
+everything to Phase 5. Do not open an approval question in the terminal, even
+when everything came out obvious.
 
-The gate always opens, even with no blocker and no non-obvious case, because the
-list itself is what is being settled. A run where everything came out obvious
-asks one question and gets one answer.
+### What closing the list means
 
-### What the terminal shows first
+The list Phase 2 derived and Phase 3 verified is final for this run. From here
+on the second half of the two-stage rule applies, and nothing read during
+transcription adds a case, an expectation, or a reason to drop one. The author
+can still change the list after reading the document; that is a revision, below,
+not something transcription decides.
 
-`AskUserQuestion`'s options are short, and a case block, a citation, and a
-proposed signature do not fit inside one. Print all of it first, then ask.
+### What gets marked
 
-1. **The obvious cases, by name only**, under one line saying how many were
-   settled without asking. No question follows them. They stay visible, so a
-   misclassification is something the author can object to rather than something
-   the run hides.
-2. **Every non-obvious case in full** — the Setup/Act/Expect table, the tags, and
-   the reasoning paragraph. Not the Rust; that is written after approval, under
-   the second half of the two-stage rule.
-3. **Every signature proposal**, each carrying its whole chain: the verified
-   entry, the line the current signature cannot express, the kind, and the Rust
-   signature line as it would appear in the file — not a description of the
-   change. When it reaches past the method, a new variant on a return type, a
-   field on `Screen`, a parameter threaded from the CSI dispatcher, name that
-   too: the author is deciding on the whole change, not on the one line.
+1. **Each case is marked 自明 or 要確認** in the list table, by the rule under
+   "Obvious cases". The author can skim the 自明 rows and has to read the 要確認
+   ones. A misclassification stays visible as a mark the author can object to,
+   rather than something the run hides.
+2. **Every signature proposal goes under "API 改定"**, each carrying its whole
+   chain: the verified entry, the line the current signature cannot express,
+   the kind, and the Rust signature line as it would appear in the file — not a
+   description of the change. When it reaches past the method, a new variant on
+   a return type, a field on `Screen`, a parameter threaded from the CSI
+   dispatcher, name that too: the author is deciding on the whole change, not
+   on the one line.
 
 A proposal is shown with **both versions of every case it affects** — the case as
 it stands under the current signature, unwritable and marked so, and the complete
-`Setup:` / `Act:` / `Expect:` it becomes under the proposal. Naming the case IDs
-alone would have the author approve cases they have not read, and those cases
-would then reach the document having passed no gate at all.
+`Setup:` / `Act:` / `Expect:` it would become under the proposal. Naming the case
+IDs alone would have the author accept cases they have not read. The proposed
+versions are not cases in the list: they carry no TC number and no Rust until the
+author takes the proposal.
 
-### The questions
+Several proposals form **one change-set**, presented together, because they are
+one decision about the method's shape. State the cost once: keeping the current
+signature means the affected entries emit no case, and the author should read
+that consequence rather than infer it.
 
-Two at most, well inside `AskUserQuestion`'s cap of four per call:
+### After the author reads the document
 
-- **The case list** — approve, revise (free text), or cancel.
-- **The signature proposals**, when there are any — take them, or keep the
-  current signature. The tool's own free-text answer carries a third signature
-  the author would rather have.
+Phase 5 writes the document with `状態: 未承認`. The author reads it and answers
+in the conversation. Nothing else counts as an answer, and silence is not
+approval: a document nobody answered stays `状態: 未承認`.
 
-Signature proposals are answered **as one change-set**, not one question each.
-Four proposals would otherwise exhaust the call, and they would split a single
-decision about the method's shape across four answers.
+**approve** — rewrite the document with `状態: 承認済み`, and turn the lead's
+sentence asking for review into one saying the author approved the list and
+when. Change nothing else. The list was already closed; approval records that
+the author read it.
 
-State each answer's cost once, then stop. Keeping the current signature means the
-affected entries emit no case, and the author should read that consequence rather
-than infer it. The decision is the author's, and a skill that re-argues an answer
-it was given is worse than one that never asked.
-
-### The three terminal states
-
-**approve** — the list is closed. Phase 5 writes the Rust and the document.
-
-**revise** — the author names cases by ID and says what changes. Apply the
+**changes** — the author names cases by ID and says what changes. Apply the
 changes, then **re-check what the change touched**: an edited `Expect:` line
 needs its tag re-derived, and re-verified when the tag is kind 1 or kind 2; an
-edited `Setup:` line can move a case across the obvious boundary in either
-direction. Re-present the affected cases only — reprinting an approved list
-buries the diff — and ask again. The list is closed only on an `approve`.
+edited `Setup:` line can move a case across the 自明 boundary in either
+direction. Re-transcribe the affected cases, overwrite the document with
+`状態: 未承認`, and name the affected IDs in the terminal so the author can find
+the diff without rereading the whole list.
 
-**cancel, or no answer at all** — nothing is written. Print the list in the
-terminal and stop. A run the author walked away from is not an approved run, and
-this skill's one write is not the place to guess.
+**a signature proposal taken** — return to Phase 2 and expand each unblocked
+entry by its shape against the agreed signature, as the next section describes.
+
+**discard** — write nothing more. The document is the author's to delete.
 
 ### After a signature is taken
 
@@ -864,9 +865,10 @@ with its own tag. A case whose only justification is that the signature was
 agreed is not a specification-derived case, and the list stops meaning anything
 the moment one enters it.
 
-If that expansion yields a case the author has not seen — because the shape
-produced more than the proposal predicted — that is a revise, not an approval.
-Present it and ask again.
+Every case that expansion produces is new to the author, including one the
+shape produced beyond what the proposal predicted. Mark each of them 要確認,
+move the proposal from "awaiting a decision" to "taken" under "API 改定", and
+write the document back with `状態: 未承認`.
 
 An entry the author left alone emits no case and goes to the appendix's "left as
 is" list with its citation, so the reader sees which specification the API still
@@ -922,15 +924,18 @@ kind-2 source either.
 ```
 # Test cases: Screen::reverse_index
 
-（リード文: 対象、参照した仕様、検証 N/N、Phase 4 の結果。合意した signature が
-あるなら、以下が現状の木に対するものではないこと。）
+状態: 未承認
+
+（リード文: 対象、参照した仕様、検証 N/N、要確認のケース数と API 改定の提案数。
+作者がこの Markdown を読んで承認・修正すること。合意した signature があるなら、
+以下が現状の木に対するものではないこと。）
 
 ## テストケース一覧
 
-| # | 名前 | Source | 優先度 |
-| - | - | - | - |
-| TC-01 | `a_…` | C1 | High |
-| TC-A1 | `a_…` | PI | High |
+| # | 名前 | Source | 優先度 | 確認 |
+| - | - | - | - | - |
+| TC-01 | `a_…` | C1 | High | 自明 |
+| TC-A1 | `a_…` | PI | High | 要確認 |
 
 Source タグ — **C1**: vt510.pdf p.64 L2435（…）／**LC**: …／**PI**: …
 
@@ -950,8 +955,13 @@ Source タグ — **C1**: vt510.pdf p.64 L2435（…）／**LC**: …／**PI**: 
 ### 仕様の矛盾            （無ければ省略）
 ### API 改定              （無ければ省略）
 ### 出典なしの改善提案    （無ければ省略）
+### 転記中の気づき        （無ければ省略）
 ### docs/todo との衝突    （無ければ省略）
 ```
+
+The `状態:` line sits directly under the title, where the author sees it first.
+It reads `未承認` on every write except the approval rewrite, which sets
+`承認済み`.
 
 Cases go High, then Medium, then Low, and the document says so, so an author who
 stops after the High rows still has every case the specification states outright.
@@ -966,16 +976,24 @@ level it came from, including the ones that reached nothing — that record is t
 only thing making "searched and found nothing" falsifiable. "仕様にないもの"
 carries entries with no citation and entries whose citation failed verification,
 each with the failed quote and its match ratio. "API 改定" carries each signature
-the author took, with the blocker it resolves and the citation that demanded it,
-and each blocker left as is, with the line that stays unwritable.
+proposal awaiting the author's decision, with both versions of every case it
+affects; each signature the author took, with the blocker it resolves and the
+citation that demanded it; and each blocker left as is, with the line that stays
+unwritable. "転記中の気づき" carries each case or `Expect:` line that occurred to
+you during transcription, which the closed list could not take.
 
 ### What the header must say
 
-Two claims, and both are load-bearing:
+Three claims, and all three are load-bearing:
 
+- **That the list awaits the author's review.** `状態: 未承認` says it, and the
+  lead says how to answer: read the document, then approve it or name the cases
+  to change in the conversation. A reader who takes an unreviewed list for a
+  settled one transcribes cases nobody agreed to.
 - **Whether the Rust compiles against the tree as it stands.** It does not when
-  Phase 4 agreed a signature, and it does not when the method is still a stub. A
-  reader who misses that transcribes a test for a method that does not exist yet.
+  the author took a signature, and it does not when the method is still a stub.
+  A reader who misses that transcribes a test for a method that does not exist
+  yet.
 - **That the Rust is unbuilt.** This skill does not compile what it writes, and
   in the agreed-signature case it could not: there is nothing to compile against.
   Present it as a proposal to transcribe, not as something ready to paste and
@@ -1000,8 +1018,10 @@ later.
 
 ### The terminal, after the write
 
-The path, the counts by priority, the names of the cases settled as obvious, and
-`citations verified: N/N`. The document carries everything else.
+The path, the counts by priority, how many cases are marked 要確認, how many
+signature proposals await a decision, and `citations verified: N/N`. The
+document carries everything else. Ask nothing: the author answers after reading
+the document.
 
 ## Error handling
 
@@ -1018,25 +1038,26 @@ The path, the counts by priority, the names of the cases settled as obvious, and
 | `verify` reports a dropped qualifier | Treat it as a rejection. Narrow the span if the word came from another line or column; never widen the quote to absorb it |
 | `verify` reports `SPAN TOO WIDE` | Not a result. Narrow the citation to the lines carrying the statement and run `verify` again |
 | The doc-comment extractor prints `NOTFOUND` | Stop and report the file and method tried; never fall back to an unbounded `Read` |
-| A method body would answer the question, before the list is settled | Do not read it — the method's own, a helper's, or an existing test's. The two-stage rule admits bodies only while transcribing an approved case |
-| A case or an `Expect:` line first occurs to you while transcribing | The list is closed. Do not add it; carry it to the author as a remark |
+| A method body would answer the question, before Phase 4 closes the list | Do not read it — the method's own, a helper's, or an existing test's. The two-stage rule admits bodies only while transcribing the closed list |
+| A case or an `Expect:` line first occurs to you while transcribing | The list is closed. Do not add it; record it under "転記中の気づき" in the appendix |
 | A kind-2 tag with no ledger entry behind it | Unusable. Drop that `Expect:` line, exactly as an untagged one |
 | A kind-2 quote `grep -F` does not find | Correct the quote against the real text or drop the entry; never adjust the quote until it matches |
 | A kind-2 source contradicts a verified manual statement | Emit no case. Report it under specification conflicts with both quotes |
 | Every tag on a case is kind 2 | Number it `TC-A<n>`, keep it in the same list, and say in one sentence why it is there |
-| A case meets all three obvious conditions | Settle it without asking; name it in the terminal under the count settled that way |
+| A case meets all three obvious conditions | Mark it 自明 in the list table; every other case is marked 要確認 |
 | Phase 2 cannot write a `Setup:` or `Expect:` line for an entry | Record it as a blocker with its kind, citation, and the unwritable line; never drop it, and never emit a partial case |
-| A blocker's citation fails verification | It stops being a blocker: it goes under the appendix's unspecified list and never reaches Phase 4 |
-| A citation verifies but the API models no such state | It is an **O** blocker; carry it to Phase 4 with its citation, do not call it unspecified, and emit no case yet |
-| A signature proposal whose chain does not close end to end | Not a blocker. It goes under "Unsourced suggestions" in the appendix, never reaches the gate, and never changes a case |
-| Several signature proposals in one run | One change-set, one question — never one question per proposal |
-| The gate has no blocker and no non-obvious case | It still opens. The list itself is what is being settled; one question, one answer |
-| The author answers `revise` | Apply the edits, re-derive and re-verify the tags they touched, re-check obviousness, re-present the affected cases only, and ask again |
-| The author answers `cancel`, or does not answer | Write nothing. Print the list in the terminal and stop |
-| The author takes or supplies a signature | Enumerate against it, and say in the document header that the list is not the code as it stands |
+| A blocker's citation fails verification | It stops being a blocker: it goes under the appendix's unspecified list and never reaches "API 改定" |
+| A citation verifies but the API models no such state | It is an **O** blocker; record it under "API 改定" with its citation, do not call it unspecified, and emit no case yet |
+| A signature proposal whose chain does not close end to end | Not a blocker. It goes under "Unsourced suggestions" in the appendix, never enters "API 改定", and never changes a case |
+| Several signature proposals in one run | One change-set under "API 改定" — never one decision per proposal |
+| You are about to ask the author to approve the list in the terminal | Do not ask. Write the document with `状態: 未承認`; the author reviews the Markdown and answers in the conversation |
+| The author asks for changes after reading the document | Apply the edits, re-derive and re-verify the tags they touched, re-check 自明, re-transcribe the affected cases, overwrite with `状態: 未承認`, and name the affected IDs in the terminal |
+| The author approves after reading the document | Rewrite the document with `状態: 承認済み` and the lead's review sentence turned into a record of the approval; change nothing else |
+| The author discards the document, or does not answer | Write nothing more. Silence is not approval; the document stays `状態: 未承認` |
+| The author takes or supplies a signature | Enumerate against it, mark every case it produces 要確認, and say in the document header that the list is not the code as it stands |
 | The author keeps the current signature | Emit no case from that entry; record it under "API 改定" as left as is |
-| A case can be justified only by an agreed signature | Do not emit it. Phase 4 makes a sentence writable, never a case justified |
-| Expanding against an agreed signature yields a case the author has not seen | That is a revise, not an approval. Present it and ask again |
+| A case can be justified only by an agreed signature | Do not emit it. An agreed signature makes a sentence writable, never a case justified |
+| Expanding against an agreed signature yields a case the proposal did not predict | Mark it 要確認 like every case the expansion produces, and write the document back with `状態: 未承認` |
 | The destination document exists and its header names this target | Overwrite it whole, without asking. `docs/` is tracked in git |
 | The destination document exists and its header names a different target | Do not write. Stop, print the list in the terminal, and report both targets |
 | The run produced no case | Write nothing. Report in the terminal, and say so if a stale document sits at the path |
