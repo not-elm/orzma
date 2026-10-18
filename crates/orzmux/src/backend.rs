@@ -685,7 +685,9 @@ impl Backend {
     /// alternate-screen application that tracks the mouse, while no mouse
     /// selection press is held, a line, half-page or page scroll goes to
     /// the application as wheel reports; any other scroll moves the pane's
-    /// viewport.
+    /// viewport. A scroll bound for the application is dropped when the
+    /// pane sent it the reports of a vi scroll or an edge motion less than
+    /// [`OrzmaTty::KEY_FORWARD_INTERVAL`] earlier.
     ///
     /// # Errors
     ///
@@ -721,7 +723,10 @@ impl Backend {
     /// Moves `pane`'s vi cursor by `motion`. In vi mode over an
     /// alternate-screen application that tracks the mouse, while no mouse
     /// selection press is held, an `Up` on the top row or a `Down` on the
-    /// bottom row sends the application one wheel report instead.
+    /// bottom row sends the application one wheel report instead. Such a
+    /// motion is dropped when the pane sent the application the reports of
+    /// a vi scroll or an edge motion less than
+    /// [`OrzmaTty::KEY_FORWARD_INTERVAL`] earlier.
     ///
     /// # Errors
     ///

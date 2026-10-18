@@ -11,7 +11,10 @@ use orzmux::prelude::OrzmuxCommand;
 /// entity: its viewport moves, or, in vi mode over an alternate-screen
 /// application that tracks the mouse while no mouse selection press is
 /// held, a line, half-page or page scroll reaches the application as wheel
-/// reports.
+/// reports. Such a scroll is dropped when the terminal sent the application
+/// the reports of a vi scroll or an edge motion less than
+/// [`OrzmaTty::KEY_FORWARD_INTERVAL`](orzma_tty::OrzmaTty::KEY_FORWARD_INTERVAL)
+/// earlier.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyScroll {
     #[event_target]

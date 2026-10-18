@@ -122,7 +122,10 @@ pub enum OrzmuxCommand {
     /// Applies a vi-mode scroll to a pane: moves its viewport, or, in vi
     /// mode over an alternate-screen application that tracks the mouse
     /// while no mouse selection press is held, sends a line, half-page or
-    /// page scroll to the application as wheel reports.
+    /// page scroll to the application as wheel reports. Such a scroll is
+    /// dropped when the pane sent the application the reports of a vi
+    /// scroll or an edge motion less than
+    /// [`OrzmaTty::KEY_FORWARD_INTERVAL`](orzma_tty::OrzmaTty::KEY_FORWARD_INTERVAL) earlier.
     Scroll {
         /// The pane to scroll.
         pane: PaneId,
@@ -149,7 +152,10 @@ pub enum OrzmuxCommand {
     /// Moves a pane's vi cursor, or, in vi mode over an alternate-screen
     /// application that tracks the mouse while no mouse selection press is
     /// held, sends the application one wheel report for an `Up` on the top
-    /// row or a `Down` on the bottom row instead.
+    /// row or a `Down` on the bottom row instead. Such a motion is dropped
+    /// when the pane sent the application the reports of a vi scroll or an
+    /// edge motion less than
+    /// [`OrzmaTty::KEY_FORWARD_INTERVAL`](orzma_tty::OrzmaTty::KEY_FORWARD_INTERVAL) earlier.
     ViMotion {
         /// The pane whose vi cursor moves.
         pane: PaneId,
