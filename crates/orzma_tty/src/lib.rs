@@ -7,8 +7,9 @@ use crate::{
     coalescer::Coalescer,
     error::{OrzmaTtyError, OrzmaTtyResult},
     input::{
-        MouseReport, MouseReportKind, PointerAction, PointerInput, PointerKind, PointerState,
-        PtyInput, TerminalKey, TerminalModifiers, WheelConfig, WheelDecision, WheelInput,
+        CellCoord, MouseReport, MouseReportKind, PointerAction, PointerInput, PointerKind,
+        PointerState, ProtocolModifiers, PtyInput, TerminalKey, TerminalModifiers, WheelConfig,
+        WheelDecision, WheelInput, WheelModifiers, WheelSteps,
     },
     pty::{ChunkPoll, ExitPoll, Pty},
     signal::TtySignal,
@@ -301,6 +302,31 @@ impl<V: Vt> OrzmaTty<V> {
                 self.follow_drag_end();
             }
         }
+    }
+
+    /// Scrolls the viewport, or sends the scroll to the application as
+    /// wheel reports.
+    ///
+    /// The reports go out for a line, half-page or page scroll while vi mode
+    /// is on over an alternate-screen application that tracks the mouse and
+    /// no selection press is held; the selection is cleared first, even when
+    /// the write is then refused. `Ok` means the reports were queued, not
+    /// that they reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the reports (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
+    pub fn vi_scroll(&mut self, scroll: Scroll) -> OrzmaTtyResult {
+        if self.scrolls_app() {
+            let decision = WheelDecision::for_vi_scroll(scroll, self.vt.grid_size().rows);
+            if decision != WheelDecision::Noop {
+                return self.forward_wheel_to_app(decision);
+            }
+        }
+        self.scroll(scroll);
+        Ok(())
     }
 
     /// Anchors a selection, arming the coalescer only when the VT's
@@ -731,6 +757,49 @@ impl<V: Vt> OrzmaTty<V> {
             modes.mouse_tracking = MouseTracking::Off;
         }
         modes
+    }
+
+    /// Whether vi-mode scrolls and the wheel go to the application as wheel
+    /// reports: vi mode is on, the alternate screen is shown, a mouse
+    /// tracking level is in force, and no selection press is held.
+    fn scrolls_app(&self) -> bool {
+        let modes = self.vt.modes();
+        self.vt.is_vi_mode()
+            && matches!(modes.active_screen, ScreenKind::Alternate)
+            && modes.mouse_reporting_active()
+            && !self.pointer.holds_local_press()
+    }
+
+    /// Clears the selection and queues `decision`'s wheel reports at the vi
+    /// cursor's cell; does neither when there is nothing to send.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the reports (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
+    fn forward_wheel_to_app(&mut self, decision: WheelDecision) -> OrzmaTtyResult {
+        let modes = self.vt.modes();
+        let cell = self.vt.vi_cursor().and_then(|cursor| {
+            CellCoord::from_grid_point(
+                cursor.point,
+                self.vt.display_offset(),
+                self.vt.grid_size().rows,
+            )
+        });
+        let input = WheelInput {
+            steps: WheelSteps::default(),
+            mods: WheelModifiers::default(),
+            cell,
+            report_mods: ProtocolModifiers::default(),
+        };
+        let mut bytes = Vec::new();
+        self.stage_wheel_decision(&mut bytes, decision, input, modes);
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.clear_selection();
+        self.pty.enqueue_write(bytes)
     }
 
     /// Moves a held selection drag's moving end onto the grid point its

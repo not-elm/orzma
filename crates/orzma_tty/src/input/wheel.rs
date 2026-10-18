@@ -3,7 +3,7 @@
 
 use crate::input::keyboard::TerminalKey;
 use crate::input::mouse::{CellCoord, MouseButton, ProtocolModifiers};
-use orzma_vt::prelude::VtModes;
+use orzma_vt::prelude::{Scroll, VtModes};
 
 /// Wheel-routing policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,6 +144,36 @@ impl WheelDecision {
         } else {
             Self::Noop
         }
+    }
+
+    /// Routes one vi-mode scroll that goes to the application as wheel
+    /// reports, on a screen `rows` tall.
+    ///
+    /// A `Delta(n)` sends one report per line, wheel-up when `n` is
+    /// positive, but no more than a page sends. A half page sends
+    /// `max(1, rows / 2 / 3)` reports and a page `max(1, rows / 3)`. A zero
+    /// delta, `Top` and `Bottom` route to [`Self::Noop`].
+    pub fn for_vi_scroll(scroll: Scroll, rows: u16) -> Self {
+        /// The lines one wheel report is taken to scroll when a half page
+        /// or a page is counted in reports.
+        const LINES_PER_REPORT: u32 = 3;
+
+        let page = (u32::from(rows) / LINES_PER_REPORT).max(1);
+        let half_page = (u32::from(rows) / 2 / LINES_PER_REPORT).max(1);
+        let (up, count) = match scroll {
+            Scroll::Delta(0) | Scroll::Top | Scroll::Bottom => return Self::Noop,
+            Scroll::Delta(lines) => (lines > 0, lines.unsigned_abs().min(page)),
+            Scroll::HalfPageUp => (true, half_page),
+            Scroll::HalfPageDown => (false, half_page),
+            Scroll::PageUp => (true, page),
+            Scroll::PageDown => (false, page),
+        };
+        let button = if up {
+            MouseButton::WheelUp
+        } else {
+            MouseButton::WheelDown
+        };
+        Self::Report { button, count }
     }
 
     fn vertical_reports(reports: i32, cfg: &WheelConfig) -> Self {

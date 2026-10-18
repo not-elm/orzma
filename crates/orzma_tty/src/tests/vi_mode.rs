@@ -1,9 +1,14 @@
-//! Tests for the vi-mode operations: they arm the coalescer only on a real
-//! change, and vi mode routes the mouse to the terminal's own selection and
-//! scrollback.
+//! Tests for the vi-mode operations: the coalescer arms only on a real
+//! change, the mouse drives the terminal's own selection and scrollback, and
+//! scrolls reach a mouse-tracking alternate-screen application as wheel reports.
 
 use super::*;
 use orzma_vt::prelude::{DisplayOffset, OrzmaVt, SelectionKind, ViModeSwitch, ViMotion};
+
+/// The output that puts a 10-column terminal on the alternate screen with
+/// SGR button-event tracking, prints `hello` on row 3, and parks the write
+/// cursor on its `e`.
+const APP_SCROLL_SETUP: &[u8] = b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[3;1Hhello\x1b[3;2H";
 
 /// A 10-column terminal `rows` tall over a real VT, plus the sink its PTY
 /// writes land on.
@@ -16,6 +21,32 @@ fn real_term(rows: u16) -> (OrzmaTty<OrzmaVt>, CaptureSink) {
     )
     .expect("OrzmaTty::detached");
     (term, sink)
+}
+
+/// A terminal `rows` tall that has interpreted [`APP_SCROLL_SETUP`] and
+/// entered vi mode, plus the sink its PTY writes land on. With at least
+/// three rows the vi cursor sits on line 2, column 1.
+fn app_scroll_term(rows: u16) -> (OrzmaTty<OrzmaVt>, CaptureSink) {
+    let (mut term, sink) = real_term(rows);
+    term.feed_bytes(APP_SCROLL_SETUP)
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    (term, sink)
+}
+
+/// The terminal [`app_scroll_term`] builds, with a PTY writer that fails
+/// every write.
+fn failing_app_scroll_term(rows: u16) -> OrzmaTty<OrzmaVt> {
+    let mut term = OrzmaTty::detached(
+        OrzmaVt::new(grid(10, rows), 100),
+        grid(10, rows),
+        Box::new(FailingSink),
+    )
+    .expect("OrzmaTty::detached");
+    term.feed_bytes(APP_SCROLL_SETUP)
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term
 }
 
 /// Asserts that entering vi mode arms the coalescer, and that a repeated
@@ -169,4 +200,279 @@ fn a_page_motion_during_a_held_drag_moves_the_vi_cursor() {
         term.vt.vi_cursor().map(|cursor| cursor.point.line),
         Some(GridLine(2))
     );
+}
+
+/// Asserts that a half-page scroll in vi mode over an alternate-screen
+/// application that tracks the mouse sends wheel-up reports at the vi
+/// cursor in one write, instead of moving the vi cursor or the viewport.
+///
+/// Case: the user enters vi mode over Claude Code's fullscreen chat and
+/// presses `Ctrl+U` to read back older messages.
+#[test]
+fn a_half_page_up_over_a_mouse_tracking_app_sends_wheel_ups_at_the_vi_cursor() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.vi_scroll(Scroll::HalfPageUp).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<64;2;3M\x1b[<64;2;3M".to_vec());
+    assert_eq!(sink.writes(), 1);
+    assert!(term.vt.is_vi_mode());
+    assert_eq!(
+        term.vt.vi_cursor().map(|cursor| cursor.point),
+        Some(GridPoint {
+            line: GridLine(2),
+            column: GridColumn(1)
+        })
+    );
+    assert_eq!(term.vt.display_offset(), DisplayOffset(0));
+}
+
+/// Asserts that each forwarded vi scroll sends its count of wheel reports
+/// in its direction, at least one for a page on a one-row pane and no more
+/// than a page's worth for a long line scroll.
+///
+/// Case: over Claude Code's fullscreen chat the user presses each of the
+/// vi scroll keys, in panes of several heights.
+#[test]
+fn each_vi_scroll_kind_sends_its_wheel_report_count() {
+    for (rows, scroll, button, count) in [
+        (12, Scroll::HalfPageDown, 65, 2),
+        (12, Scroll::PageUp, 64, 4),
+        (12, Scroll::PageDown, 65, 4),
+        (12, Scroll::Delta(1), 64, 1),
+        (12, Scroll::Delta(-1), 65, 1),
+        (24, Scroll::HalfPageUp, 64, 4),
+        (1, Scroll::HalfPageUp, 64, 1),
+        (1, Scroll::PageDown, 65, 1),
+        (12, Scroll::Delta(100), 64, 4),
+        (12, Scroll::Delta(i32::MIN), 65, 4),
+    ] {
+        let (mut term, sink) = app_scroll_term(rows);
+        term.vi_scroll(scroll).expect("vi_scroll");
+        term.settle_writes();
+        let row = rows.min(3);
+        let report = format!("\x1b[<{button};2;{row}M");
+        assert_eq!(
+            sink.contents(),
+            report.repeat(count).into_bytes(),
+            "{rows} rows, {scroll:?}"
+        );
+    }
+}
+
+/// Asserts that the history jumps and a zero line scroll are not forwarded
+/// and keep the selection.
+///
+/// Case: over Claude Code's fullscreen chat the user has selected a word in
+/// vi mode and presses `g` or `G`.
+#[test]
+fn history_jumps_and_a_zero_delta_are_not_forwarded() {
+    for scroll in [Scroll::Top, Scroll::Bottom, Scroll::Delta(0)] {
+        let (mut term, sink) = app_scroll_term(12);
+        term.toggle_vi_selection(SelectionKind::Simple);
+        term.vi_scroll(scroll).expect("vi_scroll");
+        term.settle_writes();
+        assert_eq!(sink.contents(), b"", "{scroll:?}");
+        assert!(term.vt.selection_text().is_some(), "{scroll:?}");
+    }
+}
+
+/// Asserts that a forwarded vi scroll clears the selection and leaves vi
+/// mode on.
+///
+/// Case: the user has selected a word in vi mode over Claude Code's
+/// fullscreen chat and presses `Ctrl+U` before copying it.
+#[test]
+fn a_forwarded_vi_scroll_clears_the_selection_and_stays_in_vi_mode() {
+    let (mut term, _sink) = app_scroll_term(12);
+    term.toggle_vi_selection(SelectionKind::Simple);
+    assert_eq!(term.vt.selection_text().as_deref(), Some("e"));
+    term.vi_scroll(Scroll::HalfPageUp).expect("vi_scroll");
+    assert_eq!(term.vt.selection_text(), None);
+    assert!(term.vt.is_vi_mode());
+}
+
+/// Asserts that a forwarded vi scroll is encoded in the mouse encoding the
+/// application chose.
+///
+/// Case: a full-screen program that tracks the mouse without asking for
+/// SGR reports scrolls under `Ctrl+Y` in vi mode.
+#[test]
+fn a_forwarded_vi_scroll_uses_the_apps_mouse_encoding() {
+    let (mut term, sink) = real_term(12);
+    term.feed_bytes(b"\x1b[?1049h\x1b[?1002h\x1b[3;2H")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[M`\"#".to_vec());
+}
+
+/// Asserts that a forwarded vi scroll reports the body column of the wide
+/// glyph under the vi cursor.
+///
+/// Case: the vi cursor sits on a Japanese character in Claude Code's
+/// fullscreen chat when the user presses `Ctrl+Y`.
+#[test]
+fn a_forwarded_vi_scroll_reports_the_body_column_of_a_wide_glyph() {
+    let (mut term, sink) = real_term(12);
+    term.feed_bytes("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[3;1Hあい\x1b[3;4H".as_bytes())
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<64;3;3M".to_vec());
+}
+
+/// Asserts that after a forward the vi cursor follows the text when the
+/// application redraws with a region scroll.
+///
+/// Case: in vi mode the user presses `Ctrl+Y` over a program that answers
+/// the wheel with a scroll-down of its screen, as nvim does.
+#[test]
+fn an_app_region_scroll_after_a_forward_moves_the_vi_cursor_with_the_text() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<64;2;3M".to_vec());
+    term.feed_bytes(b"\x1b[T")
+        .expect("the VT interprets the bytes");
+    assert_eq!(
+        term.vt.vi_cursor().map(|cursor| cursor.point.line),
+        Some(GridLine(3))
+    );
+}
+
+/// Asserts that vi scrolls stay on the terminal's own screen while a mouse
+/// selection press is held, and reach the application again after its
+/// release.
+///
+/// Case: the user drags a selection over Claude Code's fullscreen chat in
+/// vi mode, presses `Ctrl+Y` mid-drag, and presses it again after letting
+/// go.
+#[test]
+fn vi_scrolls_stay_local_while_a_selection_press_is_held() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.send_pointer(press(PointerButton::Left, 1, 1))
+        .expect("send_pointer");
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.send_pointer(motion(4, 1)).expect("send_pointer");
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+    term.send_pointer(release(PointerButton::Left, 4, 1))
+        .expect("send_pointer");
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    let written = sink.contents();
+    assert!(written.starts_with(b"\x1b[<64;") && written.ends_with(b"M"));
+    assert_eq!(written.iter().filter(|&&byte| byte == 0x1b).count(), 1);
+}
+
+/// Asserts that vi scrolls over an alternate-screen program that does not
+/// track the mouse move the vi cursor and reach nothing.
+///
+/// Case: the user enters vi mode over less and presses `Ctrl+U`.
+#[test]
+fn vi_scrolls_over_an_app_that_does_not_track_the_mouse_are_not_forwarded() {
+    let (mut term, sink) = real_term(12);
+    term.feed_bytes(b"\x1b[?1049h\x1b[3;2H")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.vi_scroll(Scroll::HalfPageUp).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+    assert!(
+        term.vt
+            .vi_cursor()
+            .is_some_and(|cursor| cursor.point.line.0 < 2)
+    );
+}
+
+/// Asserts that vi scrolls on the primary screen scroll the scrollback and
+/// send nothing, even while the application tracks the mouse.
+///
+/// Case: a shell tool that tracks the mouse has printed more than a
+/// screenful, and the user presses `Ctrl+Y` in vi mode.
+#[test]
+fn vi_scrolls_on_the_primary_screen_scroll_the_scrollback_while_the_app_tracks_the_mouse() {
+    let (mut term, sink) = real_term(3);
+    term.feed_bytes(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\x1b[?1002h\x1b[?1006h")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(term.vt.display_offset(), DisplayOffset(1));
+    assert_eq!(sink.contents(), b"");
+}
+
+/// Asserts that once the application leaves the alternate screen, vi
+/// scrolls scroll the scrollback instead of reaching the application.
+///
+/// Case: the user quits Claude Code while vi mode stays on, then presses
+/// `Ctrl+Y` to read the shell history.
+#[test]
+fn a_vi_scroll_after_the_app_leaves_the_alternate_screen_is_not_forwarded() {
+    let (mut term, sink) = real_term(3);
+    term.feed_bytes(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\x1b[?1049h\x1b[?1002h\x1b[?1006h")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.feed_bytes(b"\x1b[?1049l")
+        .expect("the VT interprets the bytes");
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+    assert_eq!(term.vt.display_offset(), DisplayOffset(1));
+}
+
+/// Asserts that once the application stops tracking the mouse, vi scrolls
+/// no longer reach it.
+///
+/// Case: a full-screen program turns mouse tracking off while the user is
+/// in vi mode, and the user presses `Ctrl+Y`.
+#[test]
+fn a_vi_scroll_after_the_app_stops_tracking_the_mouse_is_not_forwarded() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.feed_bytes(b"\x1b[?1002l")
+        .expect("the VT interprets the bytes");
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+}
+
+/// Asserts that vi scrolls reach an application that enters the alternate
+/// screen and tracks the mouse after vi mode began.
+///
+/// Case: the user enters vi mode at the shell prompt, Claude Code starts in
+/// the pane, and the user presses `Ctrl+Y`.
+#[test]
+fn a_vi_scroll_after_the_app_enters_the_alternate_screen_is_forwarded() {
+    let (mut term, sink) = real_term(12);
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.feed_bytes(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h")
+        .expect("the VT interprets the bytes");
+    term.vi_scroll(Scroll::Delta(1)).expect("vi_scroll");
+    term.settle_writes();
+    let written = sink.contents();
+    assert!(written.starts_with(b"\x1b[<64;") && written.ends_with(b"M"));
+}
+
+/// Asserts that a forwarded vi scroll the PTY refuses is reported as an
+/// error.
+///
+/// Case: Claude Code stops reading its input, and the user keeps pressing
+/// `Ctrl+Y` in vi mode.
+#[test]
+fn a_refused_vi_scroll_forward_is_reported() {
+    let mut term = failing_app_scroll_term(12);
+    term.vi_scroll(Scroll::Delta(1))
+        .expect("the reports are queued before the writer fails");
+    term.settle_writes();
+    assert!(matches!(
+        term.vi_scroll(Scroll::Delta(1)),
+        Err(OrzmaTtyError::PtyWrite(_))
+    ));
+    assert!(matches!(
+        term.vi_scroll(Scroll::Delta(1)),
+        Err(OrzmaTtyError::PtyWriterClosed)
+    ));
 }
