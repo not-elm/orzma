@@ -940,6 +940,71 @@ mod tests {
 
             assert_eq!(app.world().resource::<ImeCandidateArea>().0, None);
         }
+
+        /// Asserts that an active tab rename clears the candidate area.
+        ///
+        /// Case: the user was composing at the prompt, then double-clicks a tab
+        /// to rename it while the composition is still open.
+        #[test]
+        fn a_tab_rename_clears_the_candidate_area() {
+            let mut app = system_app();
+            app.insert_resource(ImeCandidateArea(Some(Rect::new(70.0, 130.0, 74.0, 138.0))));
+            app.insert_resource(TabRename::active_for_test(TabId(1)));
+            spawn_cursor_surface(&mut app);
+
+            run_policy(&mut app);
+
+            assert_eq!(app.world().resource::<ImeCandidateArea>().0, None);
+        }
+
+        /// Asserts that an inline webview on an inactive overlay slot clears the
+        /// candidate area.
+        ///
+        /// Case: the user was composing at the prompt, then focuses an inline
+        /// webview in the frame its pane released the overlay slot, before the
+        /// focus moves away.
+        #[test]
+        fn an_inline_webview_on_an_inactive_slot_clears_the_candidate_area() {
+            let mut app = system_app();
+            app.insert_resource(ImeCandidateArea(Some(Rect::new(70.0, 130.0, 74.0, 138.0))));
+            let surface = spawn_cursor_surface(&mut app);
+            focus_inline_child(&mut app, surface, IVec4::new(2, 3, 0, 10));
+
+            run_policy(&mut app);
+
+            assert_eq!(app.world().resource::<ImeCandidateArea>().0, None);
+        }
+
+        /// Asserts that no focused surface and no webview clears the candidate
+        /// area.
+        ///
+        /// Case: the user was composing at the prompt, then closes the last
+        /// pane before finishing the composition.
+        #[test]
+        fn no_focused_surface_and_no_webview_clears_the_candidate_area() {
+            let mut app = system_app();
+            app.insert_resource(ImeCandidateArea(Some(Rect::new(70.0, 130.0, 74.0, 138.0))));
+
+            run_policy(&mut app);
+
+            assert_eq!(app.world().resource::<ImeCandidateArea>().0, None);
+        }
+
+        /// Asserts that a focused surface without a laid-out node clears the
+        /// candidate area.
+        ///
+        /// Case: the user was composing at the prompt, then focuses a newly
+        /// opened pane before its first layout runs.
+        #[test]
+        fn a_focused_surface_without_a_laid_out_node_clears_the_candidate_area() {
+            let mut app = system_app();
+            app.insert_resource(ImeCandidateArea(Some(Rect::new(70.0, 130.0, 74.0, 138.0))));
+            app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
+
+            run_policy(&mut app);
+
+            assert_eq!(app.world().resource::<ImeCandidateArea>().0, None);
+        }
     }
 
     mod sync_ime_candidate_area {
