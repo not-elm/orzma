@@ -6,7 +6,10 @@ use bevy::prelude::*;
 pub use orzma_vt::prelude::ViMotion;
 use orzmux::prelude::OrzmuxCommand;
 
-/// Fired by the host UI to move a specific terminal entity's vi cursor.
+/// Fired by the host UI to move a specific terminal entity's vi cursor. In
+/// vi mode over an alternate-screen application that tracks the mouse, an
+/// `Up` on the top row or a `Down` on the bottom row reaches the
+/// application as one wheel report instead.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyViMotion {
     #[event_target]

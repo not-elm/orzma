@@ -75,7 +75,7 @@ fn a_motion_and_a_toggle_arm_the_coalescer() {
         .expect("the VT interprets the bytes");
     term.switch_vi_mode(ViModeSwitch::Enter);
     term.coalescer.disarm();
-    term.vi_motion(ViMotion::Left);
+    term.vi_motion(ViMotion::Left).expect("vi_motion");
     assert!(term.coalescer.is_armed());
     term.coalescer.disarm();
     term.toggle_vi_selection(SelectionKind::Simple);
@@ -475,4 +475,117 @@ fn a_refused_vi_scroll_forward_is_reported() {
         term.vi_scroll(Scroll::Delta(1)),
         Err(OrzmaTtyError::PtyWriterClosed)
     ));
+}
+
+/// Asserts that an `Up` on the top row over an alternate-screen
+/// application that tracks the mouse sends one wheel-up report and leaves
+/// the vi cursor where it is.
+///
+/// Case: the user holds `k` in vi mode at the top of Claude Code's
+/// fullscreen chat.
+#[test]
+fn cursor_up_on_the_top_row_over_a_tracking_app_sends_one_wheel_up() {
+    let (mut term, sink) = real_term(12);
+    term.feed_bytes(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[1;2H")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.vi_motion(ViMotion::Up).expect("vi_motion");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<64;2;1M".to_vec());
+    assert_eq!(
+        term.vt.vi_cursor().map(|cursor| cursor.point.line),
+        Some(GridLine(0))
+    );
+}
+
+/// Asserts that a `Down` on the bottom row over an alternate-screen
+/// application that tracks the mouse sends one wheel-down report and
+/// leaves the vi cursor where it is.
+///
+/// Case: the user presses `j` in vi mode at the bottom of Claude Code's
+/// fullscreen chat to read toward the newest message.
+#[test]
+fn cursor_down_on_the_bottom_row_over_a_tracking_app_sends_one_wheel_down() {
+    let (mut term, sink) = real_term(12);
+    term.feed_bytes(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[12;2H")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.vi_motion(ViMotion::Down).expect("vi_motion");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<65;2;12M".to_vec());
+    assert_eq!(
+        term.vt.vi_cursor().map(|cursor| cursor.point.line),
+        Some(GridLine(11))
+    );
+}
+
+/// Asserts that an `Up` below the top row moves the vi cursor and sends
+/// nothing.
+///
+/// Case: the user presses `k` in vi mode in the middle of Claude Code's
+/// fullscreen chat.
+#[test]
+fn cursor_up_below_the_top_row_moves_the_vi_cursor_without_forwarding() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.vi_motion(ViMotion::Up).expect("vi_motion");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+    assert_eq!(
+        term.vt.vi_cursor().map(|cursor| cursor.point.line),
+        Some(GridLine(1))
+    );
+}
+
+/// Asserts that an edge forward the PTY refuses is reported as an error.
+///
+/// Case: Claude Code stops reading its input, and the user keeps pressing
+/// `k` at the top of its chat in vi mode.
+#[test]
+fn a_refused_edge_forward_is_reported() {
+    let mut term = failing_app_scroll_term(12);
+    term.vi_motion(ViMotion::High).expect("vi_motion");
+    term.vi_motion(ViMotion::Up)
+        .expect("the report is queued before the writer fails");
+    term.settle_writes();
+    assert!(matches!(
+        term.vi_motion(ViMotion::Up),
+        Err(OrzmaTtyError::PtyWrite(_))
+    ));
+}
+
+/// Asserts that an edge forward clears the selection and leaves vi mode
+/// on.
+///
+/// Case: the user has selected a word on the top line of Claude Code's
+/// fullscreen chat in vi mode and presses `k`.
+#[test]
+fn an_edge_forward_clears_the_selection() {
+    let (mut term, _sink) = real_term(12);
+    term.feed_bytes(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[1;1Hhello\x1b[1;2H")
+        .expect("the VT interprets the bytes");
+    term.switch_vi_mode(ViModeSwitch::Enter);
+    term.toggle_vi_selection(SelectionKind::Simple);
+    assert_eq!(term.vt.selection_text().as_deref(), Some("e"));
+    term.vi_motion(ViMotion::Up).expect("vi_motion");
+    assert_eq!(term.vt.selection_text(), None);
+    assert!(term.vt.is_vi_mode());
+}
+
+/// Asserts that an `Up` on the top row stays on the terminal's own screen
+/// while a mouse selection press is held.
+///
+/// Case: the user presses the mouse on the top line of Claude Code's
+/// fullscreen chat in vi mode and presses `k` before letting go.
+#[test]
+fn cursor_up_on_the_top_row_stays_local_while_a_selection_press_is_held() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.send_pointer(press(PointerButton::Left, 2, 1))
+        .expect("send_pointer");
+    assert_eq!(
+        term.vt.vi_cursor().map(|cursor| cursor.point.line),
+        Some(GridLine(0))
+    );
+    term.vi_motion(ViMotion::Up).expect("vi_motion");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
 }

@@ -143,7 +143,10 @@ pub enum OrzmuxCommand {
         /// Which direction to switch.
         switch: ViModeSwitch,
     },
-    /// Move a pane's vi cursor.
+    /// Moves a pane's vi cursor, or, in vi mode over an alternate-screen
+    /// application that tracks the mouse, sends the application one wheel
+    /// report for an `Up` on the top row or a `Down` on the bottom row
+    /// instead.
     ViMotion {
         /// The pane whose vi cursor moves.
         pane: PaneId,

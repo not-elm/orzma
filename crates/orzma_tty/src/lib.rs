@@ -7,9 +7,9 @@ use crate::{
     coalescer::Coalescer,
     error::{OrzmaTtyError, OrzmaTtyResult},
     input::{
-        CellCoord, MouseReport, MouseReportKind, PointerAction, PointerInput, PointerKind,
-        PointerState, ProtocolModifiers, PtyInput, TerminalKey, TerminalModifiers, WheelConfig,
-        WheelDecision, WheelInput, WheelModifiers, WheelSteps,
+        CellCoord, MouseButton, MouseReport, MouseReportKind, PointerAction, PointerInput,
+        PointerKind, PointerState, ProtocolModifiers, PtyInput, TerminalKey, TerminalModifiers,
+        WheelConfig, WheelDecision, WheelInput, WheelModifiers, WheelSteps,
     },
     pty::{ChunkPoll, ExitPoll, Pty},
     signal::TtySignal,
@@ -361,12 +361,27 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
-    /// Moves the vi cursor, arming the coalescer only when something
-    /// changed.
-    pub fn vi_motion(&mut self, motion: ViMotion) {
+    /// Moves the vi cursor, or sends the application one wheel report for
+    /// an `Up` on the top row or a `Down` on the bottom row.
+    ///
+    /// The report goes out while vi mode is on over an alternate-screen
+    /// application that tracks the mouse and no selection press is held;
+    /// the selection is cleared first, even when the write is then refused.
+    /// `Ok` means the report was queued, not that it reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the report (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
+    pub fn vi_motion(&mut self, motion: ViMotion) -> OrzmaTtyResult {
+        if let Some(button) = self.edge_wheel_button(motion) {
+            return self.forward_wheel_to_app(WheelDecision::Report { button, count: 1 });
+        }
         if self.vt.vi_motion(motion) {
             self.coalescer.arm_or_extend(Instant::now());
         }
+        Ok(())
     }
 
     /// Toggles a vi-mode selection, arming the coalescer only when the
@@ -768,6 +783,28 @@ impl<V: Vt> OrzmaTty<V> {
             && matches!(modes.active_screen, ScreenKind::Alternate)
             && modes.mouse_reporting_active()
             && !self.pointer.holds_local_press()
+    }
+
+    /// The wheel button that scrolls the application in place of `motion`:
+    /// wheel-up for an `Up` on the viewport's top row and wheel-down for a
+    /// `Down` on its bottom row, while the wheel goes to the application;
+    /// `None` otherwise.
+    fn edge_wheel_button(&self, motion: ViMotion) -> Option<MouseButton> {
+        if !self.scrolls_app() {
+            return None;
+        }
+        let rows = self.vt.grid_size().rows;
+        let line = self
+            .vt
+            .vi_cursor()?
+            .point
+            .line
+            .to_viewport(self.vt.display_offset(), rows)?;
+        match motion {
+            ViMotion::Up if line.0 == 0 => Some(MouseButton::WheelUp),
+            ViMotion::Down if line.0 + 1 == rows => Some(MouseButton::WheelDown),
+            _ => None,
+        }
     }
 
     /// Clears the selection and queues `decision`'s wheel reports at the vi

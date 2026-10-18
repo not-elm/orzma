@@ -714,15 +714,18 @@ impl Backend {
         Ok(())
     }
 
-    /// Moves `pane`'s vi cursor by `motion`.
+    /// Moves `pane`'s vi cursor by `motion`. In vi mode over an
+    /// alternate-screen application that tracks the mouse, an `Up` on the
+    /// top row or a `Down` on the bottom row sends the application one
+    /// wheel report instead.
     ///
     /// # Errors
     ///
     /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`.
+    /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
+    /// refuses the report.
     pub fn vi_motion(&mut self, pane: PaneId, motion: ViMotion) -> OrzmuxResult {
-        self.pane_mut(pane)?.tty.vi_motion(motion);
-        Ok(())
+        self.write_pty(pane, |tty| tty.vi_motion(motion))
     }
 
     /// Toggles a vi-mode selection of `kind` at `pane`'s vi cursor.
