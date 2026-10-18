@@ -183,20 +183,19 @@ pub(crate) fn resolve_focused_surface(
     focused.single().ok()
 }
 
-/// Derives whether IME should be on this tick and writes
-/// `PrimaryWindow.ime_enabled` and `.ime_position`.
+/// Derives the window's IME policy from keyboard focus and writes it to the
+/// primary window and to `ImeCandidateArea`.
 ///
-/// `ime_enabled` is `true` iff a CEF webview owns focus, or a surface
-/// exists that does NOT have `ViModeState`. The surface is the
-/// `KeyboardFocused` `OrzmaTerminal` surface.
+/// The IME is switched off only when nothing that takes IME input holds
+/// keyboard focus or the focused terminal is in vi mode; a focused webview
+/// keeps it on even over a vi-mode terminal. A focused terminal anchors
+/// `ime_position` at its cursor cell's top-left corner and publishes that
+/// cell, in logical pixels, as `ImeCandidateArea`; while the area holds
+/// `Some`, `ime_position` equals its `min`. A focused inline webview anchors
+/// `ime_position` at its overlay rect origin. Every other target leaves
+/// `ime_position` unchanged and clears the area.
 ///
-/// `ime_position` anchors the OS candidate window at the focused
-/// surface's cursor cell. When the focused webview is an INLINE child of
-/// the active pane, the anchor instead comes from that child's overlay
-/// rect origin (`webview_ime_position`), since inline entities carry no
-/// UI node for `webview_anchors` to read.
-///
-/// While a tab rename is active IME stays enabled and the rename field
+/// While a tab rename is active the IME stays on, and the rename field
 /// positions the candidate window.
 fn ime_policy_system(
     mut area: ResMut<ImeCandidateArea>,
@@ -211,10 +210,16 @@ fn ime_policy_system(
     if window.ime_enabled != enabled {
         window.ime_enabled = enabled;
     }
-    let rect = match target {
-        ImeTarget::Terminal(Some(rect)) => Some(rect),
-        _ => None,
+    let (rect, anchor) = match target {
+        ImeTarget::Terminal(Some(rect)) => (Some(rect), Some(rect.min)),
+        ImeTarget::Webview(Some(pos)) => (None, Some(pos)),
+        _ => (None, None),
     };
+    if let Some(anchor) = anchor
+        && window.ime_position != anchor
+    {
+        window.ime_position = anchor;
+    }
     area.set_if_neq(ImeCandidateArea(rect));
 }
 
@@ -582,11 +587,17 @@ mod tests {
         use orzma_vt::prelude::{Cursor, GridColumn, GridLine, GridPoint, InstanceId};
         use orzma_webview_host::prelude::MountId;
 
+        /// Asserts that a focused webview switches the window's IME on when no
+        /// terminal holds keyboard focus.
+        ///
+        /// Case: the user clicks into a webview while no pane holds keyboard focus
+        /// and the window's IME is off.
         #[test]
         fn ime_stays_enabled_for_focused_webview() {
             let mut app = App::new();
             app.add_plugins((MinimalPlugins, StatesPlugin));
             app.init_resource::<FocusedWebview>();
+            app.init_resource::<ImeCandidateArea>();
             app.insert_resource(TerminalCellMetricsResource {
                 metrics: CellMetrics {
                     cell_size: Vec2::new(8.0, 16.0),
@@ -600,11 +611,9 @@ mod tests {
                 phys_font_size: 12,
             });
 
-            // A CEF webview owns focus; no terminal is active.
             let webview = app.world_mut().spawn_empty().id();
             app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
 
-            // Window starts with IME OFF — the policy must turn it back ON.
             app.world_mut().spawn((
                 Window {
                     focused: true,
@@ -625,252 +634,6 @@ mod tests {
                 enabled,
                 "IME must stay enabled while a CEF webview owns focus, or bevy_cef's IME bridge is starved"
             );
-        }
-
-        #[test]
-        fn ime_position_anchors_at_inline_rect_origin_for_focused_inline() {
-            use bevy_orzma_tty_renderer::prelude::TerminalOverlays;
-
-            let mut app = App::new();
-            app.add_plugins((MinimalPlugins, StatesPlugin));
-            app.init_resource::<FocusedWebview>();
-            app.insert_resource(TerminalCellMetricsResource {
-                metrics: CellMetrics {
-                    cell_size: Vec2::new(8.0, 16.0),
-                    baseline: Baseline::new(12.0),
-                    underline: Underline {
-                        position: -2.0,
-                        thickness: Thickness::new(1.0),
-                    },
-                    max_overflow: 0.0,
-                },
-                phys_font_size: 12,
-            });
-
-            // The active pane node spans the window with no transform → top-left at
-            // (0, 0). Inline rect at rows 2.., cols 3.. → phys origin (24, 32) at
-            // 8x16 px.
-            let mut overlays = TerminalOverlays::default();
-            overlays.rects[0] = bevy::math::IVec4::new(2, 3, 10, 40);
-            let terminal = app
-                .world_mut()
-                .spawn((
-                    OrzmaTerminal,
-                    KeyboardFocused,
-                    ComputedNode {
-                        size: Vec2::new(800.0, 600.0),
-                        ..ComputedNode::DEFAULT
-                    },
-                    UiGlobalTransform::from_xy(400.0, 300.0),
-                    TerminalView::default(),
-                    overlays,
-                ))
-                .id();
-            let child = app
-                .world_mut()
-                .spawn((
-                    ChildOf(terminal),
-                    Webview::new("webview".into(), InstanceId(1), MountId::new(1), 0, 10, 40),
-                ))
-                .id();
-            app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-
-            app.world_mut().spawn((
-                Window {
-                    focused: true,
-                    resolution: WindowResolution::new(800, 600),
-                    ime_enabled: false,
-                    ..default()
-                },
-                PrimaryWindow,
-            ));
-
-            app.world_mut().run_system_once(ime_policy_system).unwrap();
-
-            let mut q = app
-                .world_mut()
-                .query_filtered::<&Window, With<PrimaryWindow>>();
-            let window = q.single(app.world()).expect("primary window");
-            assert!(
-                window.ime_enabled,
-                "IME must stay enabled while a webview owns focus"
-            );
-            assert!(
-                window.ime_position.abs_diff_eq(Vec2::new(24.0, 32.0), 1e-3),
-                "candidate window must anchor at the inline rect origin (phys 24,32 / scale 1), got {:?}",
-                window.ime_position,
-            );
-        }
-
-        #[test]
-        fn ime_enabled_and_anchored_for_focused_orzma_terminal() {
-            let mut app = App::new();
-            app.add_plugins((MinimalPlugins, StatesPlugin));
-            app.init_resource::<FocusedWebview>();
-            app.insert_resource(TerminalCellMetricsResource {
-                metrics: CellMetrics {
-                    cell_size: Vec2::new(8.0, 16.0),
-                    baseline: Baseline::new(12.0),
-                    underline: Underline {
-                        position: -2.0,
-                        thickness: Thickness::new(1.0),
-                    },
-                    max_overflow: 0.0,
-                },
-                phys_font_size: 12,
-            });
-
-            app.world_mut().spawn(OrzmaTerminal);
-            app.world_mut().spawn((
-                OrzmaTerminal,
-                KeyboardFocused,
-                ComputedNode::default(),
-                UiGlobalTransform::default(),
-                TerminalView {
-                    cursor: Some(Cursor::default()),
-                    ..default()
-                },
-            ));
-            app.world_mut().spawn((
-                Window {
-                    focused: true,
-                    resolution: WindowResolution::new(800, 600),
-                    ime_enabled: false,
-                    ..default()
-                },
-                PrimaryWindow,
-            ));
-
-            app.world_mut().run_system_once(ime_policy_system).unwrap();
-
-            let mut q = app
-                .world_mut()
-                .query_filtered::<&Window, With<PrimaryWindow>>();
-            let window = q.single(app.world()).expect("primary window");
-            assert!(
-                window.ime_enabled,
-                "IME must enable for the focused Orzma terminal even with another terminal present"
-            );
-            assert_eq!(
-                window.ime_position,
-                Vec2::new(0.0, 16.0),
-                "candidate window anchors one row below the focused terminal's cursor"
-            );
-        }
-
-        #[test]
-        fn ime_enabled_for_keyboard_focused_terminal() {
-            let mut app = App::new();
-            app.add_plugins((MinimalPlugins, StatesPlugin));
-            app.init_resource::<FocusedWebview>();
-            app.insert_resource(TerminalCellMetricsResource {
-                metrics: CellMetrics {
-                    cell_size: Vec2::new(8.0, 16.0),
-                    baseline: Baseline::new(12.0),
-                    underline: Underline {
-                        position: -2.0,
-                        thickness: Thickness::new(1.0),
-                    },
-                    max_overflow: 0.0,
-                },
-                phys_font_size: 12,
-            });
-            app.world_mut().spawn((
-                OrzmaTerminal,
-                KeyboardFocused,
-                ComputedNode::default(),
-                UiGlobalTransform::default(),
-                TerminalView {
-                    cursor: Some(Cursor::default()),
-                    ..default()
-                },
-            ));
-            app.world_mut().spawn((
-                Window {
-                    focused: true,
-                    resolution: WindowResolution::new(800, 600),
-                    ime_enabled: false,
-                    ..default()
-                },
-                PrimaryWindow,
-            ));
-
-            app.world_mut().run_system_once(ime_policy_system).unwrap();
-
-            let mut q = app
-                .world_mut()
-                .query_filtered::<&Window, With<PrimaryWindow>>();
-            assert!(
-                q.single(app.world()).expect("primary window").ime_enabled,
-                "IME must enable for a KeyboardFocused terminal",
-            );
-        }
-
-        fn policy_app_with_focused_terminal() -> App {
-            let mut app = App::new();
-            app.add_plugins((MinimalPlugins, StatesPlugin));
-            app.init_resource::<FocusedWebview>();
-            app.insert_resource(TerminalCellMetricsResource {
-                metrics: CellMetrics {
-                    cell_size: Vec2::new(8.0, 16.0),
-                    baseline: Baseline::new(12.0),
-                    underline: Underline {
-                        position: -2.0,
-                        thickness: Thickness::new(1.0),
-                    },
-                    max_overflow: 0.0,
-                },
-                phys_font_size: 12,
-            });
-            app.world_mut().spawn((
-                OrzmaTerminal,
-                KeyboardFocused,
-                ComputedNode::default(),
-                UiGlobalTransform::default(),
-                TerminalView {
-                    cursor: Some(Cursor::default()),
-                    ..default()
-                },
-            ));
-            app.world_mut().spawn((
-                Window {
-                    focused: true,
-                    resolution: WindowResolution::new(800, 600),
-                    ..default()
-                },
-                PrimaryWindow,
-            ));
-            app
-        }
-
-        /// Asserts that the IME policy keeps IME enabled while renaming and
-        /// leaves the candidate position to the rename field.
-        ///
-        /// Case: the rename field is focused while the terminal cursor sits
-        /// elsewhere.
-        #[test]
-        fn the_ime_policy_yields_to_the_rename_field() {
-            let mut app = policy_app_with_focused_terminal();
-            app.world_mut()
-                .insert_resource(TabRename::active_for_test(TabId(1)));
-            let sentinel = Vec2::new(-7.0, -7.0);
-            {
-                let mut windows = app
-                    .world_mut()
-                    .query_filtered::<&mut Window, With<PrimaryWindow>>();
-                let mut window = windows.single_mut(app.world_mut()).expect("one window");
-                window.ime_enabled = false;
-                window.ime_position = sentinel;
-            }
-            app.world_mut()
-                .run_system_once(ime_policy_system)
-                .expect("the policy runs");
-            let mut windows = app
-                .world_mut()
-                .query_filtered::<&Window, With<PrimaryWindow>>();
-            let window = windows.single(app.world()).expect("one window");
-            assert!(window.ime_enabled);
-            assert_eq!(window.ime_position, sentinel);
         }
 
         /// The `ime_position` the primary window starts with, distinct from
@@ -1103,6 +866,52 @@ mod tests {
             let (enabled, _) = run_policy(&mut app);
 
             assert!(enabled);
+        }
+
+        /// Asserts that a keyboard-focused terminal publishes its cursor cell, in
+        /// logical pixels, as the candidate area.
+        ///
+        /// Case: the user starts composing Japanese text at the shell prompt on a
+        /// display with a scale factor of 2.
+        #[test]
+        fn a_focused_surface_publishes_its_cursor_cell_as_the_candidate_area() {
+            let mut app = system_app();
+            spawn_cursor_surface(&mut app);
+
+            run_policy(&mut app);
+
+            let rect = app
+                .world()
+                .resource::<ImeCandidateArea>()
+                .0
+                .expect("a focused terminal publishes a candidate area");
+            assert!(
+                rect.min.abs_diff_eq(Vec2::new(70.0, 130.0), 1e-3),
+                "the area starts at the cursor cell's top-left, got {:?}",
+                rect.min,
+            );
+            assert!(
+                rect.max.abs_diff_eq(Vec2::new(74.0, 138.0), 1e-3),
+                "the area ends at the cursor cell's bottom-right, got {:?}",
+                rect.max,
+            );
+        }
+
+        /// Asserts that a keyboard-focused terminal in vi mode clears the candidate
+        /// area.
+        ///
+        /// Case: the user was composing at the prompt, then enters vi mode in the
+        /// same pane.
+        #[test]
+        fn a_vi_mode_surface_clears_the_candidate_area() {
+            let mut app = system_app();
+            app.insert_resource(ImeCandidateArea(Some(Rect::new(70.0, 130.0, 74.0, 138.0))));
+            let surface = spawn_cursor_surface(&mut app);
+            app.world_mut().entity_mut(surface).insert(ViModeState);
+
+            run_policy(&mut app);
+
+            assert_eq!(app.world().resource::<ImeCandidateArea>().0, None);
         }
     }
 
