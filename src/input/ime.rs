@@ -6,7 +6,7 @@ use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
 use crate::surface::OrzmaTerminal;
 use crate::ui::tab_bar::rename::{RenameSystems, TabRename};
-use bevy::app::{App, Plugin, PostUpdate, Update};
+use bevy::app::{App, Last, MainScheduleOrder, Plugin, PostUpdate, Update};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::hierarchy::ChildOf;
@@ -14,10 +14,10 @@ use bevy::ecs::message::MessageReader;
 use bevy::ecs::observer::On;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
-use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
-use bevy::ecs::system::{Commands, Query, Res, ResMut};
-use bevy::math::Vec2;
+use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleLabel};
+use bevy::ecs::system::{Commands, Query, Res, ResMut, SystemParam};
+use bevy::math::{Rect, Vec2};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
@@ -43,7 +43,13 @@ pub(super) struct ImePlugin;
 
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
+        app.init_schedule(ImeCandidateSync);
+        app.world_mut()
+            .resource_mut::<MainScheduleOrder>()
+            .insert_after(Last, ImeCandidateSync);
+
         app.init_resource::<ImeState>()
+            .init_resource::<ImeCandidateArea>()
             // NOTE: `ime_policy_system` must run unconditionally every frame.
             // Bevy's text-input plugin resets `Window::ime_enabled` every
             // `PreUpdate` whenever no `TextInput` has focus, so gating this
@@ -60,6 +66,10 @@ impl Plugin for ImePlugin {
                 reset_ime_after_rename
                     .after(RenameSystems::Finish)
                     .run_if(resource_exists_and_changed::<TabRename>),
+            )
+            .add_systems(
+                ImeCandidateSync,
+                sync_ime_candidate_area.run_if(resource_exists_and_changed::<ImeCandidateArea>),
             )
             .add_observer(apply_ime_commit_to_terminal);
     }
@@ -132,6 +142,55 @@ impl ImeState {
     }
 }
 
+#[derive(Resource, Debug, Default)]
+struct ImeCandidateArea(Option<Rect>);
+
+impl ImeCandidateArea {
+    fn set_if_neq(&mut self, area: ImeCandidateArea) {
+        if self.0 != area.0 {
+            self.0 = area.0;
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, ScheduleLabel)]
+struct ImeCandidateSync;
+
+#[derive(SystemParam)]
+struct ImePolicyParams<'w, 's> {
+    rename: Option<Res<'w, TabRename>>,
+    focused: Query<'w, 's, Entity, With<KeyboardFocused>>,
+    vi_modes: Query<'w, 's, (), With<ViModeState>>,
+    anchors: Query<
+        'w,
+        's,
+        (
+            &'static ComputedNode,
+            &'static UiGlobalTransform,
+            &'static TerminalView,
+        ),
+    >,
+    metrics: Res<'w, TerminalCellMetricsResource>,
+    focused_webview: Res<'w, FocusedWebview>,
+    webview_anchors: Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform)>,
+    webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
+    webview_slots: Query<'w, 's, &'static Webview>,
+    overlays: Query<'w, 's, &'static TerminalOverlays>,
+}
+
+impl ImePolicyParams<'_, '_> {
+    fn decide(&self) -> ImeTarget {
+        todo!("現在の入力状態などからImeTargetへの解決")
+    }
+}
+
+enum ImeTarget {
+    Rename,                 // ime_enabled = true。ime_position は Bevy の入力欄に任せる
+    Webview(Option<Vec2>),  // ime_enabled = true。位置が取れれば ime_position に書く
+    Terminal(Option<Rect>), // ime_enabled = true。矩形が取れれば起点を ime_position、area は Some
+    Disabled,               // ime_enabled = false(vi モード、フォーカスなし)
+}
+
 /// Pure-function state machine: applies one `Ime` event to `state` and
 /// returns the text that should be committed to the active pane (only set on
 /// `Ime::Commit`).
@@ -179,113 +238,27 @@ pub(crate) fn resolve_focused_surface(
 /// While a tab rename is active IME stays enabled and the rename field
 /// positions the candidate window.
 fn ime_policy_system(
+    mut area: ResMut<ImeCandidateArea>,
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
-    rename: Option<Res<TabRename>>,
-    focused: Query<Entity, With<KeyboardFocused>>,
-    vi_modes: Query<(), With<ViModeState>>,
-    anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalView)>,
-    metrics: Res<TerminalCellMetricsResource>,
-    focused_webview: Res<FocusedWebview>,
-    webview_anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
-    webview_parents: Query<&ChildOf, With<Webview>>,
-    webview_slots: Query<&Webview>,
-    overlays: Query<&TerminalOverlays>,
+    params: ImePolicyParams,
 ) {
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
-    if rename.as_deref().is_some_and(TabRename::is_active) {
-        if !window.ime_enabled {
-            window.ime_enabled = true;
-        }
-        return;
+    let target = params.decide();
+    let enabled = !matches!(target, ImeTarget::Disabled);
+    if window.ime_enabled != enabled {
+        window.ime_enabled = enabled;
     }
-    let surface = resolve_focused_surface(&focused);
-
-    // NOTE: a focused CEF webview drives its own IME through bevy_cef's
-    // `Ime` → CEF bridge. orzma MUST keep `ime_enabled` true here, or
-    // bevy_winit calls winit `set_ime_allowed(false)` and the OS delivers
-    // no `Ime` events at all — starving that bridge so webview IME silently
-    // breaks. Removing this branch reintroduces that bug.
-    if let Some(target) = focused_webview.0 {
-        if !window.ime_enabled {
-            window.ime_enabled = true;
-        }
-        // NOTE: Inline arm: an inline child has no UI node, so the
-        // tab-webview `webview_anchors` arm below cannot anchor it. Derive the
-        // candidate-window position from the owning terminal's node transform
-        // plus the inline placement rect's origin — the SAME px conversion the
-        // wheel/click hit-test uses (`webview_local_dip`'s `origin_phys`), so
-        // composition appears at the inline rect, not the terminal cursor.
-        if let Some(child) = focused_webview_of(Some(&focused_webview), &webview_parents, surface)
-            && let Some(pos) = webview_ime_position(
-                window.resolution.scale_factor(),
-                &webview_parents,
-                &webview_slots,
-                &anchors,
-                &overlays,
-                &metrics,
-                child,
-            )
-        {
-            if window.ime_position != pos {
-                window.ime_position = pos;
-            }
-            return;
-        }
-        if let Ok((focused_pane_node, ui_xform)) = webview_anchors.get(target) {
-            let scale = window.resolution.scale_factor();
-            let top_left_phys = node_top_left_phys(focused_pane_node, ui_xform);
-            let pos = top_left_phys / scale;
-            if window.ime_position != pos {
-                window.ime_position = pos;
-            }
-        }
-        return;
-    }
-
-    let Some(entity) = surface else {
-        if window.ime_enabled {
-            window.ime_enabled = false;
-        }
-        return;
+    let rect = match target {
+        ImeTarget::Terminal(Some(rect)) => Some(rect),
+        _ => None,
     };
+    area.set_if_neq(ImeCandidateArea(rect));
+}
 
-    let in_vi_mode = vi_modes.get(entity).is_ok();
-    let desired = !in_vi_mode;
-
-    if window.ime_enabled != desired {
-        window.ime_enabled = desired;
-    }
-
-    if !desired {
-        return;
-    }
-
-    // NOTE: Anchor `ime_position` at the TOP of the row BELOW the
-    // cursor. This is intentionally a DIFFERENT anchor from the
-    // inline overlay's `compute_overlay_pos`, which sits AT the
-    // cursor row (Alacritty parity). The OS candidate window still
-    // anchors one row down because macOS treats the rect
-    // `set_ime_cursor_area(origin, size)` as the marked-text
-    // bounding box and places the candidate window just below
-    // `origin.y + size.height`. bevy_winit's `changed_windows`
-    // hard-codes that size to `PhysicalSize::new(10, 10)` with no way
-    // for us to pass the actual cell height. Net effect: candidate window
-    // appears one full row below the cursor — i.e. one row below
-    // the preedit row, which is what users expect.
-    let Ok((focused_pane_node, ui_xform, view)) = anchors.get(entity) else {
-        return;
-    };
-    let scale = window.resolution.scale_factor().max(f32::EPSILON);
-    let (cursor_col, cursor_row) = view.cursor_viewport_cell_or_top();
-    let host_origin_phys = node_top_left_phys(focused_pane_node, ui_xform);
-    let cell_origin_phys = host_origin_phys
-        + Vec2::new(f32::from(cursor_col), f32::from(cursor_row) + 1.0) * metrics.metrics.cell_size;
-    let pos_logical = cell_origin_phys / scale;
-    if window.ime_position != pos_logical {
-        window.ime_position = pos_logical;
-    }
+fn sync_ime_candidate_area(area: Res<ImeCandidateArea>) {
+    todo!("IMEの候補ウィンドウをWINIT側と同期する");
 }
 
 /// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
