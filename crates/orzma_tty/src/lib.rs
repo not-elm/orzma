@@ -481,8 +481,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// one write. `Ok` means the bytes were queued, not that they reached
     /// the PTY.
     ///
-    /// While vi mode is on, the wheel is routed as though no mouse tracking
-    /// level were in force.
+    /// While vi mode is on, the wheel never becomes cursor keys, and it
+    /// sends reports only over an alternate-screen application that tracks
+    /// the mouse while no selection press is held, clearing the selection
+    /// first.
     ///
     /// # Errors
     ///
@@ -490,7 +492,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// the frame's bytes (nothing is queued), `PtyWrite` once after the
     /// writer thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_wheel(&mut self, input: WheelInput, cfg: &WheelConfig) -> OrzmaTtyResult {
-        let modes = self.routing_modes();
+        let modes = self.wheel_routing_modes();
         let mut bytes = Vec::new();
         for decision in [
             WheelDecision::route(
@@ -506,6 +508,9 @@ impl<V: Vt> OrzmaTty<V> {
         }
         if bytes.is_empty() {
             return Ok(());
+        }
+        if self.scrolls_app() {
+            self.clear_selection();
         }
         self.pty.enqueue_write(bytes)
     }
@@ -764,12 +769,26 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
-    /// The VT's modes as the mouse routers see them: while vi mode is on,
-    /// no mouse tracking level is in force.
+    /// The VT's modes as pointer routing sees them: while vi mode is on, no
+    /// mouse tracking level is in force.
     fn routing_modes(&self) -> VtModes {
         let mut modes = self.vt.modes();
         if self.vt.is_vi_mode() {
             modes.mouse_tracking = MouseTracking::Off;
+        }
+        modes
+    }
+
+    /// The VT's modes as wheel routing sees them: while vi mode is on,
+    /// alternate scroll is never in effect, and no mouse tracking level is
+    /// in force unless the wheel goes to the application.
+    fn wheel_routing_modes(&self) -> VtModes {
+        let mut modes = self.vt.modes();
+        if self.vt.is_vi_mode() {
+            modes.alternate_scroll = AlternateScroll::Disabled;
+            if !self.scrolls_app() {
+                modes.mouse_tracking = MouseTracking::Off;
+            }
         }
         modes
     }

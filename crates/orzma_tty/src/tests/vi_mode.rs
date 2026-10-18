@@ -589,3 +589,162 @@ fn cursor_up_on_the_top_row_stays_local_while_a_selection_press_is_held() {
     term.settle_writes();
     assert_eq!(sink.contents(), b"");
 }
+
+/// Asserts that the wheel in vi mode over an alternate-screen application
+/// that tracks the mouse sends its reports at the pointer, on both axes.
+///
+/// Case: the user scrolls Claude Code's fullscreen chat with the mouse
+/// wheel while in vi mode, then tilts the wheel sideways.
+#[test]
+fn the_wheel_in_vi_mode_over_a_tracking_app_sends_reports_at_the_pointer() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.send_wheel(wheel(1, 0), &WheelConfig::default())
+        .expect("send_wheel");
+    term.send_wheel(wheel(0, 1), &WheelConfig::default())
+        .expect("send_wheel");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<67;6;4M".to_vec());
+}
+
+/// Asserts that the wheel in vi mode on the alternate screen never becomes
+/// cursor keys, whatever the tracking, alternate-scroll and Shift state,
+/// and reaches the application as reports only while it tracks the mouse
+/// and Shift is not held.
+///
+/// Case: in vi mode the user spins the wheel, with and without Shift, over
+/// Claude Code's fullscreen chat and over less.
+#[test]
+fn the_wheel_in_vi_mode_on_the_alternate_screen_never_sends_cursor_keys() {
+    for tracking in [&b""[..], b"\x1b[?1002h\x1b[?1006h"] {
+        for alternate_scroll in [&b"\x1b[?1007h"[..], b"\x1b[?1007l"] {
+            for shift in [false, true] {
+                for (up, button) in [(1, 64), (-1, 65)] {
+                    let (mut term, sink) = real_term(12);
+                    term.feed_bytes(b"\x1b[?1049h\x1b[?1h")
+                        .expect("the VT interprets the bytes");
+                    term.feed_bytes(tracking)
+                        .expect("the VT interprets the bytes");
+                    term.feed_bytes(alternate_scroll)
+                        .expect("the VT interprets the bytes");
+                    term.switch_vi_mode(ViModeSwitch::Enter);
+                    let input = WheelInput {
+                        mods: WheelModifiers { shift, fine: false },
+                        ..wheel(up, 0)
+                    };
+                    term.send_wheel(input, &WheelConfig::default())
+                        .expect("send_wheel");
+                    term.settle_writes();
+                    let expected = if !tracking.is_empty() && !shift {
+                        format!("\x1b[<{button};6;4M").into_bytes()
+                    } else {
+                        Vec::new()
+                    };
+                    assert_eq!(
+                        sink.contents(),
+                        expected,
+                        "tracking {}, {:?}, shift {shift}, up {up}",
+                        !tracking.is_empty(),
+                        String::from_utf8_lossy(alternate_scroll)
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Asserts that the wheel in vi mode keeps the report cap, the fine
+/// modifier and the report modifier bits of the wheel outside vi mode, at
+/// every mouse tracking level.
+///
+/// Case: in vi mode the user spins the wheel hard, then holds Option and
+/// spins it once, over programs that track clicks, drags, or every motion.
+#[test]
+fn the_wheel_in_vi_mode_keeps_the_outside_report_rules_at_every_tracking_level() {
+    for tracking in [&b"\x1b[?1000h"[..], b"\x1b[?1002h", b"\x1b[?1003h"] {
+        let (mut term, sink) = real_term(12);
+        term.feed_bytes(b"\x1b[?1049h\x1b[?1006h")
+            .expect("the VT interprets the bytes");
+        term.feed_bytes(tracking)
+            .expect("the VT interprets the bytes");
+        term.switch_vi_mode(ViModeSwitch::Enter);
+        let capped = WheelConfig {
+            max_protocol_events_per_frame: 2,
+            ..WheelConfig::default()
+        };
+        term.send_wheel(wheel(5, 0), &capped).expect("send_wheel");
+        let fine_with_alt = WheelInput {
+            mods: WheelModifiers {
+                shift: false,
+                fine: true,
+            },
+            report_mods: ProtocolModifiers {
+                alt: true,
+                ..ProtocolModifiers::default()
+            },
+            ..wheel(1, 0)
+        };
+        term.send_wheel(fine_with_alt, &WheelConfig::default())
+            .expect("send_wheel");
+        term.settle_writes();
+        assert_eq!(
+            sink.contents(),
+            b"\x1b[<64;6;4M\x1b[<64;6;4M\x1b[<72;6;4M".to_vec(),
+            "{}",
+            String::from_utf8_lossy(tracking)
+        );
+    }
+}
+
+/// Asserts that a wheel frame that sends reports in vi mode clears the
+/// selection and leaves vi mode on.
+///
+/// Case: the user has selected a word in vi mode over Claude Code's
+/// fullscreen chat and spins the wheel.
+#[test]
+fn a_forwarded_wheel_clears_the_selection() {
+    let (mut term, _sink) = app_scroll_term(12);
+    term.toggle_vi_selection(SelectionKind::Simple);
+    term.send_wheel(wheel(1, 0), &WheelConfig::default())
+        .expect("send_wheel");
+    assert_eq!(term.vt.selection_text(), None);
+    assert!(term.vt.is_vi_mode());
+}
+
+/// Asserts that a wheel frame with no cell under the pointer sends nothing
+/// and keeps the selection.
+///
+/// Case: the user spins the wheel over the edge of the pane, where no cell
+/// is resolved, while a vi selection is open over Claude Code's chat.
+#[test]
+fn a_wheel_without_a_cell_keeps_the_selection() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.toggle_vi_selection(SelectionKind::Simple);
+    let input = WheelInput {
+        cell: None,
+        ..wheel(1, 0)
+    };
+    term.send_wheel(input, &WheelConfig::default())
+        .expect("send_wheel");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+    assert!(term.vt.selection_text().is_some());
+}
+
+/// Asserts that the wheel does nothing on the alternate screen while a
+/// mouse selection press is held, before and after the pointer moves.
+///
+/// Case: the user drags a selection over Claude Code's fullscreen chat in
+/// vi mode and spins the wheel mid-drag.
+#[test]
+fn the_wheel_during_a_held_selection_press_does_nothing_on_the_alternate_screen() {
+    let (mut term, sink) = app_scroll_term(12);
+    term.send_pointer(press(PointerButton::Left, 1, 1))
+        .expect("send_pointer");
+    term.send_wheel(wheel(1, 0), &WheelConfig::default())
+        .expect("send_wheel");
+    term.send_pointer(motion(4, 1)).expect("send_pointer");
+    term.send_wheel(wheel(1, 0), &WheelConfig::default())
+        .expect("send_wheel");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"");
+}
