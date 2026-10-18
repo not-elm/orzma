@@ -190,22 +190,6 @@ mod tests {
         assert!(matches!(target, ImeTarget::Disabled));
     }
 
-    /// Asserts that two keyboard-focused terminals degrade to no focused
-    /// surface, which disables the IME.
-    ///
-    /// Case: a focus handoff between two panes momentarily leaves both
-    /// marked as keyboard-focused.
-    #[test]
-    fn two_keyboard_focused_surfaces_disable_the_ime() {
-        let mut app = policy_app();
-        spawn_focused_surface(&mut app);
-        spawn_focused_surface(&mut app);
-
-        let target = decide_in(&mut app, 1.0);
-
-        assert!(matches!(target, ImeTarget::Disabled));
-    }
-
     /// Asserts that a keyboard-focused terminal in vi mode disables the IME.
     ///
     /// Case: the user enters vi mode in the focused pane to select

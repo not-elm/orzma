@@ -5,7 +5,7 @@
 `src/input/ime.rs` の `ImePolicyParams::decide(&self, scale_factor: f32) -> ImeTarget` が負うテストケース。`docs/references/` のマニュアルに `decide` を規定する記述はなかったため、すべてのケースはリポジトリ内の doc comment(種別2)を根拠にした `TC-A` である。仕様(マニュアル)由来のケースは0件。
 
 - 引用の検証: **14/14**(リポジトリの doc comment 12件を `grep -F` で、付録で参照する `xlib.pdf` の2件を `verify` で確認)
-- **このリストは作者が Markdown を読んで承認した(2026-10-18)。** 承認前の要確認のケースは9件(`TC-A` はすべて要確認)、API 改定の提案は0件。TC-A2 は作者の判断で削除した(付録「削除したケース」)。ほかの番号は変えていない。
+- **このリストは作者が Markdown を読んで承認した(2026-10-18)。** 一度承認した後に TC-A5 を削除し、同じ日に改めて承認した。承認前の要確認のケースは8件(`TC-A` はすべて要確認)、API 改定の提案は0件。TC-A2 と TC-A5 は作者の判断で削除した(付録「削除したケース」)。ほかの番号は変えていない。
 - このリストは仕様由来ではなく、自分で検証しただけのものである。信用する前に、引用を1〜2件抜き取って確認すること。
 - ケースは High → Medium の順に並べてある。High だけ読めば、doc comment が明言している振る舞いはすべてそろう。
 
@@ -16,7 +16,6 @@
 | TC-A1 | `a_tab_rename_in_progress_yields_the_rename_target` | PR, RA | High | 要確認 |
 | TC-A3 | `an_inline_webview_anchors_at_its_overlay_rect_origin` | AI, WP, OV, FW, TL | High | 要確認 |
 | TC-A4 | `no_focused_surface_and_no_webview_disables_the_ime` | PE, RS | High | 要確認 |
-| TC-A5 | `two_keyboard_focused_surfaces_disable_the_ime` | RS, PE | High | 要確認 |
 | TC-A6 | `a_focused_surface_in_vi_mode_disables_the_ime` | PE, VM | High | 要確認 |
 | TC-A7 | `a_focused_surface_anchors_the_candidate_area_at_its_cursor_cell` | PE, AC, TL, CM | High | 要確認 |
 | TC-A8 | `a_tab_rename_asked_to_end_this_frame_still_yields_the_rename_target` | RA, PR | Medium | 要確認 |
@@ -192,34 +191,6 @@ PE の「有効」の条件(ウェブビューのフォーカス、または vi 
 #[test]
 fn no_focused_surface_and_no_webview_disables_the_ime() {
     let mut app = policy_app();
-
-    let target = decide_in(&mut app, 1.0);
-
-    assert!(matches!(target, ImeTarget::Disabled));
-}
-```
-
-## TC-A5 — フォーカスのあるサーフェスが2つあれば Disabled
-
-| | |
-| - | - |
-| Setup | `policy_app()`; `spawn_focused_surface` を2回(どちらも vi モードなし); ウェブビューもタブ名変更もなし |
-| Act | `params.decide(1.0)` |
-| Expect | `ImeTarget::Disabled` を返す **[RS][PE]** |
-
-RS によれば、フォーカスが2つあるときは「サーフェスなし」として扱う。最初に見つかったサーフェスを選んで `Terminal` を返す実装を捕まえる。
-
-```rust
-/// Asserts that two keyboard-focused terminals degrade to no focused
-/// surface, which disables the IME.
-///
-/// Case: a focus handoff between two panes momentarily leaves both marked
-/// as keyboard-focused.
-#[test]
-fn two_keyboard_focused_surfaces_disable_the_ime() {
-    let mut app = policy_app();
-    spawn_focused_surface(&mut app);
-    spawn_focused_surface(&mut app);
 
     let target = decide_in(&mut app, 1.0);
 
@@ -449,3 +420,4 @@ fn a_focused_inline_webview_keeps_the_ime_enabled_over_a_vi_mode_surface() {
 ### 削除したケース
 
 - **TC-A2**(`a_focused_webview_without_a_focused_surface_keeps_the_ime_enabled`):親を持たない `Webview` にフォーカスがある状態を前提にしていたが、作者の指摘を受けてコードを確かめたところ、その状態は起きない。`Webview` を作るのは `spawn_webview` だけで、必ず `ChildOf(pane)` を付け、ペインが消えていれば何も作らない(`crates/bevy_orzma_webview/src/webview/mount.rs:319-322, 342-356`)。また、ペインとともに `Webview` が消えると、`release_removed_focus` が `FocusedWebview` を外す(`focus.rs:123-129`)。作者の判断で削除した。
+- **TC-A5**(`two_keyboard_focused_surfaces_disable_the_ime`):`KeyboardFocused` を持つサーフェスが2つある状態を前提にしていたが、作者の指摘を受けてコードを確かめたところ、その状態は起きない。本番コードで `KeyboardFocused` を付けるのは `on_active_pane_changed` だけで(`src/input/focus.rs:204`)、付ける前に同じ observer の中でほかのすべてから外している(`focus.rs:191-195`)。`KeyboardFocused` の doc comment も「exactly one focused」の不変条件を述べている(`focus.rs:33`)。承認後に作者の判断で削除し、`src/input/ime/ime_target.rs` からもテストを外した。
