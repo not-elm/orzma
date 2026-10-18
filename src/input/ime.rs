@@ -1,6 +1,8 @@
 //! IME composition state for the terminal overlay: drains IME events into
 //! `ImeState` and derives window IME policy from keyboard focus.
 
+mod ime_target;
+
 use crate::action::vi::mode::ViModeState;
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
@@ -17,7 +19,7 @@ use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::ecs::schedule::{IntoScheduleConfigs, ScheduleLabel};
-use bevy::ecs::system::{Commands, NonSendMarker, Query, Res, ResMut, SystemParam};
+use bevy::ecs::system::{Commands, NonSendMarker, Query, Res, ResMut};
 use bevy::math::{Rect, Vec2};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
@@ -27,6 +29,7 @@ use bevy_orzma_tty_renderer::prelude::{
 };
 use bevy_orzma_webview::{Webview, focused_webview_of};
 use bevy_orzmux::prelude::RequestActiveKeyInput;
+use ime_target::{ImePolicyParams, ImeTarget};
 use orzma_tty::prelude::{KeyText, TerminalKey, TerminalModifiers};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
@@ -148,41 +151,6 @@ struct ImeCandidateArea(Option<Rect>);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, ScheduleLabel)]
 struct ImeCandidateSync;
-
-#[derive(SystemParam)]
-struct ImePolicyParams<'w, 's> {
-    rename: Option<Res<'w, TabRename>>,
-    focused: Query<'w, 's, Entity, With<KeyboardFocused>>,
-    vi_modes: Query<'w, 's, (), With<ViModeState>>,
-    anchors: Query<
-        'w,
-        's,
-        (
-            &'static ComputedNode,
-            &'static UiGlobalTransform,
-            &'static TerminalView,
-        ),
-    >,
-    metrics: Res<'w, TerminalCellMetricsResource>,
-    focused_webview: Res<'w, FocusedWebview>,
-    webview_anchors: Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform)>,
-    webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
-    webview_slots: Query<'w, 's, &'static Webview>,
-    overlays: Query<'w, 's, &'static TerminalOverlays>,
-}
-
-impl ImePolicyParams<'_, '_> {
-    fn decide(&self, scale_factor: f32) -> ImeTarget {
-        todo!("現在の入力状態などからImeTargetへの解決")
-    }
-}
-
-enum ImeTarget {
-    Rename,                 // ime_enabled = true。ime_position は Bevy の入力欄に任せる
-    Webview(Option<Vec2>),  // ime_enabled = true。位置が取れれば ime_position に書く
-    Terminal(Option<Rect>), // ime_enabled = true。矩形が取れれば起点を ime_position、area は Some
-    Disabled,               // ime_enabled = false(vi モード、フォーカスなし)
-}
 
 /// Pure-function state machine: applies one `Ime` event to `state` and
 /// returns the text that should be committed to the active pane (only set on
