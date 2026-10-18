@@ -7,8 +7,9 @@ use crate::{
     coalescer::Coalescer,
     error::{OrzmaTtyError, OrzmaTtyResult},
     input::{
-        MouseReport, MouseReportKind, PointerAction, PointerInput, PointerKind, PointerState,
-        PtyInput, TerminalKey, TerminalModifiers, WheelConfig, WheelDecision, WheelInput,
+        CellCoord, MouseButton, MouseReport, MouseReportKind, PointerAction, PointerInput,
+        PointerKind, PointerState, ProtocolModifiers, PtyInput, TerminalKey, TerminalModifiers,
+        WheelConfig, WheelDecision, WheelInput, WheelModifiers, WheelSteps,
     },
     pty::{ChunkPoll, ExitPoll, Pty},
     signal::TtySignal,
@@ -156,6 +157,9 @@ pub struct OrzmaTty<V: Vt> {
     /// marks an update that timed out and is not reopened until the VT
     /// reports it closed.
     sync_deadline: Option<Instant>,
+    /// The earliest time a vi scroll or an edge motion may next send the
+    /// application wheel reports; `None` while nothing holds them back.
+    key_forward_deadline: Option<Instant>,
 }
 
 impl<V: Vt> OrzmaTty<V> {
@@ -169,6 +173,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// The shortest time between a frame and the frame taken when a
     /// synchronized update closes.
     pub const SYNC_EMIT_INTERVAL: Duration = Duration::from_millis(12);
+
+    /// The shortest time between two vi scrolls or edge motions that reach
+    /// the application as wheel reports; a sooner one is dropped.
+    pub const KEY_FORWARD_INTERVAL: Duration = Duration::from_millis(100);
 
     /// Spawns `options.shell` under a new PTY and sizes the injected VT
     /// to the spawn geometry.
@@ -303,6 +311,34 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
+    /// Scrolls the viewport, or sends the scroll to the application as
+    /// wheel reports.
+    ///
+    /// The reports go out for a line, half-page or page scroll while vi mode
+    /// is on over an alternate-screen application that tracks the mouse and
+    /// no selection press is held; the selection is cleared first, even when
+    /// the write is then refused. When the reports of a vi scroll or an edge
+    /// motion were queued less than [`Self::KEY_FORWARD_INTERVAL`] earlier,
+    /// this scroll is dropped instead, leaving the viewport and the selection
+    /// as they are. `Ok` means the reports were queued or dropped, not that
+    /// they reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the reports (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
+    pub fn vi_scroll(&mut self, scroll: Scroll) -> OrzmaTtyResult {
+        if self.scrolls_app() {
+            let decision = WheelDecision::for_vi_scroll(scroll, self.vt.grid_size().rows);
+            if decision != WheelDecision::Noop {
+                return self.forward_wheel_to_app(decision, Instant::now());
+            }
+        }
+        self.scroll(scroll);
+        Ok(())
+    }
+
     /// Anchors a selection, arming the coalescer only when the VT's
     /// state changed.
     pub fn start_selection(&mut self, cell: GridPoint, side: CellSide, kind: SelectionKind) {
@@ -335,12 +371,31 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
-    /// Moves the vi cursor, arming the coalescer only when something
-    /// changed.
-    pub fn vi_motion(&mut self, motion: ViMotion) {
+    /// Moves the vi cursor, or sends the application one wheel report for
+    /// an `Up` on the top row or a `Down` on the bottom row.
+    ///
+    /// The report goes out while vi mode is on over an alternate-screen
+    /// application that tracks the mouse and no selection press is held;
+    /// the selection is cleared first, even when the write is then refused.
+    /// When the reports of a vi scroll or an edge motion were queued less
+    /// than [`Self::KEY_FORWARD_INTERVAL`] earlier, this motion is dropped
+    /// instead, leaving the vi cursor and the selection as they are. `Ok`
+    /// means the report was queued or dropped, not that it reached the PTY.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the report (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
+    pub fn vi_motion(&mut self, motion: ViMotion) -> OrzmaTtyResult {
+        if let Some(button) = self.edge_wheel_button(motion) {
+            return self
+                .forward_wheel_to_app(WheelDecision::Report { button, count: 1 }, Instant::now());
+        }
         if self.vt.vi_motion(motion) {
             self.coalescer.arm_or_extend(Instant::now());
         }
+        Ok(())
     }
 
     /// Toggles a vi-mode selection, arming the coalescer only when the
@@ -440,8 +495,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// one write. `Ok` means the bytes were queued, not that they reached
     /// the PTY.
     ///
-    /// While vi mode is on, the wheel is routed as though no mouse tracking
-    /// level were in force.
+    /// While vi mode is on, the wheel never becomes cursor keys, and it
+    /// sends reports only over an alternate-screen application that tracks
+    /// the mouse while no selection press is held, clearing the selection
+    /// first.
     ///
     /// # Errors
     ///
@@ -449,7 +506,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// the frame's bytes (nothing is queued), `PtyWrite` once after the
     /// writer thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_wheel(&mut self, input: WheelInput, cfg: &WheelConfig) -> OrzmaTtyResult {
-        let modes = self.routing_modes();
+        let to_app = self.scrolls_app();
+        let modes = self.wheel_routing_modes(to_app);
         let mut bytes = Vec::new();
         for decision in [
             WheelDecision::route(
@@ -465,6 +523,9 @@ impl<V: Vt> OrzmaTty<V> {
         }
         if bytes.is_empty() {
             return Ok(());
+        }
+        if to_app {
+            self.clear_selection();
         }
         self.pty.enqueue_write(bytes)
     }
@@ -692,6 +753,7 @@ impl<V: Vt> OrzmaTty<V> {
             focused: false,
             pointer: PointerState::default(),
             sync_deadline: None,
+            key_forward_deadline: None,
         }
     }
 
@@ -723,14 +785,106 @@ impl<V: Vt> OrzmaTty<V> {
         }
     }
 
-    /// The VT's modes as the mouse routers see them: while vi mode is on,
-    /// no mouse tracking level is in force.
+    /// The VT's modes as pointer routing sees them: while vi mode is on, no
+    /// mouse tracking level is in force.
     fn routing_modes(&self) -> VtModes {
         let mut modes = self.vt.modes();
         if self.vt.is_vi_mode() {
             modes.mouse_tracking = MouseTracking::Off;
         }
         modes
+    }
+
+    /// The VT's modes as wheel routing sees them: while vi mode is on,
+    /// alternate scroll is never in effect, and no mouse tracking level is
+    /// in force unless `to_app`, the [`Self::scrolls_app`] verdict, holds.
+    fn wheel_routing_modes(&self, to_app: bool) -> VtModes {
+        let mut modes = self.vt.modes();
+        if self.vt.is_vi_mode() {
+            modes.alternate_scroll = AlternateScroll::Disabled;
+            if !to_app {
+                modes.mouse_tracking = MouseTracking::Off;
+            }
+        }
+        modes
+    }
+
+    /// Whether vi-mode scrolls and the wheel go to the application as wheel
+    /// reports: vi mode is on, the alternate screen is shown, a mouse
+    /// tracking level is in force, and no selection press is held.
+    fn scrolls_app(&self) -> bool {
+        let modes = self.vt.modes();
+        self.vt.is_vi_mode()
+            && matches!(modes.active_screen, ScreenKind::Alternate)
+            && modes.mouse_reporting_active()
+            && !self.pointer.holds_local_press()
+    }
+
+    /// The wheel button that scrolls the application in place of `motion`:
+    /// wheel-up for an `Up` on the viewport's top row and wheel-down for a
+    /// `Down` on its bottom row, while the wheel goes to the application;
+    /// `None` otherwise.
+    fn edge_wheel_button(&self, motion: ViMotion) -> Option<MouseButton> {
+        if !self.scrolls_app() {
+            return None;
+        }
+        let row = self.vi_cursor_cell()?.row;
+        match motion {
+            ViMotion::Up if row == 1 => Some(MouseButton::WheelUp),
+            ViMotion::Down if row == u32::from(self.vt.grid_size().rows) => {
+                Some(MouseButton::WheelDown)
+            }
+            _ => None,
+        }
+    }
+
+    /// The 1-based viewport cell under the vi cursor; `None` outside vi
+    /// mode or when the vi cursor lies outside the viewport.
+    fn vi_cursor_cell(&self) -> Option<CellCoord> {
+        let cursor = self.vt.vi_cursor()?;
+        CellCoord::from_grid_point(
+            cursor.point,
+            self.vt.display_offset(),
+            self.vt.grid_size().rows,
+        )
+    }
+
+    /// Clears the selection, queues `decision`'s wheel reports at the vi
+    /// cursor's cell, and holds the next forward back until
+    /// [`Self::KEY_FORWARD_INTERVAL`] after `now`.
+    ///
+    /// Does nothing when there is nothing to send or `now` is still before
+    /// the deadline an earlier forward set; a refused write sets no deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PtyWriteQueueFull` when the PTY input queue has no room for
+    /// the reports (nothing is queued), `PtyWrite` once after the writer
+    /// thread's write failed, and `PtyWriterClosed` after that.
+    fn forward_wheel_to_app(&mut self, decision: WheelDecision, now: Instant) -> OrzmaTtyResult {
+        if self
+            .key_forward_deadline
+            .is_some_and(|deadline| now < deadline)
+        {
+            return Ok(());
+        }
+        let modes = self.vt.modes();
+        let cell = self.vi_cursor_cell();
+        let input = WheelInput {
+            steps: WheelSteps::default(),
+            mods: WheelModifiers::default(),
+            cell,
+            report_mods: ProtocolModifiers::default(),
+        };
+        let mut bytes = Vec::new();
+        self.stage_wheel_decision(&mut bytes, decision, input, modes);
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.clear_selection();
+        self.pty.enqueue_write(bytes)?;
+        self.key_forward_deadline = now.checked_add(Self::KEY_FORWARD_INTERVAL);
+        Ok(())
     }
 
     /// Moves a held selection drag's moving end onto the grid point its

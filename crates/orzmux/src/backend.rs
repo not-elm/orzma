@@ -681,15 +681,21 @@ impl Backend {
         Ok(())
     }
 
-    /// Scrolls `pane`'s viewport.
+    /// Applies a vi-mode scroll to `pane`: in vi mode over an
+    /// alternate-screen application that tracks the mouse, while no mouse
+    /// selection press is held, a line, half-page or page scroll goes to
+    /// the application as wheel reports; any other scroll moves the pane's
+    /// viewport. A scroll bound for the application is dropped when the
+    /// pane sent it the reports of a vi scroll or an edge motion less than
+    /// [`OrzmaTty::KEY_FORWARD_INTERVAL`] earlier.
     ///
     /// # Errors
     ///
     /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`.
+    /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
+    /// refuses the reports.
     pub fn scroll(&mut self, pane: PaneId, scroll: Scroll) -> OrzmuxResult {
-        self.pane_mut(pane)?.tty.scroll(scroll);
-        Ok(())
+        self.write_pty(pane, |tty| tty.vi_scroll(scroll))
     }
 
     /// Drops `pane`'s selection.
@@ -714,15 +720,21 @@ impl Backend {
         Ok(())
     }
 
-    /// Moves `pane`'s vi cursor by `motion`.
+    /// Moves `pane`'s vi cursor by `motion`. In vi mode over an
+    /// alternate-screen application that tracks the mouse, while no mouse
+    /// selection press is held, an `Up` on the top row or a `Down` on the
+    /// bottom row sends the application one wheel report instead. Such a
+    /// motion is dropped when the pane sent the application the reports of
+    /// a vi scroll or an edge motion less than
+    /// [`OrzmaTty::KEY_FORWARD_INTERVAL`] earlier.
     ///
     /// # Errors
     ///
     /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`.
+    /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
+    /// refuses the report.
     pub fn vi_motion(&mut self, pane: PaneId, motion: ViMotion) -> OrzmuxResult {
-        self.pane_mut(pane)?.tty.vi_motion(motion);
-        Ok(())
+        self.write_pty(pane, |tty| tty.vi_motion(motion))
     }
 
     /// Toggles a vi-mode selection of `kind` at `pane`'s vi cursor.

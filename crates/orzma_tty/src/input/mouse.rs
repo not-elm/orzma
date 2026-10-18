@@ -34,6 +34,21 @@ impl CellCoord {
             column: GridColumn(column),
         }
     }
+
+    /// The 1-based viewport cell that shows the active-grid `point` while
+    /// the viewport sits `offset` rows above the live tail of a screen
+    /// `rows` tall; `None` when the point lies outside the viewport.
+    pub(crate) fn from_grid_point(
+        point: GridPoint,
+        offset: DisplayOffset,
+        rows: u16,
+    ) -> Option<Self> {
+        let line = point.line.to_viewport(offset, rows)?;
+        Some(Self {
+            col: u32::from(point.column.0) + 1,
+            row: u32::from(line.0) + 1,
+        })
+    }
 }
 
 /// Mouse-protocol modifier set, mapped onto the report's `cb` bits

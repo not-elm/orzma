@@ -73,7 +73,10 @@ macOS `Cmd+C`, always copies.
 ## Vi mode
 
 These keys work only in [vi mode](vi-mode.md). They are set in the `[vi-mode]`
-table (see [Vi mode keys](key-bindings.md#vi-mode-keys-vi-mode)).
+table (see [Vi mode keys](key-bindings.md#vi-mode-keys-vi-mode)). Over a
+full-screen program that tracks the mouse, the scroll actions, and
+`cursor-up` / `cursor-down` at the edge of the screen, scroll the program
+instead (see [Vi mode](vi-mode.md)).
 
 <!-- ANCHOR: vi-mode-actions -->
 

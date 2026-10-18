@@ -171,6 +171,13 @@ impl PointerState {
             .map(|drag| (drag.last_cell, drag.last_side))
     }
 
+    /// Whether a left-button selection gesture is held, from its press,
+    /// including before it leaves the pressed cell, until its release or a
+    /// cancel.
+    pub fn holds_local_press(&self) -> bool {
+        self.local_drag.is_some()
+    }
+
     fn press(
         &mut self,
         input: PointerInput,

@@ -119,7 +119,13 @@ pub enum OrzmuxCommand {
         /// The pointer event.
         input: PointerInput,
     },
-    /// Scroll a pane's viewport.
+    /// Applies a vi-mode scroll to a pane: moves its viewport, or, in vi
+    /// mode over an alternate-screen application that tracks the mouse
+    /// while no mouse selection press is held, sends a line, half-page or
+    /// page scroll to the application as wheel reports. Such a scroll is
+    /// dropped when the pane sent the application the reports of a vi
+    /// scroll or an edge motion less than
+    /// [`OrzmaTty::KEY_FORWARD_INTERVAL`](orzma_tty::OrzmaTty::KEY_FORWARD_INTERVAL) earlier.
     Scroll {
         /// The pane to scroll.
         pane: PaneId,
@@ -143,7 +149,13 @@ pub enum OrzmuxCommand {
         /// Which direction to switch.
         switch: ViModeSwitch,
     },
-    /// Move a pane's vi cursor.
+    /// Moves a pane's vi cursor, or, in vi mode over an alternate-screen
+    /// application that tracks the mouse while no mouse selection press is
+    /// held, sends the application one wheel report for an `Up` on the top
+    /// row or a `Down` on the bottom row instead. Such a motion is dropped
+    /// when the pane sent the application the reports of a vi scroll or an
+    /// edge motion less than
+    /// [`OrzmaTty::KEY_FORWARD_INTERVAL`](orzma_tty::OrzmaTty::KEY_FORWARD_INTERVAL) earlier.
     ViMotion {
         /// The pane whose vi cursor moves.
         pane: PaneId,
@@ -1721,6 +1733,62 @@ mod tests {
                 text: Some("hello".to_string())
             }]
         );
+    }
+
+    /// Asserts that a vi-mode scroll command over an alternate-screen
+    /// application that tracks the mouse reaches the pane's PTY as wheel
+    /// reports at the vi cursor.
+    ///
+    /// Case: the user enters vi mode over Claude Code's fullscreen chat in
+    /// a 24-row pane and presses `Ctrl+U`.
+    #[test]
+    fn a_vi_scroll_over_a_mouse_tracking_app_reaches_the_pane_as_wheel_reports() {
+        let mut h = Harness::new();
+        let (root, pane) = h.open_root();
+        pane.print(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[3;2H");
+        h.pump_pane(root);
+        h.drain();
+        h.send(OrzmuxCommand::ViMode {
+            pane: root,
+            switch: ViModeSwitch::Enter,
+        });
+        h.send(OrzmuxCommand::Scroll {
+            pane: root,
+            scroll: Scroll::HalfPageUp,
+        });
+        h.settle_writes();
+        assert_eq!(pane.received(), b"\x1b[<64;2;3M".repeat(4));
+    }
+
+    /// Asserts that a vi-mode scroll and an edge motion the pane's PTY
+    /// refuses come back as PTY write errors for that pane.
+    ///
+    /// Case: Claude Code's PTY fails the write of a paste, and the user then
+    /// presses `Ctrl+Y` and `k` at the top of its chat in vi mode.
+    #[test]
+    fn refused_vi_forwards_are_pty_write_errors() {
+        let mut h = Harness::new();
+        h.fail_next_writes();
+        let (root, pane) = h.open_root();
+        pane.print(b"\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[1;1H");
+        h.pump_pane(root);
+        h.send(OrzmuxCommand::ViMode {
+            pane: root,
+            switch: ViModeSwitch::Enter,
+        });
+        h.event_loop_mut()
+            .backend_mut()
+            .paste(PaneTarget::Id(root), "hello".to_string())
+            .expect("the paste is queued before the writer fails");
+        h.settle_writes();
+        assert!(matches!(
+            h.event_loop_mut().backend_mut().scroll(root, Scroll::Delta(1)),
+            Err(OrzmuxError::PtyWrite { pane: refused, .. }) if refused == root
+        ));
+        assert!(matches!(
+            h.event_loop_mut().backend_mut().vi_motion(root, ViMotion::Up),
+            Err(OrzmuxError::PtyWrite { pane: refused, .. }) if refused == root
+        ));
     }
 
     /// Asserts that a split with no explicit directory starts in the
