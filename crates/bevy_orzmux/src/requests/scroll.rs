@@ -1,5 +1,5 @@
-//! The viewport movement the host UI asks a terminal entity to perform,
-//! sent as `OrzmuxCommand::Scroll`.
+//! The vi-mode scroll the host UI asks a terminal entity to apply, sent as
+//! `OrzmuxCommand::Scroll`.
 
 use crate::OrzmuxConnection;
 use crate::requests::PaneSender;
@@ -7,8 +7,10 @@ use bevy::prelude::*;
 use orzma_vt::prelude::Scroll;
 use orzmux::prelude::OrzmuxCommand;
 
-/// Fired by the host UI to move a specific terminal entity's viewport.
-/// The request carries exactly the motion the backend applies.
+/// Fired by the host UI to apply a vi-mode scroll to a specific terminal
+/// entity: its viewport moves, or, in vi mode over an alternate-screen
+/// application that tracks the mouse, a line, half-page or page scroll
+/// reaches the application as wheel reports.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyScroll {
     #[event_target]
@@ -42,8 +44,8 @@ mod tests {
     /// `Scroll` command for that pane id, and one for a non-pane entity
     /// sends nothing.
     ///
-    /// Case: the user turns the wheel over a pane, then over the
-    /// separator.
+    /// Case: the user presses `Ctrl+U` in vi mode over a pane, and a scroll
+    /// request then arrives for the separator entity.
     #[test]
     fn scroll_requests_become_scroll_commands_for_the_pane() {
         let (mut app, commands) = app_with_connection(ScrollPlugin);

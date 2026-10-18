@@ -681,15 +681,18 @@ impl Backend {
         Ok(())
     }
 
-    /// Scrolls `pane`'s viewport.
+    /// Applies a vi-mode scroll to `pane`: in vi mode over an
+    /// alternate-screen application that tracks the mouse, a line,
+    /// half-page or page scroll goes to the application as wheel reports;
+    /// any other scroll moves the pane's viewport.
     ///
     /// # Errors
     ///
     /// Returns [`OrzmuxError::UnresolvedTarget`] when no live pane
-    /// carries `pane`.
+    /// carries `pane`, and [`OrzmuxError::PtyWrite`] when its PTY
+    /// refuses the reports.
     pub fn scroll(&mut self, pane: PaneId, scroll: Scroll) -> OrzmuxResult {
-        self.pane_mut(pane)?.tty.scroll(scroll);
-        Ok(())
+        self.write_pty(pane, |tty| tty.vi_scroll(scroll))
     }
 
     /// Drops `pane`'s selection.
