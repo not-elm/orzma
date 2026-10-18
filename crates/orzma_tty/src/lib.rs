@@ -492,7 +492,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// the frame's bytes (nothing is queued), `PtyWrite` once after the
     /// writer thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_wheel(&mut self, input: WheelInput, cfg: &WheelConfig) -> OrzmaTtyResult {
-        let modes = self.wheel_routing_modes();
+        let to_app = self.scrolls_app();
+        let modes = self.wheel_routing_modes(to_app);
         let mut bytes = Vec::new();
         for decision in [
             WheelDecision::route(
@@ -509,7 +510,7 @@ impl<V: Vt> OrzmaTty<V> {
         if bytes.is_empty() {
             return Ok(());
         }
-        if self.scrolls_app() {
+        if to_app {
             self.clear_selection();
         }
         self.pty.enqueue_write(bytes)
@@ -781,12 +782,12 @@ impl<V: Vt> OrzmaTty<V> {
 
     /// The VT's modes as wheel routing sees them: while vi mode is on,
     /// alternate scroll is never in effect, and no mouse tracking level is
-    /// in force unless the wheel goes to the application.
-    fn wheel_routing_modes(&self) -> VtModes {
+    /// in force unless `to_app`, the [`Self::scrolls_app`] verdict, holds.
+    fn wheel_routing_modes(&self, to_app: bool) -> VtModes {
         let mut modes = self.vt.modes();
         if self.vt.is_vi_mode() {
             modes.alternate_scroll = AlternateScroll::Disabled;
-            if !self.scrolls_app() {
+            if !to_app {
                 modes.mouse_tracking = MouseTracking::Off;
             }
         }
@@ -812,18 +813,25 @@ impl<V: Vt> OrzmaTty<V> {
         if !self.scrolls_app() {
             return None;
         }
-        let rows = self.vt.grid_size().rows;
-        let line = self
-            .vt
-            .vi_cursor()?
-            .point
-            .line
-            .to_viewport(self.vt.display_offset(), rows)?;
+        let row = self.vi_cursor_cell()?.row;
         match motion {
-            ViMotion::Up if line.0 == 0 => Some(MouseButton::WheelUp),
-            ViMotion::Down if line.0 + 1 == rows => Some(MouseButton::WheelDown),
+            ViMotion::Up if row == 1 => Some(MouseButton::WheelUp),
+            ViMotion::Down if row == u32::from(self.vt.grid_size().rows) => {
+                Some(MouseButton::WheelDown)
+            }
             _ => None,
         }
+    }
+
+    /// The 1-based viewport cell under the vi cursor; `None` outside vi
+    /// mode or when the vi cursor lies outside the viewport.
+    fn vi_cursor_cell(&self) -> Option<CellCoord> {
+        let cursor = self.vt.vi_cursor()?;
+        CellCoord::from_grid_point(
+            cursor.point,
+            self.vt.display_offset(),
+            self.vt.grid_size().rows,
+        )
     }
 
     /// Clears the selection and queues `decision`'s wheel reports at the vi
@@ -836,13 +844,7 @@ impl<V: Vt> OrzmaTty<V> {
     /// thread's write failed, and `PtyWriterClosed` after that.
     fn forward_wheel_to_app(&mut self, decision: WheelDecision) -> OrzmaTtyResult {
         let modes = self.vt.modes();
-        let cell = self.vt.vi_cursor().and_then(|cursor| {
-            CellCoord::from_grid_point(
-                cursor.point,
-                self.vt.display_offset(),
-                self.vt.grid_size().rows,
-            )
-        });
+        let cell = self.vi_cursor_cell();
         let input = WheelInput {
             steps: WheelSteps::default(),
             mods: WheelModifiers::default(),

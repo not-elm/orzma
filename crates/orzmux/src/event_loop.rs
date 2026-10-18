@@ -120,9 +120,9 @@ pub enum OrzmuxCommand {
         input: PointerInput,
     },
     /// Applies a vi-mode scroll to a pane: moves its viewport, or, in vi
-    /// mode over an alternate-screen application that tracks the mouse,
-    /// sends a line, half-page or page scroll to the application as wheel
-    /// reports.
+    /// mode over an alternate-screen application that tracks the mouse
+    /// while no mouse selection press is held, sends a line, half-page or
+    /// page scroll to the application as wheel reports.
     Scroll {
         /// The pane to scroll.
         pane: PaneId,
@@ -147,9 +147,9 @@ pub enum OrzmuxCommand {
         switch: ViModeSwitch,
     },
     /// Moves a pane's vi cursor, or, in vi mode over an alternate-screen
-    /// application that tracks the mouse, sends the application one wheel
-    /// report for an `Up` on the top row or a `Down` on the bottom row
-    /// instead.
+    /// application that tracks the mouse while no mouse selection press is
+    /// held, sends the application one wheel report for an `Up` on the top
+    /// row or a `Down` on the bottom row instead.
     ViMotion {
         /// The pane whose vi cursor moves.
         pane: PaneId,
@@ -1757,8 +1757,8 @@ mod tests {
     /// Asserts that a vi-mode scroll and an edge motion the pane's PTY
     /// refuses come back as PTY write errors for that pane.
     ///
-    /// Case: Claude Code stops reading its input, and the user keeps
-    /// pressing `Ctrl+Y` and `k` at the top of its chat in vi mode.
+    /// Case: Claude Code's PTY fails a write, and the user keeps pressing
+    /// `Ctrl+Y` and `k` at the top of its chat in vi mode.
     #[test]
     fn refused_vi_forwards_are_pty_write_errors() {
         let mut h = Harness::new();

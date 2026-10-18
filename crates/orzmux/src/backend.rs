@@ -682,9 +682,10 @@ impl Backend {
     }
 
     /// Applies a vi-mode scroll to `pane`: in vi mode over an
-    /// alternate-screen application that tracks the mouse, a line,
-    /// half-page or page scroll goes to the application as wheel reports;
-    /// any other scroll moves the pane's viewport.
+    /// alternate-screen application that tracks the mouse, while no mouse
+    /// selection press is held, a line, half-page or page scroll goes to
+    /// the application as wheel reports; any other scroll moves the pane's
+    /// viewport.
     ///
     /// # Errors
     ///
@@ -718,9 +719,9 @@ impl Backend {
     }
 
     /// Moves `pane`'s vi cursor by `motion`. In vi mode over an
-    /// alternate-screen application that tracks the mouse, an `Up` on the
-    /// top row or a `Down` on the bottom row sends the application one
-    /// wheel report instead.
+    /// alternate-screen application that tracks the mouse, while no mouse
+    /// selection press is held, an `Up` on the top row or a `Down` on the
+    /// bottom row sends the application one wheel report instead.
     ///
     /// # Errors
     ///

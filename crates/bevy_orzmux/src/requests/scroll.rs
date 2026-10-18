@@ -9,8 +9,9 @@ use orzmux::prelude::OrzmuxCommand;
 
 /// Fired by the host UI to apply a vi-mode scroll to a specific terminal
 /// entity: its viewport moves, or, in vi mode over an alternate-screen
-/// application that tracks the mouse, a line, half-page or page scroll
-/// reaches the application as wheel reports.
+/// application that tracks the mouse while no mouse selection press is
+/// held, a line, half-page or page scroll reaches the application as wheel
+/// reports.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct RequestTtyScroll {
     #[event_target]

@@ -459,7 +459,7 @@ fn a_vi_scroll_after_the_app_enters_the_alternate_screen_is_forwarded() {
 /// Asserts that a forwarded vi scroll the PTY refuses is reported as an
 /// error.
 ///
-/// Case: Claude Code stops reading its input, and the user keeps pressing
+/// Case: Claude Code's PTY fails a write, and the user keeps pressing
 /// `Ctrl+Y` in vi mode.
 #[test]
 fn a_refused_vi_scroll_forward_is_reported() {
@@ -538,8 +538,8 @@ fn cursor_up_below_the_top_row_moves_the_vi_cursor_without_forwarding() {
 
 /// Asserts that an edge forward the PTY refuses is reported as an error.
 ///
-/// Case: Claude Code stops reading its input, and the user keeps pressing
-/// `k` at the top of its chat in vi mode.
+/// Case: Claude Code's PTY fails a write, and the user keeps pressing `k`
+/// at the top of its chat in vi mode.
 #[test]
 fn a_refused_edge_forward_is_reported() {
     let mut term = failing_app_scroll_term(12);
