@@ -26,12 +26,24 @@ plans, tests, or implementation, and it invokes no other skill.
 
 ## The conversation
 
-Your first message is two things:
+Before your first message, find out how orzma behaves today in the situation
+the argument describes. If the argument names an issue, read the issue first.
+Then read the user guide under `docs/book/` and the code: what a user sees
+now, which settings and key bindings bear on it, and whether the same thing
+happens elsewhere. If the argument is empty, your first message asks what the
+change is about instead, and you do this reading before your next question.
+
+Your first message is three things:
 
 1. One line saying that if they would rather skip the questions, they can say
    so and you will write the document from what they have told you.
-2. One open question that gets them describing a real moment: "Walk me
-   through the last time this got in your way."
+2. What you found, reported as the rules below describe: the two or three
+   facts that bear most on the topic, then an offer to tell them the rest.
+   Each fact is one sentence that ends with its source in a few words in
+   parentheses, such as "(user guide)" or "(read from the code, not seen)".
+3. One open question that gets them describing a real moment: "Walk me
+   through the last time this got in your way." It asks nothing that the
+   argument or your reading already answers.
 
 After that, every message ends with exactly one question, a single sentence
 with no list of example answers. Ask in the human's language and vocabulary.
@@ -98,6 +110,7 @@ stops at the document.
 | "I'll lay out the options so they can choose" | Options steer, and a menu of mechanisms is design. Ask an open question. |
 | "A draft with my proposals filled in, which they only need to tick, keeps them in charge" | Ticking your answers makes the decisions yours. Open questions carry no proposed answer. |
 | "It is labelled as my proposal, so it can be a requirement" | A requirement holds only what the human said or explicitly accepted. |
+| "The first message is a fixed question, so I'll read the code after they answer" | The argument already tells you where to look. Read before the first message and report what you found in it. |
 | "Sharing what I found in the code helps them decide" | File paths and type names pull the conversation into design. Say what a user sees today. |
 | "Asking instead of assuming keeps the decision theirs" | A fact the repository settles is not a decision. Look it up and say what you found. |
 | "Platform scope is theirs to set, so I'll ask which platforms" | A change applies on every platform orzma supports. The human narrows it if they want to. |
