@@ -1,6 +1,6 @@
 ---
-name: define-requirements
-description: Use when a contributor wants to settle with the AI what problem a change to orzma solves and what solution it requires, before writing mock code — Step 1 of the AI contribution workflow proposed in issue #410. Triggers on "/define-requirements", "要件定義", "define requirements".
+name: req
+description: Use when a contributor wants to settle with the AI what problem a change to orzma solves and what solution it requires, before writing mock code — Step 1 of the AI contribution workflow proposed in issue #410. Triggers on "/req", "要件定義", "define requirements".
 argument-hint: [topic]
 disable-model-invocation: true
 ---
