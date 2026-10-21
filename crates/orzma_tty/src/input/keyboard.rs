@@ -47,12 +47,6 @@ pub enum TerminalKey {
 }
 
 /// Modifier flags carried alongside `TerminalKey`.
-///
-/// `ctrl` / `alt` / `meta` affect `Character` encoding, and `shift`
-/// alone turns `Tab` into a back tab.
-///
-/// TODO: encode the other uses of `shift` once CSI u / modifyOtherKeys is
-/// supported.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerminalModifiers {
     pub ctrl: bool,
