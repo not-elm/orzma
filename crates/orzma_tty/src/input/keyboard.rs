@@ -79,7 +79,7 @@ pub(super) fn encode_key(
     match key {
         TerminalKey::Character(text) => encode_character(text, mods),
         TerminalKey::Keypad(keypad) => keypad.encode(keypad_mode).to_vec(),
-        TerminalKey::Function(_) => todo!(),
+        TerminalKey::Function(function) => function.encode(mods),
         TerminalKey::ArrowUp => cursor_key_bytes(b'A', app_cursor_keys),
         TerminalKey::ArrowDown => cursor_key_bytes(b'B', app_cursor_keys),
         TerminalKey::ArrowRight => cursor_key_bytes(b'C', app_cursor_keys),
