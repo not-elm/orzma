@@ -1,6 +1,6 @@
 //! The top-row function keys F1 to F12.
 
-use super::TerminalModifiers;
+use super::{TerminalModifiers, modified_sequence};
 
 /// A top-row function key, F1 through F12.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,11 +47,10 @@ impl FunctionKey {
             Self::F12 => (24, '~'),
         };
         match (mods.xterm_code(), final_byte) {
-            (Some(code), _) => format!("\x1b[{number};{code}{final_byte}"),
-            (None, '~') => format!("\x1b[{number}~"),
-            (None, _) => format!("\x1bO{final_byte}"),
+            (Some(code), _) => modified_sequence(number, code, final_byte),
+            (None, '~') => format!("\x1b[{number}~").into_bytes(),
+            (None, _) => format!("\x1bO{final_byte}").into_bytes(),
         }
-        .into_bytes()
     }
 }
 

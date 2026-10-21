@@ -1,9 +1,13 @@
 //! Pure VT-encoder for key input: translates a logical key and its
 //! modifiers into the byte sequence the PTY expects.
 
+mod cursor;
+mod editing;
 mod function;
 mod keypad;
 
+pub use cursor::CursorKey;
+pub use editing::EditingKey;
 pub use function::FunctionKey;
 pub use keypad::KeypadKey;
 use orzma_vt::prelude::KeypadMode;
@@ -32,21 +36,12 @@ pub enum TerminalKey {
     Character(KeyText),
     Keypad(KeypadKey),
     Function(FunctionKey),
+    Cursor(CursorKey),
+    Editing(EditingKey),
     Enter,
     Backspace,
     Tab,
     Escape,
-    /// The editing keypad's Insert key.
-    Insert,
-    Delete,
-    ArrowUp,
-    ArrowDown,
-    ArrowLeft,
-    ArrowRight,
-    Home,
-    End,
-    PageUp,
-    PageDown,
 }
 
 /// Modifier flags carried alongside `TerminalKey`.
@@ -73,10 +68,12 @@ impl TerminalModifiers {
 /// The encoding is total: every `TerminalKey` has a representation.
 ///
 /// The cursor keys — the arrows plus Home and End — honour
-/// `app_cursor_keys` (DECCKM): `ESC [ A/B/C/D/H/F` in normal mode,
-/// `ESC O A/B/C/D/H/F` in application mode. The VT220 editing keypad
-/// (Insert, Delete, PageUp, PageDown) is unaffected by DECCKM and maps to
-/// fixed sequences.
+/// `app_cursor_keys` (DECCKM) when neither Shift, Alt, nor Ctrl is held:
+/// `ESC [ A/B/C/D/H/F` in normal mode, `ESC O A/B/C/D/H/F` in application
+/// mode. With any of the three held, they send `CSI 1 ; m A/B/C/D/H/F` in
+/// either mode. The editing keypad (Insert, Delete, PageUp, PageDown) is
+/// unaffected by DECCKM: it sends `CSI n ~`, or `CSI n ; m ~` with a
+/// modifier held.
 ///
 /// Tab sends HT, and CBT (`CSI Z`, the terminfo `kcbt` string) when Shift
 /// is the only modifier held; other modifiers leave Tab as HT.
@@ -90,12 +87,8 @@ pub(super) fn encode_key(
         TerminalKey::Character(text) => encode_character(text, mods),
         TerminalKey::Keypad(keypad) => keypad.encode(keypad_mode).to_vec(),
         TerminalKey::Function(function) => function.encode(mods),
-        TerminalKey::ArrowUp => cursor_key_bytes(b'A', app_cursor_keys),
-        TerminalKey::ArrowDown => cursor_key_bytes(b'B', app_cursor_keys),
-        TerminalKey::ArrowRight => cursor_key_bytes(b'C', app_cursor_keys),
-        TerminalKey::ArrowLeft => cursor_key_bytes(b'D', app_cursor_keys),
-        TerminalKey::Home => cursor_key_bytes(b'H', app_cursor_keys),
-        TerminalKey::End => cursor_key_bytes(b'F', app_cursor_keys),
+        TerminalKey::Cursor(cursor) => cursor.encode(mods, app_cursor_keys),
+        TerminalKey::Editing(editing) => editing.encode(mods),
         TerminalKey::Enter => vec![0x0d],
         TerminalKey::Backspace => vec![0x7f],
         TerminalKey::Tab if mods.shift && !mods.ctrl && !mods.alt && !mods.meta => {
@@ -103,10 +96,6 @@ pub(super) fn encode_key(
         }
         TerminalKey::Tab => vec![0x09],
         TerminalKey::Escape => vec![0x1b],
-        TerminalKey::Insert => b"\x1b[2~".to_vec(),
-        TerminalKey::Delete => b"\x1b[3~".to_vec(),
-        TerminalKey::PageUp => b"\x1b[5~".to_vec(),
-        TerminalKey::PageDown => b"\x1b[6~".to_vec(),
     }
 }
 
@@ -140,9 +129,10 @@ fn ctrl_letter_byte(s: &str) -> Option<u8> {
     Some(lower - b'a' + 1)
 }
 
-fn cursor_key_bytes(suffix: u8, app_cursor_keys: bool) -> Vec<u8> {
-    let prefix = if app_cursor_keys { b'O' } else { b'[' };
-    vec![0x1b, prefix, suffix]
+/// Builds `CSI number ; code final_byte`, the xterm form a key sends with
+/// Shift, Alt, or Ctrl held, where `code` is the modifier code.
+fn modified_sequence(number: u8, code: u8, final_byte: char) -> Vec<u8> {
+    format!("\x1b[{number};{code}{final_byte}").into_bytes()
 }
 
 #[cfg(test)]
@@ -282,61 +272,6 @@ mod tests {
         );
     }
 
-    /// Asserts that the VT220 editing keypad keys send their fixed tilde
-    /// sequences.
-    ///
-    /// Case: the user presses Insert, Delete, PageUp, or PageDown in a
-    /// program that reads the terminfo `kich1`, `kdch1`, `kpp`, and `knp`
-    /// strings.
-    #[test]
-    fn vt220_style_keys_use_tilde_sequences() {
-        assert_eq!(
-            encode_key(&TerminalKey::Insert, &no_mods(), false, KeypadMode::Numeric),
-            b"\x1b[2~".to_vec()
-        );
-        assert_eq!(
-            encode_key(&TerminalKey::Delete, &no_mods(), false, KeypadMode::Numeric),
-            b"\x1b[3~".to_vec()
-        );
-        assert_eq!(
-            encode_key(&TerminalKey::PageUp, &no_mods(), false, KeypadMode::Numeric),
-            b"\x1b[5~".to_vec()
-        );
-        assert_eq!(
-            encode_key(
-                &TerminalKey::PageDown,
-                &no_mods(),
-                false,
-                KeypadMode::Numeric
-            ),
-            b"\x1b[6~".to_vec()
-        );
-    }
-
-    #[test]
-    fn home_and_end_use_csi_in_normal_cursor_mode() {
-        assert_eq!(
-            encode_key(&TerminalKey::Home, &no_mods(), false, KeypadMode::Numeric),
-            b"\x1b[H".to_vec()
-        );
-        assert_eq!(
-            encode_key(&TerminalKey::End, &no_mods(), false, KeypadMode::Numeric),
-            b"\x1b[F".to_vec()
-        );
-    }
-
-    #[test]
-    fn home_and_end_use_ss3_in_application_cursor_mode() {
-        assert_eq!(
-            encode_key(&TerminalKey::Home, &no_mods(), true, KeypadMode::Numeric),
-            b"\x1bOH".to_vec()
-        );
-        assert_eq!(
-            encode_key(&TerminalKey::End, &no_mods(), true, KeypadMode::Numeric),
-            b"\x1bOF".to_vec()
-        );
-    }
-
     /// Asserts that the editing keypad keys send the same sequences
     /// whether or not DECCKM is set.
     ///
@@ -347,7 +282,7 @@ mod tests {
         for app_cursor in [false, true] {
             assert_eq!(
                 encode_key(
-                    &TerminalKey::Insert,
+                    &TerminalKey::Editing(EditingKey::Insert),
                     &no_mods(),
                     app_cursor,
                     KeypadMode::Numeric
@@ -356,7 +291,7 @@ mod tests {
             );
             assert_eq!(
                 encode_key(
-                    &TerminalKey::Delete,
+                    &TerminalKey::Editing(EditingKey::Delete),
                     &no_mods(),
                     app_cursor,
                     KeypadMode::Numeric
@@ -365,7 +300,7 @@ mod tests {
             );
             assert_eq!(
                 encode_key(
-                    &TerminalKey::PageUp,
+                    &TerminalKey::Editing(EditingKey::PageUp),
                     &no_mods(),
                     app_cursor,
                     KeypadMode::Numeric
@@ -374,7 +309,7 @@ mod tests {
             );
             assert_eq!(
                 encode_key(
-                    &TerminalKey::PageDown,
+                    &TerminalKey::Editing(EditingKey::PageDown),
                     &no_mods(),
                     app_cursor,
                     KeypadMode::Numeric
@@ -385,54 +320,19 @@ mod tests {
     }
 
     #[test]
-    fn arrows_use_csi_in_normal_cursor_mode() {
-        assert_eq!(
-            encode_key(
-                &TerminalKey::ArrowUp,
-                &no_mods(),
-                false,
-                KeypadMode::Numeric
-            ),
-            b"\x1b[A".to_vec()
-        );
-        assert_eq!(
-            encode_key(
-                &TerminalKey::ArrowDown,
-                &no_mods(),
-                false,
-                KeypadMode::Numeric
-            ),
-            b"\x1b[B".to_vec()
-        );
-        assert_eq!(
-            encode_key(
-                &TerminalKey::ArrowRight,
-                &no_mods(),
-                false,
-                KeypadMode::Numeric
-            ),
-            b"\x1b[C".to_vec()
-        );
-        assert_eq!(
-            encode_key(
-                &TerminalKey::ArrowLeft,
-                &no_mods(),
-                false,
-                KeypadMode::Numeric
-            ),
-            b"\x1b[D".to_vec()
-        );
-    }
-
-    #[test]
     fn arrows_use_ss3_in_application_cursor_mode() {
         assert_eq!(
-            encode_key(&TerminalKey::ArrowUp, &no_mods(), true, KeypadMode::Numeric),
+            encode_key(
+                &TerminalKey::Cursor(CursorKey::Up),
+                &no_mods(),
+                true,
+                KeypadMode::Numeric
+            ),
             b"\x1bOA".to_vec()
         );
         assert_eq!(
             encode_key(
-                &TerminalKey::ArrowDown,
+                &TerminalKey::Cursor(CursorKey::Down),
                 &no_mods(),
                 true,
                 KeypadMode::Numeric
@@ -441,7 +341,7 @@ mod tests {
         );
         assert_eq!(
             encode_key(
-                &TerminalKey::ArrowRight,
+                &TerminalKey::Cursor(CursorKey::Right),
                 &no_mods(),
                 true,
                 KeypadMode::Numeric
@@ -450,7 +350,7 @@ mod tests {
         );
         assert_eq!(
             encode_key(
-                &TerminalKey::ArrowLeft,
+                &TerminalKey::Cursor(CursorKey::Left),
                 &no_mods(),
                 true,
                 KeypadMode::Numeric

@@ -7,7 +7,9 @@ use crate::input::keyboard::held_modifiers::HeldModifiersPlugin;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Modifiers;
-use orzma_tty::prelude::{FunctionKey, KeyText, TerminalKey, TerminalModifiers};
+use orzma_tty::prelude::{
+    CursorKey, EditingKey, FunctionKey, KeyText, TerminalKey, TerminalModifiers,
+};
 
 mod handler;
 mod held_modifiers;
@@ -49,16 +51,16 @@ pub(crate) fn bevy_key_to_terminal_key(logical_key: &Key) -> Option<TerminalKey>
         Key::Backspace => Some(TerminalKey::Backspace),
         Key::Tab => Some(TerminalKey::Tab),
         Key::Escape => Some(TerminalKey::Escape),
-        Key::Insert => Some(TerminalKey::Insert),
-        Key::Delete => Some(TerminalKey::Delete),
-        Key::ArrowUp => Some(TerminalKey::ArrowUp),
-        Key::ArrowDown => Some(TerminalKey::ArrowDown),
-        Key::ArrowLeft => Some(TerminalKey::ArrowLeft),
-        Key::ArrowRight => Some(TerminalKey::ArrowRight),
-        Key::Home => Some(TerminalKey::Home),
-        Key::End => Some(TerminalKey::End),
-        Key::PageUp => Some(TerminalKey::PageUp),
-        Key::PageDown => Some(TerminalKey::PageDown),
+        Key::Insert => Some(TerminalKey::Editing(EditingKey::Insert)),
+        Key::Delete => Some(TerminalKey::Editing(EditingKey::Delete)),
+        Key::ArrowUp => Some(TerminalKey::Cursor(CursorKey::Up)),
+        Key::ArrowDown => Some(TerminalKey::Cursor(CursorKey::Down)),
+        Key::ArrowLeft => Some(TerminalKey::Cursor(CursorKey::Left)),
+        Key::ArrowRight => Some(TerminalKey::Cursor(CursorKey::Right)),
+        Key::Home => Some(TerminalKey::Cursor(CursorKey::Home)),
+        Key::End => Some(TerminalKey::Cursor(CursorKey::End)),
+        Key::PageUp => Some(TerminalKey::Editing(EditingKey::PageUp)),
+        Key::PageDown => Some(TerminalKey::Editing(EditingKey::PageDown)),
         Key::F1 => Some(TerminalKey::Function(FunctionKey::F1)),
         Key::F2 => Some(TerminalKey::Function(FunctionKey::F2)),
         Key::F3 => Some(TerminalKey::Function(FunctionKey::F3)),
@@ -124,7 +126,7 @@ mod tests {
         );
         assert_eq!(
             bevy_key_to_terminal_key(&Key::Delete),
-            Some(TerminalKey::Delete)
+            Some(TerminalKey::Editing(EditingKey::Delete))
         );
     }
 
@@ -137,36 +139,39 @@ mod tests {
     fn navigation_keys_map_correctly() {
         assert_eq!(
             bevy_key_to_terminal_key(&Key::ArrowUp),
-            Some(TerminalKey::ArrowUp)
+            Some(TerminalKey::Cursor(CursorKey::Up))
         );
         assert_eq!(
             bevy_key_to_terminal_key(&Key::ArrowDown),
-            Some(TerminalKey::ArrowDown)
+            Some(TerminalKey::Cursor(CursorKey::Down))
         );
         assert_eq!(
             bevy_key_to_terminal_key(&Key::ArrowLeft),
-            Some(TerminalKey::ArrowLeft)
+            Some(TerminalKey::Cursor(CursorKey::Left))
         );
         assert_eq!(
             bevy_key_to_terminal_key(&Key::ArrowRight),
-            Some(TerminalKey::ArrowRight)
+            Some(TerminalKey::Cursor(CursorKey::Right))
         );
         assert_eq!(
             bevy_key_to_terminal_key(&Key::Home),
-            Some(TerminalKey::Home)
+            Some(TerminalKey::Cursor(CursorKey::Home))
         );
-        assert_eq!(bevy_key_to_terminal_key(&Key::End), Some(TerminalKey::End));
+        assert_eq!(
+            bevy_key_to_terminal_key(&Key::End),
+            Some(TerminalKey::Cursor(CursorKey::End))
+        );
         assert_eq!(
             bevy_key_to_terminal_key(&Key::PageUp),
-            Some(TerminalKey::PageUp)
+            Some(TerminalKey::Editing(EditingKey::PageUp))
         );
         assert_eq!(
             bevy_key_to_terminal_key(&Key::PageDown),
-            Some(TerminalKey::PageDown)
+            Some(TerminalKey::Editing(EditingKey::PageDown))
         );
         assert_eq!(
             bevy_key_to_terminal_key(&Key::Insert),
-            Some(TerminalKey::Insert)
+            Some(TerminalKey::Editing(EditingKey::Insert))
         );
     }
 

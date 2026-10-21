@@ -2,7 +2,7 @@
 //! input snaps a scrolled-back viewport and dismisses the selection.
 
 use super::*;
-use crate::input::KeyText;
+use crate::input::{CursorKey, KeyText};
 use crate::test_support::SelectionOp;
 
 /// Asserts that a key sent to the PTY dismisses the selection and
@@ -72,14 +72,20 @@ fn paste_while_scrolled_back_snaps_and_arms() {
 fn send_key_honours_the_vt_reported_cursor_mode() {
     let (mut term, sink) = detached_term();
     term.vt.modes.app_cursor = true;
-    term.send_key(&TerminalKey::ArrowUp, &TerminalModifiers::default())
-        .expect("send_key");
+    term.send_key(
+        &TerminalKey::Cursor(CursorKey::Up),
+        &TerminalModifiers::default(),
+    )
+    .expect("send_key");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1bOA");
 
     let (mut term, sink) = detached_term();
-    term.send_key(&TerminalKey::ArrowUp, &TerminalModifiers::default())
-        .expect("send_key");
+    term.send_key(
+        &TerminalKey::Cursor(CursorKey::Up),
+        &TerminalModifiers::default(),
+    )
+    .expect("send_key");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A");
 }

@@ -34,10 +34,12 @@ orzma understands.
   `Ctrl+Alt` with a letter sends only the control character.
 - `Alt` and `Ctrl` do not change `Backspace`, `Enter`, `Escape`, or `Tab`;
   `Shift+Tab` sends `CSI Z`.
-- The arrow keys, `Home`, and `End` follow the application cursor keys mode
-  (DECCKM).
-- Modifiers are not encoded for the arrow, navigation, and editing keys:
-  `Ctrl+ArrowLeft` sends the same bytes as `ArrowLeft`.
+- Without a modifier, the arrow keys, `Home`, and `End` follow the
+  application cursor keys mode (DECCKM).
+- With `Shift`, `Alt`, or `Ctrl` held, the arrow keys, `Home`, and `End` send
+  xterm's modified forms whatever DECCKM says, such as `CSI 1 ; 5 D` for
+  `Ctrl+ArrowLeft`. `Insert`, `Delete`, `PageUp`, and `PageDown` do the same,
+  such as `CSI 5 ; 5 ~` for `Ctrl+PageUp`.
 - `F1` to `F4` send `SS3 P` to `SS3 S`, and `F5` to `F12` send `CSI 15 ~` to
   `CSI 24 ~`. With `Shift`, `Alt`, or `Ctrl` held, they send xterm's modified
   forms, such as `CSI 1 ; 2 P` for `Shift+F1` and `CSI 15 ; 5 ~` for
