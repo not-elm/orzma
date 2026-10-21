@@ -34,6 +34,7 @@ use configs::{OrzmaConfigsPlugin, cursor_policy, semantic_escape_chars, wheel_co
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
 use session::SessionPlugin;
+use std::ffi::OsStr;
 use std::fmt::Display;
 use ui::OrzmaUiPlugin;
 
@@ -50,6 +51,7 @@ fn main() {
     // env vars, which is unsound once other threads may read the environment.
     ensure_terminfo_env();
     ensure_utf8_locale_env();
+    ensure_hyperlink_env();
     clear_inherited_control_env();
 
     let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
@@ -256,6 +258,34 @@ fn is_utf8_locale(value: &str) -> bool {
     upper.contains("UTF-8") || upper.contains("UTF8")
 }
 
+/// Sets `FORCE_HYPERLINK=1` when the inherited environment does not set it, so
+/// PTY children that honor the variable print URLs as OSC 8 hyperlinks. An
+/// inherited value is left untouched.
+///
+/// # Invariants
+///
+/// Must be called before any thread is spawned (same constraint as
+/// [`ensure_terminfo_env`]): it writes a process environment variable.
+fn ensure_hyperlink_env() {
+    let Some(value) = force_hyperlink_fallback(std::env::var_os("FORCE_HYPERLINK").as_deref())
+    else {
+        return;
+    };
+    // SAFETY: the caller invokes this before App::new() spawns any task-pool
+    // thread, so no other thread can read the environment concurrently with
+    // this write (see # Invariants).
+    unsafe {
+        std::env::set_var("FORCE_HYPERLINK", value);
+    }
+}
+
+/// The `FORCE_HYPERLINK` value orzma installs, or `None` to keep the inherited
+/// one. Returns `1` when the variable is unset; any inherited value, `0` and
+/// the empty string included, is kept.
+fn force_hyperlink_fallback(current: Option<&OsStr>) -> Option<&'static str> {
+    current.is_none().then_some("1")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +371,31 @@ mod tests {
             utf8_locale_fallback(Some("en_US.UTF-8"), None, Some("C")),
             None
         );
+    }
+
+    /// Asserts that an unset `FORCE_HYPERLINK` gets `1`.
+    ///
+    /// Case: the user opens orzma from the Start menu or the Dock, and runs
+    /// Claude Code in a pane, which prints a pull request URL longer than the
+    /// pane is wide.
+    #[test]
+    fn unset_force_hyperlink_gets_fallback() {
+        assert_eq!(force_hyperlink_fallback(None), Some("1"));
+    }
+
+    /// Asserts that an inherited `FORCE_HYPERLINK` is kept rather than
+    /// replaced, whatever its value.
+    ///
+    /// Case: the user launches orzma from another terminal whose shell profile
+    /// exports `FORCE_HYPERLINK=0`.
+    #[test]
+    fn inherited_force_hyperlink_is_preserved() {
+        for value in ["0", "1", ""] {
+            assert_eq!(
+                force_hyperlink_fallback(Some(OsStr::new(value))),
+                None,
+                "FORCE_HYPERLINK={value:?}"
+            );
+        }
     }
 }

@@ -13,6 +13,11 @@ orzma understands.
   entry of its own.
 - On macOS, when the locale (`LC_ALL`, `LC_CTYPE`, or `LANG`) is not UTF-8,
   orzma sets `LC_CTYPE=en_US.UTF-8`.
+- orzma sets `FORCE_HYPERLINK=1` unless the environment it was started in
+  already sets it. Programs that read it, such as Claude Code, then print links
+  as OSC 8 hyperlinks, so a link the program wraps onto several rows itself
+  opens in full from any of them. To turn this off, set `FORCE_HYPERLINK=0` in
+  your shell profile.
 - Every pane gets `ORZMA_SOCK` and `ORZMA_TOKEN`, which webview apps use to
   reach orzma (see [Discovery](protocol-reference.md#discovery)).
 - orzma does not set `TERM_PROGRAM`. Panes of an orzma started from another
