@@ -1,8 +1,10 @@
 //! Pure VT-encoder for key input: translates a logical key and its
 //! modifiers into the byte sequence the PTY expects.
 
+mod function;
 mod keypad;
 
+pub use function::FunctionKey;
 pub use keypad::KeypadKey;
 use orzma_vt::prelude::KeypadMode;
 
@@ -29,6 +31,7 @@ pub enum TerminalKey {
     /// UTF-8 text (single char or multi-codepoint composition).
     Character(KeyText),
     Keypad(KeypadKey),
+    Function(FunctionKey),
     Enter,
     Backspace,
     Tab,
@@ -76,6 +79,7 @@ pub(super) fn encode_key(
     match key {
         TerminalKey::Character(text) => encode_character(text, mods),
         TerminalKey::Keypad(keypad) => keypad.encode(keypad_mode).to_vec(),
+        TerminalKey::Function(_) => todo!(),
         TerminalKey::ArrowUp => cursor_key_bytes(b'A', app_cursor_keys),
         TerminalKey::ArrowDown => cursor_key_bytes(b'B', app_cursor_keys),
         TerminalKey::ArrowRight => cursor_key_bytes(b'C', app_cursor_keys),
