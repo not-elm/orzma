@@ -5,29 +5,14 @@ mod cursor;
 mod editing;
 mod function;
 mod keypad;
+mod text;
 
 pub use cursor::CursorKey;
 pub use editing::EditingKey;
 pub use function::FunctionKey;
 pub use keypad::KeypadKey;
 use orzma_vt::prelude::KeypadMode;
-
-/// Non-empty UTF-8 text carried by [`TerminalKey::Character`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyText(String);
-
-impl KeyText {
-    /// Wraps `text`, returning `None` when it is empty.
-    pub fn new(text: impl Into<String>) -> Option<Self> {
-        let text = text.into();
-        (!text.is_empty()).then_some(Self(text))
-    }
-
-    /// Returns the wrapped text, which is never empty.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+pub use text::KeyText;
 
 /// Subset of keys the terminal input codec understands.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,7 +69,7 @@ pub(super) fn encode_key(
     keypad_mode: KeypadMode,
 ) -> Vec<u8> {
     match key {
-        TerminalKey::Character(text) => encode_character(text, mods),
+        TerminalKey::Character(text) => text.encode(mods),
         TerminalKey::Keypad(keypad) => keypad.encode(keypad_mode).to_vec(),
         TerminalKey::Function(function) => function.encode(mods),
         TerminalKey::Cursor(cursor) => cursor.encode(mods, app_cursor_keys),
@@ -97,36 +82,6 @@ pub(super) fn encode_key(
         TerminalKey::Tab => vec![0x09],
         TerminalKey::Escape => vec![0x1b],
     }
-}
-
-/// Priority order: Ctrl + ASCII letter collapses to a C0 byte, then Alt/Meta
-/// prefixes `ESC` (meta-sends-escape), then UTF-8 passthrough.
-fn encode_character(text: &KeyText, mods: &TerminalModifiers) -> Vec<u8> {
-    let s = text.as_str();
-    if mods.ctrl
-        && let Some(byte) = ctrl_letter_byte(s)
-    {
-        return vec![byte];
-    }
-    if mods.alt || mods.meta {
-        let mut out = vec![0x1b];
-        out.extend_from_slice(s.as_bytes());
-        return out;
-    }
-    s.as_bytes().to_vec()
-}
-
-fn ctrl_letter_byte(s: &str) -> Option<u8> {
-    let mut chars = s.chars();
-    let c = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-    if !c.is_ascii_alphabetic() {
-        return None;
-    }
-    let lower = c.to_ascii_lowercase() as u8;
-    Some(lower - b'a' + 1)
 }
 
 /// Builds `CSI number ; code final_byte`, the xterm form a key sends with
@@ -159,35 +114,6 @@ mod tests {
             alt: true,
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn key_text_rejects_empty() {
-        assert_eq!(KeyText::new(""), None);
-    }
-
-    #[test]
-    fn key_text_keeps_non_empty_input() {
-        assert_eq!(
-            KeyText::new("a").map(|t| t.as_str().to_owned()),
-            Some("a".to_owned())
-        );
-    }
-
-    #[test]
-    fn ascii_text_is_passthrough() {
-        assert_eq!(
-            encode_key(&character("a"), &no_mods(), false, KeypadMode::Numeric),
-            b"a".to_vec()
-        );
-    }
-
-    #[test]
-    fn multibyte_text_is_utf8_passthrough() {
-        assert_eq!(
-            encode_key(&character("あ"), &no_mods(), false, KeypadMode::Numeric),
-            "あ".as_bytes().to_vec()
-        );
     }
 
     #[test]
@@ -376,59 +302,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_uppercase_letter_collapses_to_same_byte() {
-        assert_eq!(
-            encode_key(&character("C"), &ctrl(), false, KeypadMode::Numeric),
-            vec![0x03]
-        );
-    }
-
-    #[test]
-    fn ctrl_space_is_unmapped_in_mvp() {
-        assert_eq!(
-            encode_key(&character(" "), &ctrl(), false, KeypadMode::Numeric),
-            b" ".to_vec()
-        );
-    }
-
-    #[test]
-    fn ctrl_digit_is_text_passthrough() {
-        assert_eq!(
-            encode_key(&character("1"), &ctrl(), false, KeypadMode::Numeric),
-            b"1".to_vec()
-        );
-    }
-
-    #[test]
     fn alt_letter_is_esc_prefixed() {
         assert_eq!(
             encode_key(&character("h"), &alt(), false, KeypadMode::Numeric),
             b"\x1bh".to_vec()
-        );
-    }
-
-    #[test]
-    fn meta_letter_is_esc_prefixed() {
-        let meta = TerminalModifiers {
-            meta: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            encode_key(&character("x"), &meta, false, KeypadMode::Numeric),
-            b"\x1bx".to_vec()
-        );
-    }
-
-    #[test]
-    fn ctrl_takes_priority_over_alt_for_letters() {
-        let both = TerminalModifiers {
-            ctrl: true,
-            alt: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            encode_key(&character("a"), &both, false, KeypadMode::Numeric),
-            vec![0x01]
         );
     }
 }

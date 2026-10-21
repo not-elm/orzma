@@ -29,9 +29,21 @@ orzma understands.
 - With a key that types a character, `Alt`, including the Option key that
   [`option_as_alt`](configuration.md#keyboard-option_as_alt) makes `Alt` on
   macOS, sends `ESC` before the character.
-- `Ctrl` with a letter sends that letter's control character. `Ctrl` with any
-  other key, such as `Space`, `[`, `\`, or `/`, sends the plain character, and
-  `Ctrl+Alt` with a letter sends only the control character.
+- `Ctrl` with a letter sends that letter's control character. `Ctrl` also
+  turns these keys into control characters:
+
+  | Key with `Ctrl` | Sends |
+  | --- | --- |
+  | `Space`, `@`, `2` | NUL |
+  | `[`, `3` | ESC |
+  | `\`, `4` | FS |
+  | `]`, `5` | GS |
+  | `^`, `~`, `6` | RS |
+  | `_`, `/`, `7` | US |
+  | `?`, `8` | DEL |
+
+  `Ctrl` with any other key, such as `1` or `-`, sends the plain character.
+  `Ctrl+Alt` sends `ESC` before the control character.
 - `Alt` and `Ctrl` do not change `Backspace`, `Enter`, `Escape`, or `Tab`;
   `Shift+Tab` sends `CSI Z`.
 - Without a modifier, the arrow keys, `Home`, and `End` follow the
