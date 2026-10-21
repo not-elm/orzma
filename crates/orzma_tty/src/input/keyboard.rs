@@ -58,6 +58,16 @@ pub struct TerminalModifiers {
     pub meta: bool,
 }
 
+impl TerminalModifiers {
+    /// Returns the xterm modifier code a modified key carries as a
+    /// parameter, 1 plus Shift 1, Alt 2, and Ctrl 4, or `None` when none of
+    /// the three is held. Meta does not count toward the code.
+    fn xterm_code(&self) -> Option<u8> {
+        let code = 1 + u8::from(self.shift) + 2 * u8::from(self.alt) + 4 * u8::from(self.ctrl);
+        (code > 1).then_some(code)
+    }
+}
+
 /// Translates a logical key + modifiers into the bytes the PTY expects.
 ///
 /// The encoding is total: every `TerminalKey` has a representation.

@@ -38,7 +38,10 @@ orzma understands.
   (DECCKM).
 - Modifiers are not encoded for the arrow, navigation, and editing keys:
   `Ctrl+ArrowLeft` sends the same bytes as `ArrowLeft`.
-- `F1` to `F12` send nothing.
+- `F1` to `F4` send `SS3 P` to `SS3 S`, and `F5` to `F12` send `CSI 15 ~` to
+  `CSI 24 ~`. With `Shift`, `Alt`, or `Ctrl` held, they send xterm's modified
+  forms, such as `CSI 1 ; 2 P` for `Shift+F1` and `CSI 15 ; 5 ~` for
+  `Ctrl+F5`. `F13` and above send nothing.
 
 ## Mouse
 
