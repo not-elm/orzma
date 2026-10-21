@@ -14,7 +14,7 @@ You may read the repository to tell an internal name from a public surface.
 Do not edit any file.
 
 Classify every sentence in these sections: Problem, Required solution,
-Constraints, Non-goals, Alternatives considered, Open questions.
+Non-goals, Alternatives considered, Open questions.
 
 DESIGN — the sentence decides, names, or describes code structure:
 - types, traits, fields, enum variants, function or method signatures
@@ -35,7 +35,7 @@ OK — leave these unreported:
   flags, key bindings, UI text, control sequences (OSC, CSI, …), webview
   or socket protocol messages, the SDK's public API
 - measurable outcomes: latency, startup time, memory, build time
-- keeping an existing public surface compatible, with a reason
+- keeping an existing public surface compatible
 - platform scope and other scope decisions
 A sentence that mixes both is DESIGN; quote only the design part.
 

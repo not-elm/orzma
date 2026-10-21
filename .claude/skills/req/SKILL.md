@@ -15,7 +15,7 @@ Code design is not part of this step. The human designs the code in Step 2 by
 writing mock code, so the document must leave every structural decision open.
 Two structurally different mocks must both be able to satisfy it.
 
-**Every requirement, constraint and non-goal in the document is the human's.**
+**Every requirement and non-goal in the document is the human's.**
 You ask questions, play back what you heard, and, when it helps, suggest an
 alternative. You never fill in an answer for them, in the conversation or in
 the document. How orzma behaves today is not one of their answers: you find
@@ -52,9 +52,8 @@ with no list of example answers. Ask in the human's language and vocabulary.
   they can correct ("I'm guessing this bites you mostly during long builds?")
   beats an abstract question, and you mark it as your guess.
 - **Ground to cover:** the problem and one real episode; who is affected; what
-  outcome would satisfy them; constraints and their reasons; non-goals; what
-  would make the change a failure even if it technically works; what is still
-  undecided. This is territory, not a script.
+  outcome would satisfy them; non-goals; what is still undecided. This is
+  territory, not a script.
 - **Play back as you go.** When you understand one part well enough, describe
   it back in about 200–300 words, separating what they said from what you
   guessed, and end by asking what is wrong or missing.
@@ -65,8 +64,22 @@ with no list of example answers. Ask in the human's language and vocabulary.
   happens elsewhere (another input field, another way to trigger it), whether
   a setting or key binding exists. Read them, then state what you found
   instead of asking. The human's questions are about their experience and
-  judgement: what got in their way, what outcome they want, what is out of
-  scope, what would count as failure.
+  judgement: what got in their way, what outcome they want, and what is out
+  of scope.
+- **Fact-check each answer before your next question.** Find the facts the
+  answer rests on, including those it takes over from what it accepts: your
+  guess, or the issue ("the table is xterm's default"). A fact is anything
+  other than the human's experience or judgement: what orzma does today, what
+  a manual in `docs/references/` says, what another terminal, program, or
+  operating system does. Check each against the repository and
+  `docs/references/`, and against primary sources outside the repository
+  (source code, official documentation) when those cannot settle it.
+  - A fact contradicts the answer, or the answer contradicts an earlier one:
+    give the fact and its source, and ask whether they keep the answer or
+    change it. That is the message's one question; the next topic waits.
+  - A fact cannot be settled: say what you checked.
+  - Every fact checks out: one line says what you checked and where.
+  You never change the answer yourself.
 - **What you found is reported as what a user sees today:** "a bell in a
   background tab does nothing today", not file paths, type names, or how the
   code is arranged. Say how you know it. A documented fact is stated plainly.
@@ -96,8 +109,10 @@ order, and write one document per change.
 ### When the human says to skip the questions
 
 Write the document from what they have already said. Everything they have not
-said goes under the open questions, as a question with no proposed answer. A
-fact the repository answers is looked up, not listed, and a default stays out
+said goes under the open questions, as a question with no proposed answer.
+Fact-check what they have said as above before writing; each contradiction
+goes under the open questions, with the fact and its source. A fact the
+repository answers is looked up, not listed, and a default stays out
 of the document.
 Skipping questions never moves the session past this skill: if they also ask
 for mock code or implementation, say that Step 2 is theirs and that this skill
@@ -119,6 +134,9 @@ stops at the document.
 | "Comparing approaches by effort helps them scope it" | Effort depends on a design nobody has made yet. That comparison belongs to Step 2. |
 | "They said no more questions, so I'll fill the gaps with sensible assumptions" | An assumption you choose is a requirement you wrote. Each gap becomes an open question. |
 | "I'll go ahead unless they object" | Silence is not approval. Wait for an answer. |
+| "They said yes to my guess, so what it assumes is settled" | A yes settles their judgement, not the facts under it. Check those facts. |
+| "The issue says this is xterm's behavior, so it is" | A claim about a spec or another program is a fact to check, wherever it is written. |
+| "I'll quietly fix their answer to match the spec" | Changing it makes the decision yours. Give the fact and ask. |
 
 ## The document
 
@@ -158,9 +176,6 @@ the human's own terms. Current behavior appears only as what a user sees.
 ## Required solution
 - R1: When <situation>, orzma <result someone can observe>.
 
-## Constraints
-- <constraint> (reason: <why>)
-
 ## Non-goals
 - <what this change deliberately does not do>
 
@@ -182,8 +197,6 @@ What each part holds:
   API), or a developer through a measurable outcome (latency, startup time,
   build time). An R item exists only because the human said it or explicitly
   accepted your suggestion.
-- **Constraints:** each carries its reason. Keeping an existing public surface
-  compatible is a constraint; a new internal structure is not.
 - **Open questions:** neutral questions with no proposed answer. The
   blocks-approval mark is your judgement; say so when you ask for approval.
 - **Carry-over memo:** implementation ideas the human voiced, quoted verbatim
