@@ -69,14 +69,13 @@ pub(crate) fn map(mode: Mode, key: KeyEvent) -> Action {
 fn map_normal(ctrl: bool, code: KeyCode) -> Action {
     match code {
         KeyCode::Char('c') if ctrl => Action::Quit,
-        KeyCode::Char('d') if ctrl => Action::ScrollHalfDown,
-        KeyCode::Char('u') if ctrl => Action::ScrollHalfUp,
         KeyCode::Char('f') if ctrl => Action::ScrollPageDown,
         KeyCode::Char('b') if ctrl => Action::ScrollPageUp,
         _ if ctrl => Action::Ignore,
         KeyCode::Char('j') | KeyCode::Down => Action::ScrollLineDown,
         KeyCode::Char('k') | KeyCode::Up => Action::ScrollLineUp,
-        KeyCode::Char(' ') => Action::ScrollHalfDown,
+        KeyCode::Char('J') | KeyCode::Char(' ') => Action::ScrollHalfDown,
+        KeyCode::Char('K') => Action::ScrollHalfUp,
         KeyCode::PageDown => Action::ScrollPageDown,
         KeyCode::PageUp => Action::ScrollPageUp,
         KeyCode::Char('G') => Action::GoBottom,
@@ -166,8 +165,8 @@ fn scroll_chords() -> Vec<KeyChord> {
         plain_chord(KeyCode::Char(' ')),
         plain_chord(KeyCode::PageDown),
         plain_chord(KeyCode::PageUp),
-        ctrl_chord('d'),
-        ctrl_chord('u'),
+        shift_chord('j'),
+        shift_chord('k'),
         ctrl_chord('f'),
         ctrl_chord('b'),
         plain_chord(KeyCode::Char('g')),
@@ -237,9 +236,9 @@ mod tests {
             map(Mode::Normal, special(KeyCode::Up)),
             Action::ScrollLineUp
         );
-        assert_eq!(map(Mode::Normal, ctrl('d')), Action::ScrollHalfDown);
+        assert_eq!(map(Mode::Normal, key('J')), Action::ScrollHalfDown);
         assert_eq!(map(Mode::Normal, key(' ')), Action::ScrollHalfDown);
-        assert_eq!(map(Mode::Normal, ctrl('u')), Action::ScrollHalfUp);
+        assert_eq!(map(Mode::Normal, key('K')), Action::ScrollHalfUp);
         assert_eq!(map(Mode::Normal, ctrl('f')), Action::ScrollPageDown);
         assert_eq!(
             map(Mode::Normal, special(KeyCode::PageDown)),

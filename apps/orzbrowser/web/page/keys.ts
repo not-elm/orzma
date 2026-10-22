@@ -228,10 +228,6 @@ function actionFor(event: KeyboardEvent): ScrollAction | 'g' | null {
       return null;
     }
     switch (event.key) {
-      case 'd':
-        return 'halfDown';
-      case 'u':
-        return 'halfUp';
       case 'f':
         return 'pageDown';
       case 'b':
@@ -240,8 +236,15 @@ function actionFor(event: KeyboardEvent): ScrollAction | 'g' | null {
         return null;
     }
   }
-  if (event.key === 'G') {
-    return 'bottom';
+  switch (event.key) {
+    case 'G':
+      return 'bottom';
+    case 'J':
+      return 'halfDown';
+    case 'K':
+      return 'halfUp';
+    default:
+      break;
   }
   if (event.shiftKey) {
     return null;

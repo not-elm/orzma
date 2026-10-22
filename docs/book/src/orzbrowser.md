@@ -8,7 +8,7 @@ toolbar's address bar.
 
 ## Features
 
-- **Vim-style scrolling** — `j` / `k` move by line, `Ctrl+d` / `Ctrl+u` by half
+- **Vim-style scrolling** — `j` / `k` move by line, `J` / `K` by half
   a page, `Ctrl+f` / `Ctrl+b` by a full page, and `gg` / `G` jump to the top /
   bottom. Holding a key keeps scrolling smoothly until you let go. When a frame
   embedded in the page (a code demo, a video player) has keyboard focus, the
@@ -78,8 +78,8 @@ query, or fragment; otherwise orzbrowser exits with an error.
 | --- | --- |
 | `j` / `ArrowDown` | Scroll down one line |
 | `k` / `ArrowUp` | Scroll up one line |
-| `Ctrl+d` / `Space` | Scroll half a page down |
-| `Ctrl+u` | Scroll half a page up |
+| `J` / `Space` | Scroll half a page down |
+| `K` | Scroll half a page up |
 | `Ctrl+f` / `PageDown` | Scroll a full page down |
 | `Ctrl+b` / `PageUp` | Scroll a full page up |
 | `gg` | Jump to the top |

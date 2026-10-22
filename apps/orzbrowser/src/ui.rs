@@ -28,8 +28,8 @@ const HELP_SECTIONS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("j / ↓", "scroll line down"),
             ("k / ↑", "scroll line up"),
-            ("Ctrl-d / Space", "scroll half-page down"),
-            ("Ctrl-u", "scroll half-page up"),
+            ("J / Space", "scroll half-page down"),
+            ("K", "scroll half-page up"),
             ("Ctrl-f / PgDn", "scroll page down"),
             ("Ctrl-b / PgUp", "scroll page up"),
             ("gg", "scroll to top"),
