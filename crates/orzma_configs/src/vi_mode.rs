@@ -383,9 +383,9 @@ vi_mode_fields! {
     /// Scroll one page down.
     page_down => "page-down", ViModeAction::Scroll(ViModeScroll::PageDown), ["Ctrl+F"];
     /// Scroll half a page up.
-    half_page_up => "half-page-up", ViModeAction::Scroll(ViModeScroll::HalfPageUp), ["Ctrl+U"];
+    half_page_up => "half-page-up", ViModeAction::Scroll(ViModeScroll::HalfPageUp), ["K"];
     /// Scroll half a page down.
-    half_page_down => "half-page-down", ViModeAction::Scroll(ViModeScroll::HalfPageDown), ["Ctrl+D"];
+    half_page_down => "half-page-down", ViModeAction::Scroll(ViModeScroll::HalfPageDown), ["J"];
     /// Scroll one line up.
     scroll_up => "scroll-up", ViModeAction::Scroll(ViModeScroll::ScrollUp), ["Ctrl+Y"];
     /// Scroll one line down.
@@ -632,6 +632,8 @@ mod tests {
         assert_eq!(cfg.line_end, vec![plain("$")]);
         assert_eq!(cfg.next_space, vec![plain("W")]);
         assert_eq!(cfg.page_down, vec![ctrl("f")]);
+        assert_eq!(cfg.half_page_up, vec![plain("K")]);
+        assert_eq!(cfg.half_page_down, vec![plain("J")]);
         assert_eq!(cfg.toggle_rect_selection, vec![ctrl("v")]);
         assert_eq!(
             cfg.yank,

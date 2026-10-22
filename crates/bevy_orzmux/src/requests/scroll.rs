@@ -48,7 +48,7 @@ mod tests {
     /// `Scroll` command for that pane id, and one for a non-pane entity
     /// sends nothing.
     ///
-    /// Case: the user presses `Ctrl+U` in vi mode over a pane, and a scroll
+    /// Case: the user presses `Shift+K` in vi mode over a pane, and a scroll
     /// request then arrives for the separator entity.
     #[test]
     fn scroll_requests_become_scroll_commands_for_the_pane() {

@@ -105,8 +105,8 @@ instead (see [Vi mode](vi-mode.md)).
 | `history-bottom` | `G` | Scroll to the live tail. |
 | `page-up` | `Ctrl+B` | Scroll one page up. |
 | `page-down` | `Ctrl+F` | Scroll one page down. |
-| `half-page-up` | `Ctrl+U` | Scroll half a page up. |
-| `half-page-down` | `Ctrl+D` | Scroll half a page down. |
+| `half-page-up` | `K` | Scroll half a page up. |
+| `half-page-down` | `J` | Scroll half a page down. |
 | `scroll-up` | `Ctrl+Y` | Scroll one line up. |
 | `scroll-down` | `Ctrl+E` | Scroll one line down. |
 | `toggle-selection` | `v`, `Space` | Toggle a character-wise selection. |
