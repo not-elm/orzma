@@ -467,8 +467,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// Encodes a key press and queues it for the PTY.
     ///
     /// Dismisses the selection and snaps a scrolled-back viewport to the
-    /// live tail first, even when the key is then refused. `Ok` means the
-    /// key was queued, not that it reached the PTY.
+    /// live tail first, even when the key is then refused. A key that
+    /// encodes to no bytes leaves the selection and the viewport alone and
+    /// queues nothing. `Ok` means the key was queued, not that it reached
+    /// the PTY.
     ///
     /// # Errors
     ///
@@ -477,9 +479,12 @@ impl<V: Vt> OrzmaTty<V> {
     /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_key(&mut self, key: &TerminalKey, mods: &TerminalModifiers) -> OrzmaTtyResult {
         let modes = KeyEncodingModes::read(&self.vt);
+        let bytes = PtyInput::encode_key(key, mods, modes).into_bytes();
+        if bytes.is_empty() {
+            return Ok(());
+        }
         self.begin_input();
-        self.pty
-            .enqueue_write(PtyInput::encode_key(key, mods, modes).into_bytes())
+        self.pty.enqueue_write(bytes)
     }
 
     /// Routes one frame's wheel travel by the VT's current modes and

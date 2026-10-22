@@ -123,6 +123,32 @@ fn send_key_writes_the_kitty_form_while_the_vt_reports_flag_1() {
     assert_eq!(sink.contents(), b"\x1b[13;2u\x1b[A");
 }
 
+/// Asserts that a key which encodes to no bytes leaves the selection, the
+/// scrolled-back viewport and the PTY queue alone.
+///
+/// Case: the user, scrolled back with a selection on screen, presses
+/// Ctrl+Alt with a key the host cannot name while no kitty keyboard flag is
+/// set.
+#[test]
+fn send_key_with_no_bytes_leaves_the_screen_alone() {
+    let (mut term, sink) = detached_term();
+    term.vt.set_selection_changes(true);
+    term.vt.set_display_offset(DisplayOffset(3));
+    let ctrl_alt = TerminalModifiers {
+        ctrl: true,
+        alt: true,
+        ..TerminalModifiers::default()
+    };
+    term.send_key(&TerminalKey::Unidentified { unshifted: 'a' }, &ctrl_alt)
+        .expect("send_key");
+    term.settle_writes();
+    assert!(term.vt.selections().is_empty());
+    assert!(term.vt.scrolls().is_empty());
+    assert_eq!(term.vt.display_offset(), DisplayOffset(3));
+    assert!(sink.contents().is_empty());
+    assert!(!term.coalescer.is_armed());
+}
+
 /// Asserts that paste encoding consults the VT-reported bracketed
 /// paste mode.
 ///
