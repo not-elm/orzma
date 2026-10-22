@@ -41,9 +41,9 @@ jobs:
             patterns: "test_*.py"
           # The macOS bundler tests assert POSIX path strings ("/tmp/a.app" against
           # "\tmp\a.app") and fail on Windows. They are unrelated to this work, so the
-          # Windows leg runs only the two suites added here.
+          # Windows leg runs only the three suites added here.
           - os: windows-latest
-            patterns: "test_stage_windows.py test_build_ico.py"
+            patterns: "test_stage_windows.py test_build_ico.py test_conpty.py"
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5

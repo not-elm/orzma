@@ -18,7 +18,7 @@ You need:
 - Node.js 22 or later, and pnpm 10.30.2 (the `packageManager` in
   `package.json`): `npm install -g pnpm@10.30.2`.
 - [just](https://just.systems).
-- On Windows, CMake and Ninja: `winget install Kitware.CMake Ninja-build.Ninja`.
+- On Windows, CMake, Ninja, and Python 3.12 or later: `winget install Kitware.CMake Ninja-build.Ninja`.
 - On Linux, the build packages the release build uses — on Ubuntu or Debian,
   `sudo apt install build-essential pkg-config libasound2-dev libudev-dev
 libwayland-dev libxkbcommon-dev libfontconfig1-dev` — and the runtime
@@ -46,6 +46,10 @@ just run         # builds and runs orzma
 On Windows, `just build`, `just run`, and `just test` set `CEF_PATH` for you.
 When you run cargo yourself — including through `just fix-lint` — set
 `CEF_PATH` to `%USERPROFILE%\.cache\orzma\cef` first.
+
+On Windows, `just build`, `just run` and `just test` also place the ConPTY
+orzma ships in `target\debug`, fetched once from nuget.org, and a plain
+`cargo run` or `cargo test` uses it only after one of them has run.
 
 ## Architecture
 
