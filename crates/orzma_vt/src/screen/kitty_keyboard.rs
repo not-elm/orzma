@@ -33,8 +33,7 @@ impl KittyKeyboardFlags {
     /// Keeps only the [`SUPPORTED`](Self::SUPPORTED) bits of a request; a value past `u16` keeps
     /// its supported low bits rather than saturating.
     pub fn from_request(raw: i64) -> Self {
-        let masked = raw & i64::from(Self::SUPPORTED.bits());
-        Self::from_bits_truncate(u16::try_from(masked).unwrap_or(0))
+        Self::from_bits_truncate(raw as u16) & Self::SUPPORTED
     }
 }
 
