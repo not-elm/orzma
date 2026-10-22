@@ -5,8 +5,8 @@
 use crate::CellPixels;
 use orzma_vt::prelude::{
     CellSide, DisplayOffset, Frame, GridColumn, GridPoint, GridSize, InstanceId, InterpretOutput,
-    PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, SynchronizedOutput, ViCursor,
-    ViModeSwitch, ViMotion, Vt, VtModes,
+    KittyKeyboardFlags, PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind,
+    SynchronizedOutput, ViCursor, ViModeSwitch, ViMotion, Vt, VtModes,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -145,6 +145,8 @@ pub struct FakeVt {
     /// visibility, for one — does not reach the scripted frames; script
     /// the frame to match instead.
     modes: VtModes,
+    /// Flags `kitty_keyboard_flags` reports.
+    kitty_keyboard_flags: KittyKeyboardFlags,
     /// Scripted return for non-`Bottom` scrolls.
     scroll_moves: bool,
     /// Scripted return for the selection operations.
@@ -185,6 +187,7 @@ impl FakeVt {
             grid_size,
             display_offset: DisplayOffset(0),
             modes: VtModes::default(),
+            kitty_keyboard_flags: KittyKeyboardFlags::empty(),
             scroll_moves: false,
             selection_changes: false,
             selections: Vec::new(),
@@ -214,6 +217,11 @@ impl FakeVt {
     /// Returns the terminal modes the host reads back, for mutation.
     pub fn modes_mut(&mut self) -> &mut VtModes {
         &mut self.modes
+    }
+
+    /// Sets the flags `kitty_keyboard_flags` reports.
+    pub fn set_kitty_keyboard_flags(&mut self, flags: KittyKeyboardFlags) {
+        self.kitty_keyboard_flags = flags;
     }
 
     /// Sets the verdict returned for non-`Bottom` scrolls.
@@ -378,6 +386,10 @@ impl Vt for FakeVt {
 
     fn modes(&self) -> VtModes {
         self.modes
+    }
+
+    fn kitty_keyboard_flags(&self) -> KittyKeyboardFlags {
+        self.kitty_keyboard_flags
     }
 
     fn switch_vi_mode(&mut self, _switch: ViModeSwitch) -> bool {

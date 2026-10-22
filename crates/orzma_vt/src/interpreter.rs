@@ -21,6 +21,7 @@ use crate::interpreter::osc::hyperlink::HyperlinkRequest;
 use crate::interpreter::osc::palette::{PaletteRequest, palette_reply};
 use crate::interpreter::osc::{OscTerminator, current_dir, window_title};
 use crate::screen::character_sets::{CharacterSet, GCode, SingleShift};
+use crate::screen::kitty_keyboard::KeyboardFlagSetMode;
 use crate::screen::margins::OriginMode;
 use crate::screen::tabs::CharacterTabEdit;
 use crate::screen::{EraseLineMode, EraseScreenMode};
@@ -269,6 +270,26 @@ impl VTActor for Executor<'_> {
             // SCOSC
             (None, [], b's') if params.values().count() == 0 => {
                 self.device.active_screen_mut().save_checkpoint()
+            }
+            // Kitty keyboard flags query
+            (Some(b'?'), [], b'u') => {
+                let flags = self.device.kitty_keyboard_flags();
+                self.reply(format!("[?{}u", flags.bits()).as_bytes());
+            }
+            // Kitty keyboard flags push
+            (Some(b'>'), [], b'u') => self
+                .device
+                .push_kitty_keyboard_flags(params.raw_value(0).unwrap_or(0)),
+            // Kitty keyboard flags pop
+            (Some(b'<'), [], b'u') => self
+                .device
+                .pop_kitty_keyboard_flags(params.value(0).unwrap_or(1)),
+            // Kitty keyboard flags set
+            (Some(b'='), [], b'u') => {
+                if let Some(mode) = KeyboardFlagSetMode::from_param(params.value(1).unwrap_or(1)) {
+                    self.device
+                        .set_kitty_keyboard_flags(params.raw_value(0).unwrap_or(0), mode);
+                }
             }
             // SCORC
             (None, [], b'u') if params.values().count() == 0 => {

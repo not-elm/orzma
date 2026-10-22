@@ -19,6 +19,7 @@ use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, ScreenLine};
 use crate::screen::grid::reflow::ScrollbackOnGrow;
+use crate::screen::kitty_keyboard::{KeyboardFlagSetMode, KittyKeyboardFlags};
 use crate::screen::margins::OriginMode;
 use crate::screen::selection::SelectionKind;
 use crate::screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion, ViewChange};
@@ -333,10 +334,12 @@ impl DeviceState {
     ///
     /// The open hyperlink is closed.
     ///
+    /// The keyboard flags of both screens are cleared.
+    ///
     /// The modes it does not name are left as they are, and so are the
-    /// cells and the cursor position on show, the hidden screen, the
-    /// title, and the palette's foreground, background, and cursor
-    /// color.
+    /// cells and the cursor position on show, everything else on the
+    /// hidden screen, the title, and the palette's foreground,
+    /// background, and cursor color.
     ///
     /// The cursor's shape and blink are left as they are; vt510.pdf
     /// p.277 Table 5-9 lists only `Text cursor enable`.
@@ -351,8 +354,68 @@ impl DeviceState {
         self.modes.keypad_mode = KeypadMode::Numeric;
         self.set_auto_wrap(AutoWrap::Enabled);
         self.active_screen_mut().soft_reset();
+        self.screens.primary.kitty_keyboard_mut().clear();
+        self.screens.alternate.kitty_keyboard_mut().clear();
         self.active_hyperlink = None;
         self.reset_indexed_colors().then_some(DamageSpan::Full)
+    }
+
+    /// The keyboard flags in force on the screen on show; empty when the
+    /// program asked for none.
+    ///
+    /// # References
+    ///
+    /// <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
+    pub fn kitty_keyboard_flags(&self) -> KittyKeyboardFlags {
+        self.active_screen().kitty_keyboard().current()
+    }
+
+    /// Pushes the supported flags of `requested` onto the keyboard flag
+    /// stack of the screen on show; the oldest entry is evicted when the
+    /// stack is full.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CSI > flags u`
+    ///
+    /// # References
+    ///
+    /// <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
+    pub fn push_kitty_keyboard_flags(&mut self, requested: i64) {
+        self.active_screen_mut()
+            .kitty_keyboard_mut()
+            .push(KittyKeyboardFlags::from_request(requested));
+    }
+
+    /// Pops `count` entries from the keyboard flag stack of the screen on
+    /// show; popping more entries than the stack holds empties it.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CSI < count u`
+    ///
+    /// # References
+    ///
+    /// <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
+    pub fn pop_kitty_keyboard_flags(&mut self, count: u16) {
+        self.active_screen_mut().kitty_keyboard_mut().pop(count);
+    }
+
+    /// Rewrites the top entry of the keyboard flag stack of the screen on
+    /// show with the supported flags of `requested`, combined by `mode`;
+    /// an empty stack gets an entry first.
+    ///
+    /// # Control Functions
+    ///
+    /// - `CSI = flags ; mode u`
+    ///
+    /// # References
+    ///
+    /// <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
+    pub fn set_kitty_keyboard_flags(&mut self, requested: i64, mode: KeyboardFlagSetMode) {
+        self.active_screen_mut()
+            .kitty_keyboard_mut()
+            .set(KittyKeyboardFlags::from_request(requested), mode);
     }
 
     /// The window title the application last set, if any.

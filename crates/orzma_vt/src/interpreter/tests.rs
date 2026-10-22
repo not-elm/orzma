@@ -192,6 +192,7 @@ mod frame_wraps;
 mod hyperlink;
 mod interpret_output;
 mod keypad;
+mod kitty_keyboard;
 mod line_editing;
 mod line_movement;
 mod media_copy;
