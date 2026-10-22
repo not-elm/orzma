@@ -1,28 +1,14 @@
-//! The numeric keypad's key vocabulary and its VT encoder. Which bytes a
-//! keypad key sends depends on `DECKPAM` / `DECKPNM` rather than on the
-//! modifiers the rest of the keyboard reads.
+//! The numeric keypad's physical key vocabulary and its legacy encoding,
+//! which sends what the key typed or else what its navigation namesake sends.
 
-use orzma_vt::prelude::KeypadMode;
+use super::{CursorKey, EditingKey, KeyText, TerminalModifiers};
 
-/// A key on the PC-layout numeric keypad.
+/// A physical key on the PC-layout numeric keypad.
 ///
-/// [`Self::Comma`] and [`Self::Decimal`] name the character a key types
-/// rather than the station it sits at, so a layout whose decimal separator
-/// is a comma reaches this vocabulary as [`Self::Comma`].
+/// The variant names the key itself; the character the key types travels in
+/// [`TerminalKey::Keypad`](super::TerminalKey::Keypad)'s `text`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeypadKey {
-    Divide,
-    Multiply,
-    Subtract,
-    Add,
-    /// The `,` key, which German and French layouts type where a US layout
-    /// types [`Self::Decimal`].
-    Comma,
-    /// The `=` key, which Macintosh and Sun keypads carry.
-    Equal,
-    /// The `.` key.
-    Decimal,
-    Enter,
     Zero,
     One,
     Two,
@@ -33,64 +19,79 @@ pub enum KeypadKey {
     Seven,
     Eight,
     Nine,
+    Decimal,
+    Divide,
+    Multiply,
+    Subtract,
+    Add,
+    Enter,
+    Equal,
+    Separator,
+    Left,
+    Right,
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+    Insert,
+    Delete,
+    Begin,
 }
 
 impl KeypadKey {
-    /// Encodes the keypad key input to the PTY bytes.
+    /// Encodes the keypad key to the PTY bytes of the legacy form.
     ///
-    /// # References
-    ///
-    /// - [VT220-Style Function Keys] — the keypad table this follows.
-    ///
-    /// [VT220-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-VT220-Style-Function-Keys
-    pub(super) fn encode(&self, mode: KeypadMode) -> &'static [u8] {
-        macro_rules! ss3 {
-            ($numeric:literal) => {
-                &[0x1b, b'O', $numeric + 0x40]
-            };
+    /// With `text`, the key sends what a text key sends. Without it, Enter
+    /// sends CR, the arrows, Home, and End send what their cursor keys send
+    /// under `app_cursor` (DECCKM), Insert, Delete, PageUp, and PageDown send
+    /// what their editing keys send, and Begin sends nothing. A digit or an
+    /// operator key sends the character it names.
+    pub(super) fn encode_legacy(
+        self,
+        text: Option<&KeyText>,
+        mods: &TerminalModifiers,
+        app_cursor: bool,
+    ) -> Vec<u8> {
+        if let Some(text) = text {
+            return text.encode(mods);
         }
-        match mode {
-            KeypadMode::Numeric => match self {
-                KeypadKey::Divide => b"/",
-                KeypadKey::Multiply => b"*",
-                KeypadKey::Subtract => b"-",
-                KeypadKey::Add => b"+",
-                KeypadKey::Comma => b",",
-                KeypadKey::Equal => b"=",
-                KeypadKey::Decimal => b".",
-                KeypadKey::Enter => b"\r",
-                KeypadKey::Zero => b"0",
-                KeypadKey::One => b"1",
-                KeypadKey::Two => b"2",
-                KeypadKey::Three => b"3",
-                KeypadKey::Four => b"4",
-                KeypadKey::Five => b"5",
-                KeypadKey::Six => b"6",
-                KeypadKey::Seven => b"7",
-                KeypadKey::Eight => b"8",
-                KeypadKey::Nine => b"9",
-            },
-            KeypadMode::Application => match self {
-                KeypadKey::Divide => ss3!(b'/'),
-                KeypadKey::Multiply => ss3!(b'*'),
-                KeypadKey::Subtract => ss3!(b'-'),
-                KeypadKey::Add => ss3!(b'+'),
-                KeypadKey::Comma => ss3!(b','),
-                KeypadKey::Equal => b"\x1bOX",
-                KeypadKey::Decimal => ss3!(b'.'),
-                KeypadKey::Enter => ss3!(b'\r'),
-                KeypadKey::Zero => ss3!(b'0'),
-                KeypadKey::One => ss3!(b'1'),
-                KeypadKey::Two => ss3!(b'2'),
-                KeypadKey::Three => ss3!(b'3'),
-                KeypadKey::Four => ss3!(b'4'),
-                KeypadKey::Five => ss3!(b'5'),
-                KeypadKey::Six => ss3!(b'6'),
-                KeypadKey::Seven => ss3!(b'7'),
-                KeypadKey::Eight => ss3!(b'8'),
-                KeypadKey::Nine => ss3!(b'9'),
-            },
+        match self {
+            Self::Enter => vec![0x0d],
+            Self::Up => CursorKey::Up.encode(mods, app_cursor),
+            Self::Down => CursorKey::Down.encode(mods, app_cursor),
+            Self::Left => CursorKey::Left.encode(mods, app_cursor),
+            Self::Right => CursorKey::Right.encode(mods, app_cursor),
+            Self::Home => CursorKey::Home.encode(mods, app_cursor),
+            Self::End => CursorKey::End.encode(mods, app_cursor),
+            Self::Insert => EditingKey::Insert.encode(mods),
+            Self::Delete => EditingKey::Delete.encode(mods),
+            Self::PageUp => EditingKey::PageUp.encode(mods),
+            Self::PageDown => EditingKey::PageDown.encode(mods),
+            Self::Begin => Vec::new(),
+            Self::Zero => self.encode_character("0", mods),
+            Self::One => self.encode_character("1", mods),
+            Self::Two => self.encode_character("2", mods),
+            Self::Three => self.encode_character("3", mods),
+            Self::Four => self.encode_character("4", mods),
+            Self::Five => self.encode_character("5", mods),
+            Self::Six => self.encode_character("6", mods),
+            Self::Seven => self.encode_character("7", mods),
+            Self::Eight => self.encode_character("8", mods),
+            Self::Nine => self.encode_character("9", mods),
+            Self::Decimal => self.encode_character(".", mods),
+            Self::Divide => self.encode_character("/", mods),
+            Self::Multiply => self.encode_character("*", mods),
+            Self::Subtract => self.encode_character("-", mods),
+            Self::Add => self.encode_character("+", mods),
+            Self::Equal => self.encode_character("=", mods),
+            Self::Separator => self.encode_character(",", mods),
         }
+    }
+
+    fn encode_character(self, character: &str, mods: &TerminalModifiers) -> Vec<u8> {
+        KeyText::new(character).map_or_else(Vec::new, |text| text.encode(mods))
     }
 }
 
@@ -98,80 +99,115 @@ impl KeypadKey {
 mod tests {
     use super::*;
 
-    /// Asserts that numeric mode sends the character each keypad key types
-    /// rather than an escape sequence.
-    ///
-    /// Case: a shell prompt is waiting for input and the user types a figure
-    /// and an operator on the numeric keypad, then presses its Enter to
-    /// submit the line.
-    #[test]
-    fn numeric_mode_sends_characters_rather_than_sequences() {
-        let cases: [(KeypadKey, &[u8]); 18] = [
-            (KeypadKey::Divide, b"/"),
-            (KeypadKey::Multiply, b"*"),
-            (KeypadKey::Subtract, b"-"),
-            (KeypadKey::Add, b"+"),
-            (KeypadKey::Comma, b","),
-            (KeypadKey::Equal, b"="),
-            (KeypadKey::Decimal, b"."),
-            (KeypadKey::Enter, b"\r"),
-            (KeypadKey::Zero, b"0"),
-            (KeypadKey::One, b"1"),
-            (KeypadKey::Two, b"2"),
-            (KeypadKey::Three, b"3"),
-            (KeypadKey::Four, b"4"),
-            (KeypadKey::Five, b"5"),
-            (KeypadKey::Six, b"6"),
-            (KeypadKey::Seven, b"7"),
-            (KeypadKey::Eight, b"8"),
-            (KeypadKey::Nine, b"9"),
-        ];
-        for (key, expected) in cases {
-            assert_eq!(key.encode(KeypadMode::Numeric), expected);
-        }
+    fn no_mods() -> TerminalModifiers {
+        TerminalModifiers::default()
     }
 
-    /// Asserts that every keypad key except `=` sends `SS3` followed by its
-    /// numeric-mode byte raised by 0x40, rather than the editing sequences
-    /// the digits' gray legends name.
+    /// Asserts that a keypad key carrying text sends what a text key sends,
+    /// with Alt prefixing ESC.
     ///
-    /// Case: a full-screen spreadsheet has taken the keypad over with
-    /// `DECKPAM` and the user types a figure and an operator into a cell,
-    /// then presses the keypad Enter to commit it.
+    /// Case: a layout types a comma on the keypad's decimal key, and the user
+    /// also types a digit with Alt held.
     #[test]
-    fn application_mode_shifts_the_numeric_byte_into_the_ss3_range() {
-        let cases: [(KeypadKey, &[u8]); 17] = [
-            (KeypadKey::Enter, b"\x1bOM"),
-            (KeypadKey::Multiply, b"\x1bOj"),
-            (KeypadKey::Add, b"\x1bOk"),
-            (KeypadKey::Comma, b"\x1bOl"),
-            (KeypadKey::Subtract, b"\x1bOm"),
-            (KeypadKey::Decimal, b"\x1bOn"),
-            (KeypadKey::Divide, b"\x1bOo"),
-            (KeypadKey::Zero, b"\x1bOp"),
-            (KeypadKey::One, b"\x1bOq"),
-            (KeypadKey::Two, b"\x1bOr"),
-            (KeypadKey::Three, b"\x1bOs"),
-            (KeypadKey::Four, b"\x1bOt"),
-            (KeypadKey::Five, b"\x1bOu"),
-            (KeypadKey::Six, b"\x1bOv"),
-            (KeypadKey::Seven, b"\x1bOw"),
-            (KeypadKey::Eight, b"\x1bOx"),
-            (KeypadKey::Nine, b"\x1bOy"),
-        ];
-        for (key, expected) in cases {
-            assert_eq!(key.encode(KeypadMode::Application), expected);
-        }
+    fn keypad_text_is_sent_as_a_text_key_sends_it() {
+        let one = KeyText::new("1").expect("one is non-empty");
+        let comma = KeyText::new(",").expect("a comma is non-empty");
+        let alt = TerminalModifiers {
+            alt: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            KeypadKey::One.encode_legacy(Some(&one), &no_mods(), false),
+            b"1".to_vec()
+        );
+        assert_eq!(
+            KeypadKey::One.encode_legacy(Some(&one), &alt, false),
+            b"\x1b1".to_vec()
+        );
+        assert_eq!(
+            KeypadKey::Decimal.encode_legacy(Some(&comma), &no_mods(), false),
+            b",".to_vec()
+        );
     }
 
-    /// Asserts that the keypad `=` uses `SS3 X`, which the character-plus-0x40
-    /// rule the other keys follow would not produce.
+    /// Asserts that the keypad Enter without text sends CR whether or not
+    /// Shift is held.
     ///
-    /// Case: a Macintosh keyboard, whose keypad carries `=`, is driving an
-    /// application that has taken the keypad over.
+    /// Case: the user submits a shell line with the keypad Enter key.
     #[test]
-    fn application_mode_equal_uses_ss3_x() {
-        let expected: &[u8] = b"\x1bOX";
-        assert_eq!(KeypadKey::Equal.encode(KeypadMode::Application), expected);
+    fn keypad_enter_without_text_sends_carriage_return() {
+        let shift = TerminalModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            KeypadKey::Enter.encode_legacy(None, &no_mods(), false),
+            b"\r".to_vec()
+        );
+        assert_eq!(
+            KeypadKey::Enter.encode_legacy(None, &shift, false),
+            b"\r".to_vec()
+        );
+    }
+
+    /// Asserts that keypad navigation keys without text send what their
+    /// cursor and editing namesakes send, honouring DECCKM and modifiers.
+    ///
+    /// Case: NumLock is off and the user moves through a document with the
+    /// keypad's arrows, Home, Page Up, and Delete.
+    #[test]
+    fn keypad_navigation_keys_send_their_namesakes_legacy_form() {
+        let ctrl = TerminalModifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            KeypadKey::Up.encode_legacy(None, &no_mods(), false),
+            b"\x1b[A".to_vec()
+        );
+        assert_eq!(
+            KeypadKey::Up.encode_legacy(None, &no_mods(), true),
+            b"\x1bOA".to_vec()
+        );
+        assert_eq!(
+            KeypadKey::Up.encode_legacy(None, &ctrl, false),
+            b"\x1b[1;5A".to_vec()
+        );
+        assert_eq!(
+            KeypadKey::Home.encode_legacy(None, &no_mods(), true),
+            b"\x1bOH".to_vec()
+        );
+        assert_eq!(
+            KeypadKey::PageUp.encode_legacy(None, &no_mods(), false),
+            b"\x1b[5~".to_vec()
+        );
+        assert_eq!(
+            KeypadKey::Delete.encode_legacy(None, &no_mods(), false),
+            b"\x1b[3~".to_vec()
+        );
+    }
+
+    /// Asserts that the keypad Begin key without text sends no bytes.
+    ///
+    /// Case: the user presses the keypad's centre key with NumLock off.
+    #[test]
+    fn keypad_begin_sends_nothing() {
+        assert!(
+            KeypadKey::Begin
+                .encode_legacy(None, &no_mods(), false)
+                .is_empty()
+        );
+    }
+
+    /// Asserts that a keypad digit without text sends the digit it names.
+    ///
+    /// Case: the user types a figure on the keypad of a host that reports the
+    /// key without the character it typed.
+    #[test]
+    fn a_keypad_digit_without_text_sends_the_digit() {
+        assert_eq!(
+            KeypadKey::Seven.encode_legacy(None, &no_mods(), false),
+            b"7".to_vec()
+        );
     }
 }

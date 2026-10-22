@@ -11,7 +11,7 @@ pub use cursor::CursorKey;
 pub use editing::EditingKey;
 pub use function::FunctionKey;
 pub use keypad::KeypadKey;
-use orzma_vt::prelude::KeypadMode;
+use orzma_vt::prelude::Vt;
 pub use text::KeyText;
 
 /// Subset of keys the terminal input codec understands.
@@ -19,7 +19,13 @@ pub use text::KeyText;
 pub enum TerminalKey {
     /// UTF-8 text (single char or multi-codepoint composition).
     Character(KeyText),
-    Keypad(KeypadKey),
+    /// A numeric keypad key.
+    Keypad {
+        /// The physical key.
+        key: KeypadKey,
+        /// What the key typed, if anything.
+        text: Option<KeyText>,
+    },
     Function(FunctionKey),
     Cursor(CursorKey),
     Editing(EditingKey),
@@ -48,12 +54,27 @@ impl TerminalModifiers {
     }
 }
 
+/// The terminal state a key's encoding depends on: DECCKM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyEncodingModes {
+    app_cursor: bool,
+}
+
+impl KeyEncodingModes {
+    /// Reads the modes a key press is encoded under from `vt`.
+    pub fn read(vt: &impl Vt) -> Self {
+        Self {
+            app_cursor: vt.modes().app_cursor,
+        }
+    }
+}
+
 /// Translates a logical key + modifiers into the bytes the PTY expects.
 ///
-/// The encoding is total: every `TerminalKey` has a representation.
+/// A key with no legacy form encodes to no bytes.
 ///
 /// The cursor keys — the arrows plus Home and End — honour
-/// `app_cursor_keys` (DECCKM) when neither Shift, Alt, nor Ctrl is held:
+/// DECCKM in `modes` when neither Shift, Alt, nor Ctrl is held:
 /// `ESC [ A/B/C/D/H/F` in normal mode, `ESC O A/B/C/D/H/F` in application
 /// mode. With any of the three held, they send `CSI 1 ; m A/B/C/D/H/F` in
 /// either mode. The editing keypad (Insert, Delete, PageUp, PageDown) is
@@ -65,14 +86,15 @@ impl TerminalModifiers {
 pub(super) fn encode_key(
     key: &TerminalKey,
     mods: &TerminalModifiers,
-    app_cursor_keys: bool,
-    keypad_mode: KeypadMode,
+    modes: KeyEncodingModes,
 ) -> Vec<u8> {
     match key {
         TerminalKey::Character(text) => text.encode(mods),
-        TerminalKey::Keypad(keypad) => keypad.encode(keypad_mode).to_vec(),
+        TerminalKey::Keypad { key, text } => {
+            key.encode_legacy(text.as_ref(), mods, modes.app_cursor)
+        }
         TerminalKey::Function(function) => function.encode(mods),
-        TerminalKey::Cursor(cursor) => cursor.encode(mods, app_cursor_keys),
+        TerminalKey::Cursor(cursor) => cursor.encode(mods, modes.app_cursor),
         TerminalKey::Editing(editing) => editing.encode(mods),
         TerminalKey::Enter => vec![0x0d],
         TerminalKey::Backspace => vec![0x7f],
@@ -116,31 +138,39 @@ mod tests {
         }
     }
 
+    fn modes(app_cursor: bool) -> KeyEncodingModes {
+        KeyEncodingModes { app_cursor }
+    }
+
+    /// Asserts that Enter sends a carriage return.
+    ///
+    /// Case: the user submits a shell command line with Enter.
     #[test]
     fn enter_is_carriage_return() {
         assert_eq!(
-            encode_key(&TerminalKey::Enter, &no_mods(), false, KeypadMode::Numeric),
+            encode_key(&TerminalKey::Enter, &no_mods(), modes(false)),
             vec![0x0d]
         );
     }
 
+    /// Asserts that Backspace sends DEL.
+    ///
+    /// Case: the user erases the character before the cursor at a shell prompt.
     #[test]
     fn backspace_is_del() {
         assert_eq!(
-            encode_key(
-                &TerminalKey::Backspace,
-                &no_mods(),
-                false,
-                KeypadMode::Numeric
-            ),
+            encode_key(&TerminalKey::Backspace, &no_mods(), modes(false)),
             vec![0x7f]
         );
     }
 
+    /// Asserts that Tab sends HT.
+    ///
+    /// Case: the user presses Tab to complete a path at a shell prompt.
     #[test]
     fn tab_is_horizontal_tab() {
         assert_eq!(
-            encode_key(&TerminalKey::Tab, &no_mods(), false, KeypadMode::Numeric),
+            encode_key(&TerminalKey::Tab, &no_mods(), modes(false)),
             vec![0x09]
         );
     }
@@ -158,7 +188,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            encode_key(&TerminalKey::Tab, &shift, false, KeypadMode::Numeric),
+            encode_key(&TerminalKey::Tab, &shift, modes(false)),
             b"\x1b[Z".to_vec()
         );
         let ctrl_shift = TerminalModifiers {
@@ -167,7 +197,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            encode_key(&TerminalKey::Tab, &ctrl_shift, false, KeypadMode::Numeric),
+            encode_key(&TerminalKey::Tab, &ctrl_shift, modes(false)),
             vec![0x09]
         );
         for other in [
@@ -183,17 +213,20 @@ mod tests {
             },
         ] {
             assert_eq!(
-                encode_key(&TerminalKey::Tab, &other, false, KeypadMode::Numeric),
+                encode_key(&TerminalKey::Tab, &other, modes(false)),
                 vec![0x09],
                 "{other:?} leaves Tab as HT"
             );
         }
     }
 
+    /// Asserts that Escape sends ESC.
+    ///
+    /// Case: the user leaves insert mode in a full-screen editor with Escape.
     #[test]
     fn escape_is_esc() {
         assert_eq!(
-            encode_key(&TerminalKey::Escape, &no_mods(), false, KeypadMode::Numeric),
+            encode_key(&TerminalKey::Escape, &no_mods(), modes(false)),
             vec![0x1b]
         );
     }
@@ -210,8 +243,7 @@ mod tests {
                 encode_key(
                     &TerminalKey::Editing(EditingKey::Insert),
                     &no_mods(),
-                    app_cursor,
-                    KeypadMode::Numeric
+                    modes(app_cursor)
                 ),
                 b"\x1b[2~".to_vec()
             );
@@ -219,8 +251,7 @@ mod tests {
                 encode_key(
                     &TerminalKey::Editing(EditingKey::Delete),
                     &no_mods(),
-                    app_cursor,
-                    KeypadMode::Numeric
+                    modes(app_cursor)
                 ),
                 b"\x1b[3~".to_vec()
             );
@@ -228,8 +259,7 @@ mod tests {
                 encode_key(
                     &TerminalKey::Editing(EditingKey::PageUp),
                     &no_mods(),
-                    app_cursor,
-                    KeypadMode::Numeric
+                    modes(app_cursor)
                 ),
                 b"\x1b[5~".to_vec()
             );
@@ -237,31 +267,28 @@ mod tests {
                 encode_key(
                     &TerminalKey::Editing(EditingKey::PageDown),
                     &no_mods(),
-                    app_cursor,
-                    KeypadMode::Numeric
+                    modes(app_cursor)
                 ),
                 b"\x1b[6~".to_vec()
             );
         }
     }
 
+    /// Asserts that the arrow keys send `SS3` sequences while DECCKM is set.
+    ///
+    /// Case: a full-screen pager turns on application cursor keys and the
+    /// user scrolls it with the arrow keys.
     #[test]
     fn arrows_use_ss3_in_application_cursor_mode() {
         assert_eq!(
-            encode_key(
-                &TerminalKey::Cursor(CursorKey::Up),
-                &no_mods(),
-                true,
-                KeypadMode::Numeric
-            ),
+            encode_key(&TerminalKey::Cursor(CursorKey::Up), &no_mods(), modes(true)),
             b"\x1bOA".to_vec()
         );
         assert_eq!(
             encode_key(
                 &TerminalKey::Cursor(CursorKey::Down),
                 &no_mods(),
-                true,
-                KeypadMode::Numeric
+                modes(true)
             ),
             b"\x1bOB".to_vec()
         );
@@ -269,8 +296,7 @@ mod tests {
             encode_key(
                 &TerminalKey::Cursor(CursorKey::Right),
                 &no_mods(),
-                true,
-                KeypadMode::Numeric
+                modes(true)
             ),
             b"\x1bOC".to_vec()
         );
@@ -278,33 +304,38 @@ mod tests {
             encode_key(
                 &TerminalKey::Cursor(CursorKey::Left),
                 &no_mods(),
-                true,
-                KeypadMode::Numeric
+                modes(true)
             ),
             b"\x1bOD".to_vec()
         );
     }
 
+    /// Asserts that Ctrl with a letter sends the matching C0 byte.
+    ///
+    /// Case: the user presses Ctrl-C to interrupt a running command.
     #[test]
     fn ctrl_letter_collapses_to_c0_byte() {
         assert_eq!(
-            encode_key(&character("a"), &ctrl(), false, KeypadMode::Numeric),
+            encode_key(&character("a"), &ctrl(), modes(false)),
             vec![0x01]
         );
         assert_eq!(
-            encode_key(&character("c"), &ctrl(), false, KeypadMode::Numeric),
+            encode_key(&character("c"), &ctrl(), modes(false)),
             vec![0x03]
         );
         assert_eq!(
-            encode_key(&character("z"), &ctrl(), false, KeypadMode::Numeric),
+            encode_key(&character("z"), &ctrl(), modes(false)),
             vec![0x1a]
         );
     }
 
+    /// Asserts that Alt with a letter sends the letter prefixed with ESC.
+    ///
+    /// Case: the user presses Alt-H at a shell prompt that binds it.
     #[test]
     fn alt_letter_is_esc_prefixed() {
         assert_eq!(
-            encode_key(&character("h"), &alt(), false, KeypadMode::Numeric),
+            encode_key(&character("h"), &alt(), modes(false)),
             b"\x1bh".to_vec()
         );
     }

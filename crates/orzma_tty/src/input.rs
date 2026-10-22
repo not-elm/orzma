@@ -2,7 +2,7 @@
 //! sequences written to the PTY, and the routers that pick how a wheel
 //! gesture or a pointer event reaches the application.
 
-use orzma_vt::prelude::{MouseEncoding, VtModes};
+use orzma_vt::prelude::MouseEncoding;
 
 mod keyboard;
 mod mouse;
@@ -23,7 +23,7 @@ pub use wheel::*;
 pub struct PtyInput(Vec<u8>);
 
 impl PtyInput {
-    /// Encodes a key press. Total — every `TerminalKey` has a representation.
+    /// Encodes a key press. A key with no legacy form encodes to no bytes.
     ///
     /// # References
     ///
@@ -39,13 +39,12 @@ impl PtyInput {
     /// [PC-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-PC-Style-Function-Keys
     /// [VT220-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-VT220-Style-Function-Keys
     /// [Alt and Meta Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Alt-and-Meta-Keys
-    pub fn encode_key(key: &TerminalKey, mods: &TerminalModifiers, modes: VtModes) -> Self {
-        Self(keyboard::encode_key(
-            key,
-            mods,
-            modes.app_cursor,
-            modes.keypad_mode,
-        ))
+    pub fn encode_key(
+        key: &TerminalKey,
+        mods: &TerminalModifiers,
+        modes: KeyEncodingModes,
+    ) -> Self {
+        Self(keyboard::encode_key(key, mods, modes))
     }
 
     /// Encodes one mouse report in the given mouse encoding. UTF-8
