@@ -4,6 +4,7 @@
 use crate::input::current_modifiers;
 use crate::input::keyboard::handler::KeyboardHandlerPlugin;
 use crate::input::keyboard::held_modifiers::HeldModifiersPlugin;
+use crate::input::keyboard::unshifted::UnshiftedKeysPlugin;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Modifiers;
@@ -14,14 +15,19 @@ use orzma_tty::prelude::{
 mod handler;
 mod held_modifiers;
 pub mod key_effect;
+pub mod unshifted;
 
 /// Adds the `KeyboardInput` message stream.
 pub(super) struct KeyboardInputPlugin;
 
 impl Plugin for KeyboardInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((KeyboardHandlerPlugin, HeldModifiersPlugin))
-            .add_message::<KeyboardInput>();
+        app.add_plugins((
+            KeyboardHandlerPlugin,
+            HeldModifiersPlugin,
+            UnshiftedKeysPlugin,
+        ))
+        .add_message::<KeyboardInput>();
     }
 }
 
