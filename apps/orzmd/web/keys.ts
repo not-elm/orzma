@@ -365,10 +365,6 @@ function characterBinding({ key, ctrl, alt }: KeyInput): Binding | null {
 
 function controlBinding(key: string): Binding | null {
   switch (key) {
-    case 'd':
-      return 'halfDown';
-    case 'u':
-      return 'halfUp';
     case 'f':
       return 'pageDown';
     case 'b':
@@ -386,6 +382,10 @@ function letterBinding(key: string): Binding | null {
       return 'down';
     case 'k':
       return 'up';
+    case 'J':
+      return 'halfDown';
+    case 'K':
+      return 'halfUp';
     case 'g':
       return 'g';
     case 'G':

@@ -142,8 +142,8 @@ describe('installKeys', () => {
       [{ key: 'ArrowDown', code: 'ArrowDown' }, 'scrollBy:60:1:press'],
       [{ key: 'k', code: 'KeyK' }, 'scrollBy:60:-1:press'],
       [{ key: 'ArrowUp', code: 'ArrowUp' }, 'scrollBy:60:-1:press'],
-      [{ key: 'd', code: 'KeyD', ctrlKey: true }, 'scrollBy:viewSize:0.5:press'],
-      [{ key: 'u', code: 'KeyU', ctrlKey: true }, 'scrollBy:viewSize:-0.5:press'],
+      [{ key: 'J', code: 'KeyJ', shiftKey: true }, 'scrollBy:viewSize:0.5:press'],
+      [{ key: 'K', code: 'KeyK', shiftKey: true }, 'scrollBy:viewSize:-0.5:press'],
       [{ key: 'f', code: 'KeyF', ctrlKey: true }, 'scrollBy:viewSize:1:press'],
       [{ key: ' ', code: 'Space' }, 'scrollBy:viewSize:1:press'],
       [{ key: 'PageDown', code: 'PageDown' }, 'scrollBy:viewSize:1:press'],
@@ -312,6 +312,7 @@ describe('installKeys', () => {
       { key: 'x', code: 'KeyX' },
       { key: 'j', code: 'KeyJ', metaKey: true },
       { key: 'j', code: 'KeyJ', ctrlKey: true },
+      { key: 'd', code: 'KeyD', ctrlKey: true },
       { key: 'j', code: 'KeyJ', altKey: true },
       { key: 'Tab', code: 'Tab', shiftKey: true },
     ];
@@ -383,7 +384,7 @@ describe('installKeys', () => {
     const t = setup();
     t.relay({ key: 'j' });
     t.relay({ key: 'G', shift: true });
-    t.relay({ key: 'd', ctrl: true });
+    t.relay({ key: 'J', shift: true });
     t.relay({ key: 'q' });
     expect(t.log).toEqual([
       'scrollBy:60:1:tap',
