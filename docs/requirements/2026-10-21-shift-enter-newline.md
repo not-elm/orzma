@@ -42,6 +42,8 @@ Shift+Enter のほかにも、調べた 12 のターミナルのうち 8 つは�
 - orzma の中で tmux を起動し、その中で Claude Code などを使う場合に、Shift+Enter で改行できること。
 - プログラムが何も求めていないときに送る形を変えること。Ctrl+Backspace と Alt+Backspace は別の要件書で扱う。
 - kitty keyboard protocol の flag 8 か modifyOtherKeys のレベル 3 が残ったペインを、orzma の操作で元に戻せること。#418 で扱う。
+- Windows で R1 を満たすこと。Windows では、Claude Code が kitty keyboard protocol に対応しているかを問い合わせると、orzma の返事より先に ConPTY の返事が届くため、Claude Code は orzma を非対応と判定する(計測で確認した)。
+- Windows で R4 を満たすこと。
 
 ## 検討した代替案
 
@@ -51,6 +53,7 @@ Shift+Enter のほかにも、調べた 12 のターミナルのうち 8 つは�
 - kitty keyboard protocol を求めたプログラムに、Cmd・Super 付きのキーを kitty や Ghostty のように届ける(提案: AI) — 届けると、Kakoune で Cmd+D がただの `d` として届いて選択範囲が消えるなどの問題があり、作成者が #404 のとおり捨てるほうを選んだため。
 - flag 8 と modifyOtherKeys のレベル 3 を対象から外し、R4 を元のまま保つ(提案: AI) — ほかのターミナルに合わせて R4 の適用範囲を狭めるほうを、作成者が選んだため。
 - orzma 自身のリセット操作を今回用意する(提案: AI) — 優先度の低い別の Issue(#418)として扱うことを、作成者が選んだため。
+- R4 を、`reset` コマンドのない PowerShell と cmd でだけ対象外にする(提案: AI) — Windows 全体で対象外にするほうを、作成者が選んだため。
 
 ## 未決事項
 
