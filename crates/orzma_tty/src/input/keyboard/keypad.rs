@@ -90,6 +90,49 @@ impl KeypadKey {
         }
     }
 
+    /// Returns the key number and final byte the kitty keyboard protocol
+    /// gives the key: 57399 to 57426 with `u`, and 1 with `E` for Begin.
+    ///
+    /// # References
+    ///
+    /// - <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, "Functional
+    ///   key definitions": `KP_0` "`57399 u`" through `KP_DELETE`
+    ///   "`57426 u`", and `KP_BEGIN` "`1 E or 57427 ~`".
+    pub(super) fn kitty_code(self) -> (u32, char) {
+        let number = match self {
+            Self::Zero => 57399,
+            Self::One => 57400,
+            Self::Two => 57401,
+            Self::Three => 57402,
+            Self::Four => 57403,
+            Self::Five => 57404,
+            Self::Six => 57405,
+            Self::Seven => 57406,
+            Self::Eight => 57407,
+            Self::Nine => 57408,
+            Self::Decimal => 57409,
+            Self::Divide => 57410,
+            Self::Multiply => 57411,
+            Self::Subtract => 57412,
+            Self::Add => 57413,
+            Self::Enter => 57414,
+            Self::Equal => 57415,
+            Self::Separator => 57416,
+            Self::Left => 57417,
+            Self::Right => 57418,
+            Self::Up => 57419,
+            Self::Down => 57420,
+            Self::PageUp => 57421,
+            Self::PageDown => 57422,
+            Self::Home => 57423,
+            Self::End => 57424,
+            Self::Insert => 57425,
+            Self::Delete => 57426,
+            Self::Begin => return (1, 'E'),
+        };
+        (number, 'u')
+    }
+
     fn encode_character(self, character: &str, mods: &TerminalModifiers) -> Vec<u8> {
         KeyText::new(character).map_or_else(Vec::new, |text| text.encode(mods))
     }

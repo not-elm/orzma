@@ -5,13 +5,14 @@ mod cursor;
 mod editing;
 mod function;
 mod keypad;
+mod kitty;
 mod text;
 
 pub use cursor::CursorKey;
 pub use editing::EditingKey;
 pub use function::FunctionKey;
 pub use keypad::KeypadKey;
-use orzma_vt::prelude::Vt;
+use orzma_vt::prelude::{KittyKeyboardFlags, Vt};
 pub use text::KeyText;
 
 /// Subset of keys the terminal input codec understands.
@@ -33,6 +34,13 @@ pub enum TerminalKey {
     Backspace,
     Tab,
     Escape,
+    /// A key the host's layout gave no character or name for.
+    ///
+    /// It sends no bytes in the legacy form.
+    Unidentified {
+        /// The character the key types when no modifier is held.
+        unshifted: char,
+    },
 }
 
 /// Modifier flags carried alongside `TerminalKey`.
@@ -52,12 +60,31 @@ impl TerminalModifiers {
         let code = 1 + u8::from(self.shift) + 2 * u8::from(self.alt) + 4 * u8::from(self.ctrl);
         (code > 1).then_some(code)
     }
+
+    /// Returns the kitty keyboard protocol's modifier parameter, 1 plus
+    /// Shift 1, Alt 2, Ctrl 4, and Meta 8 (the protocol's Super bit), or
+    /// `None` when no modifier is held.
+    fn kitty_code(&self) -> Option<u8> {
+        let code = 1
+            + u8::from(self.shift)
+            + 2 * u8::from(self.alt)
+            + 4 * u8::from(self.ctrl)
+            + 8 * u8::from(self.meta);
+        (code > 1).then_some(code)
+    }
 }
 
-/// The terminal state a key's encoding depends on: DECCKM.
+/// The terminal state a key's encoding depends on: DECCKM and the kitty
+/// keyboard flags of the screen on show.
+///
+/// # References
+///
+/// - <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, "Progressive
+///   enhancement".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyEncodingModes {
     app_cursor: bool,
+    kitty: KittyKeyboardFlags,
 }
 
 impl KeyEncodingModes {
@@ -65,13 +92,17 @@ impl KeyEncodingModes {
     pub fn read(vt: &impl Vt) -> Self {
         Self {
             app_cursor: vt.modes().app_cursor,
+            kitty: vt.kitty_keyboard_flags(),
         }
     }
 }
 
 /// Translates a logical key + modifiers into the bytes the PTY expects.
 ///
-/// A key with no legacy form encodes to no bytes.
+/// While `modes` holds the kitty keyboard protocol's flag 1 (disambiguate
+/// escape codes), the key takes that protocol's form, which DECCKM does not
+/// affect. Otherwise it takes the legacy form described below, and a key
+/// that has none encodes to no bytes.
 ///
 /// The cursor keys — the arrows plus Home and End — honour
 /// DECCKM in `modes` when neither Shift, Alt, nor Ctrl is held:
@@ -88,6 +119,9 @@ pub(super) fn encode_key(
     mods: &TerminalModifiers,
     modes: KeyEncodingModes,
 ) -> Vec<u8> {
+    if modes.kitty.contains(KittyKeyboardFlags::DISAMBIGUATE) {
+        return kitty::encode(key, mods);
+    }
     match key {
         TerminalKey::Character(text) => text.encode(mods),
         TerminalKey::Keypad { key, text } => {
@@ -103,6 +137,7 @@ pub(super) fn encode_key(
         }
         TerminalKey::Tab => vec![0x09],
         TerminalKey::Escape => vec![0x1b],
+        TerminalKey::Unidentified { .. } => Vec::new(),
     }
 }
 
@@ -139,7 +174,17 @@ mod tests {
     }
 
     fn modes(app_cursor: bool) -> KeyEncodingModes {
-        KeyEncodingModes { app_cursor }
+        KeyEncodingModes {
+            app_cursor,
+            kitty: KittyKeyboardFlags::empty(),
+        }
+    }
+
+    fn kitty_modes(app_cursor: bool) -> KeyEncodingModes {
+        KeyEncodingModes {
+            app_cursor,
+            kitty: KittyKeyboardFlags::DISAMBIGUATE,
+        }
     }
 
     /// Asserts that Enter sends a carriage return.
@@ -337,6 +382,84 @@ mod tests {
         assert_eq!(
             encode_key(&character("h"), &alt(), modes(false)),
             b"\x1bh".to_vec()
+        );
+    }
+
+    /// Asserts that a key takes the kitty keyboard protocol's form only while
+    /// the modes hold flag 1, and that DECCKM leaves that form alone.
+    ///
+    /// Case: the user presses Shift+Enter at a plain shell prompt and then in
+    /// Claude Code, which turned the protocol on, and presses Up in a program
+    /// that turned on both the protocol and application cursor keys.
+    #[test]
+    fn the_kitty_form_needs_flag_1() {
+        let shift = TerminalModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(&TerminalKey::Enter, &shift, modes(false)),
+            b"\r".to_vec()
+        );
+        assert_eq!(
+            encode_key(&TerminalKey::Enter, &shift, kitty_modes(false)),
+            b"\x1b[13;2u".to_vec()
+        );
+        assert_eq!(
+            encode_key(
+                &TerminalKey::Cursor(CursorKey::Up),
+                &no_mods(),
+                kitty_modes(true)
+            ),
+            b"\x1b[A".to_vec()
+        );
+    }
+
+    /// Asserts that a key the layout gave no character for sends no bytes
+    /// while no kitty keyboard flag is set.
+    ///
+    /// Case: on Windows, the user presses Ctrl+Alt+a at a shell prompt on a
+    /// layout that gives no character for that chord.
+    #[test]
+    fn an_unidentified_key_sends_nothing_without_flags() {
+        let ctrl_alt = TerminalModifiers {
+            ctrl: true,
+            alt: true,
+            ..Default::default()
+        };
+        assert!(
+            encode_key(
+                &TerminalKey::Unidentified { unshifted: 'a' },
+                &ctrl_alt,
+                modes(false)
+            )
+            .is_empty()
+        );
+    }
+
+    /// Asserts that Meta keeps its legacy bytes while no kitty keyboard flag
+    /// is set: ESC before text, and nothing added to the cursor keys or
+    /// Enter.
+    ///
+    /// Case: a focused webview forwards Cmd+=, Cmd+Up or Cmd+Enter to a
+    /// shell that did not turn on the kitty keyboard protocol.
+    #[test]
+    fn meta_keeps_its_legacy_bytes_without_flags() {
+        let meta = TerminalModifiers {
+            meta: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(&character("="), &meta, modes(false)),
+            b"\x1b=".to_vec()
+        );
+        assert_eq!(
+            encode_key(&TerminalKey::Cursor(CursorKey::Up), &meta, modes(false)),
+            b"\x1b[A".to_vec()
+        );
+        assert_eq!(
+            encode_key(&TerminalKey::Enter, &meta, modes(false)),
+            b"\r".to_vec()
         );
     }
 }

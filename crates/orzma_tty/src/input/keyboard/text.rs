@@ -3,20 +3,42 @@
 use super::TerminalModifiers;
 
 /// Non-empty UTF-8 text carried by
-/// [`TerminalKey::Character`](super::TerminalKey::Character).
+/// [`TerminalKey::Character`](super::TerminalKey::Character), with the
+/// character its key types when no modifier is held, if the host recorded
+/// one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyText(String);
+pub struct KeyText {
+    text: String,
+    unshifted: Option<char>,
+}
 
 impl KeyText {
     /// Wraps `text`, returning `None` when it is empty.
+    ///
+    /// No un-shifted key is recorded.
     pub fn new(text: impl Into<String>) -> Option<Self> {
         let text = text.into();
-        (!text.is_empty()).then_some(Self(text))
+        (!text.is_empty()).then_some(Self {
+            text,
+            unshifted: None,
+        })
+    }
+
+    /// Returns the text with `unshifted` recorded as the character its key
+    /// types when no modifier is held.
+    ///
+    /// The kitty keyboard protocol's form numbers a one-character text by
+    /// that character.
+    pub fn with_unshifted(self, unshifted: char) -> Self {
+        Self {
+            unshifted: Some(unshifted),
+            ..self
+        }
     }
 
     /// Returns the wrapped text, which is never empty.
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.text
     }
 
     /// Encodes the text to the pty input buffer.
@@ -36,19 +58,33 @@ impl KeyText {
         }
         match control {
             Some(byte) => out.push(byte),
-            None => out.extend_from_slice(self.0.as_bytes()),
+            None => out.extend_from_slice(self.text.as_bytes()),
         }
         out
+    }
+
+    /// Returns the key number the kitty keyboard protocol gives the key that
+    /// typed the text, or `None` when the text is more than one character.
+    ///
+    /// The number is the code point of the recorded un-shifted key. Without
+    /// one, it is the code point of the character lowercased when its
+    /// lowercase is one character, and of the character itself otherwise.
+    pub(super) fn key_number(&self) -> Option<u32> {
+        let c = self.single_char()?;
+        let number = self.unshifted.unwrap_or_else(|| {
+            let mut lowercase = c.to_lowercase();
+            match (lowercase.next(), lowercase.next()) {
+                (Some(lower), None) => lower,
+                _ => c,
+            }
+        });
+        Some(u32::from(number))
     }
 
     /// Returns the control character Ctrl turns the text into, or `None`
     /// when the text is not a single character that has one.
     fn control_byte(&self) -> Option<u8> {
-        let mut chars = self.0.chars();
-        let c = chars.next()?;
-        if chars.next().is_some() {
-            return None;
-        }
+        let c = self.single_char()?;
         match c {
             'a'..='z' | 'A'..='Z' => Some(c.to_ascii_uppercase() as u8 - b'@'),
             ' ' | '@' | '2' => Some(0x00),
@@ -60,6 +96,14 @@ impl KeyText {
             '?' | '8' => Some(0x7f),
             _ => None,
         }
+    }
+
+    /// Returns the text's character, or `None` when the text is more than
+    /// one character.
+    fn single_char(&self) -> Option<char> {
+        let mut chars = self.text.chars();
+        let c = chars.next()?;
+        chars.next().is_none().then_some(c)
     }
 }
 

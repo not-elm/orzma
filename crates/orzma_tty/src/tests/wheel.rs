@@ -109,6 +109,25 @@ fn send_wheel_over_the_alternate_screen_writes_cursor_keys() {
     assert_eq!(sink.contents(), b"\x1bOA".repeat(3));
 }
 
+/// Asserts that the alternate-scroll cursor keys take the kitty keyboard
+/// protocol's flag 1 form while the VT reports that flag, so DECCKM no
+/// longer turns them into `SS3`.
+///
+/// Case: a full-screen program on the alternate screen turns on the kitty
+/// keyboard protocol and application cursor keys without tracking the
+/// mouse, and the user spins the wheel up one notch.
+#[test]
+fn send_wheel_writes_kitty_cursor_keys_while_the_vt_reports_flag_1() {
+    let (mut term, sink) = detached_term();
+    term.vt.modes_mut().active_screen = ScreenKind::Alternate;
+    term.vt.modes_mut().app_cursor = true;
+    term.vt
+        .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE);
+    term.send_wheel(wheel(1, 0), &policy()).expect("send_wheel");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[A".repeat(3));
+}
+
 /// Asserts that wheel notches sent as cursor keys leave the selection in
 /// place, unlike a typed key.
 ///

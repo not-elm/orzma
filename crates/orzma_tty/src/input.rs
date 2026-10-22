@@ -23,7 +23,11 @@ pub use wheel::*;
 pub struct PtyInput(Vec<u8>);
 
 impl PtyInput {
-    /// Encodes a key press. A key with no legacy form encodes to no bytes.
+    /// Encodes a key press.
+    ///
+    /// While `modes` holds the kitty keyboard protocol's flag 1, the key takes
+    /// that protocol's form. Otherwise it takes the legacy form, and a key
+    /// that has none encodes to no bytes.
     ///
     /// # References
     ///
@@ -35,10 +39,14 @@ impl PtyInput {
     ///   by DECCKM.
     /// - [Alt and Meta Keys] — `metaSendsEscape` / `altSendsEscape`: prefix the
     ///   key with `ESC`.
+    /// - [kitty keyboard protocol] — the `CSI number ; modifier u` and
+    ///   `CSI 1 ; modifier [~ABCDEFHPQS]` forms of flag 1, "Disambiguate
+    ///   escape codes".
     ///
     /// [PC-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-PC-Style-Function-Keys
     /// [VT220-Style Function Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-VT220-Style-Function-Keys
     /// [Alt and Meta Keys]: https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Alt-and-Meta-Keys
+    /// [kitty keyboard protocol]: https://sw.kovidgoyal.net/kitty/keyboard-protocol/
     pub fn encode_key(
         key: &TerminalKey,
         mods: &TerminalModifiers,

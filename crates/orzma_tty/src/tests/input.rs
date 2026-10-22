@@ -93,6 +93,36 @@ fn send_key_honours_the_vt_reported_cursor_mode() {
     assert_eq!(sink.contents(), b"\x1b[A");
 }
 
+/// Asserts that key encoding takes the kitty keyboard protocol's flag 1
+/// form while the VT reports that flag, leaving DECCKM out of it.
+///
+/// Case: a program turns on the kitty keyboard protocol and application
+/// cursor keys, and the user presses Shift+Enter to start a new line of
+/// input and then Up to recall history.
+#[test]
+fn send_key_writes_the_kitty_form_while_the_vt_reports_flag_1() {
+    let (mut term, sink) = detached_term();
+    term.vt
+        .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE);
+    term.vt.modes_mut().app_cursor = true;
+    let shift = TerminalModifiers {
+        shift: true,
+        ..TerminalModifiers::default()
+    };
+    term.send_key(&TerminalKey::Enter, &shift)
+        .expect("send_key");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[13;2u");
+
+    term.send_key(
+        &TerminalKey::Cursor(CursorKey::Up),
+        &TerminalModifiers::default(),
+    )
+    .expect("send_key");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[13;2u\x1b[A");
+}
+
 /// Asserts that paste encoding consults the VT-reported bracketed
 /// paste mode.
 ///
