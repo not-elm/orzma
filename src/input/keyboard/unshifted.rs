@@ -62,14 +62,18 @@ fn unshifted_press(raw: &WindowEvent) -> Option<(KeyCode, Option<char>)> {
     match raw {
         WindowEvent::KeyboardInput {
             event,
-            is_synthetic: false,
+            is_synthetic,
             ..
-        } if convert_element_state(event.state) == ButtonState::Pressed => Some((
+        } if is_real_press(*is_synthetic, convert_element_state(event.state)) => Some((
             convert_physical_key_code(event.physical_key),
             single_char(&event.key_without_modifiers()),
         )),
         _ => None,
     }
+}
+
+fn is_real_press(is_synthetic: bool, state: ButtonState) -> bool {
+    !is_synthetic && state == ButtonState::Pressed
 }
 
 fn single_char(key: &WinitKey) -> Option<char> {
@@ -119,6 +123,18 @@ mod tests {
         keys.record(KeyCode::KeyA, Some('a'));
         keys.record(KeyCode::KeyA, None);
         assert_eq!(keys.get(KeyCode::KeyA), None);
+    }
+
+    /// Asserts that only a non-synthetic press records an un-shifted
+    /// character, not a synthetic press or a release.
+    ///
+    /// Case: the window regains focus and winit replays a synthetic press for
+    /// a held key, and the user later releases a key.
+    #[test]
+    fn only_a_real_press_records_an_unshifted_character() {
+        assert!(is_real_press(false, ButtonState::Pressed));
+        assert!(!is_real_press(true, ButtonState::Pressed));
+        assert!(!is_real_press(false, ButtonState::Released));
     }
 
     /// Asserts that a raw winit event other than a key press records

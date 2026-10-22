@@ -7,9 +7,10 @@ use super::{CursorKey, EditingKey, FunctionKey, TerminalKey, TerminalModifiers};
 ///
 /// Enter, Tab and Backspace with no modifier held send CR, HT and DEL. A
 /// text key, and a keypad key that typed text, send the text as typed unless
-/// Ctrl, Alt or Meta is held; with one of them held, a text of one character
-/// sends `CSI number ; m u` numbered by its un-shifted key, and a longer text
-/// keeps its legacy form. Every other key sends `CSI number ; m final` with
+/// Ctrl, Alt or Meta is held. With one of them held, a text key of one
+/// character sends `CSI number ; m u` numbered by its un-shifted key, and a
+/// longer text keeps its legacy form; a keypad key sends its own keypad
+/// number. Every other key sends `CSI number ; m final` with
 /// its key number and final byte from the protocol's table. `m` is 1 plus
 /// Shift 1, Alt 2, Ctrl 4 and Meta 8, the protocol's Super bit; `; m` is left
 /// out when no modifier is held, and a number of 1 is then left out too.
@@ -40,7 +41,7 @@ pub(super) fn encode(key: &TerminalKey, mods: &TerminalModifiers) -> Vec<u8> {
             Some(number) => (number, 'u'),
             None => return text.encode(mods),
         },
-        TerminalKey::Keypad { key, .. } => key.kitty_code(),
+        TerminalKey::Keypad { key, .. } => key.kitty_key(),
         TerminalKey::Unidentified { unshifted } => (u32::from(*unshifted), 'u'),
         TerminalKey::Enter => (13, 'u'),
         TerminalKey::Tab => (9, 'u'),

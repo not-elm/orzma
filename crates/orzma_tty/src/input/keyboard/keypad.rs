@@ -98,7 +98,7 @@ impl KeypadKey {
     /// - <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, "Functional
     ///   key definitions": `KP_0` "`57399 u`" through `KP_DELETE`
     ///   "`57426 u`", and `KP_BEGIN` "`1 E or 57427 ~`".
-    pub(super) fn kitty_code(self) -> (u32, char) {
+    pub(super) fn kitty_key(self) -> (u32, char) {
         let number = match self {
             Self::Zero => 57399,
             Self::One => 57400,

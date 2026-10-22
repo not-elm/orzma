@@ -269,8 +269,8 @@ pub trait Vt {
     /// Snapshot of the modes the device owns.
     fn modes(&self) -> VtModes;
 
-    /// The keyboard flags the program asked for on the screen on show;
-    /// empty when it asked for none.
+    /// The kitty keyboard flags in force on the screen on show; empty when
+    /// none are.
     fn kitty_keyboard_flags(&self) -> KittyKeyboardFlags;
 
     /// Enters or leaves vi mode; returns whether the mode changed.

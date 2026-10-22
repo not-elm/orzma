@@ -469,8 +469,8 @@ impl<V: Vt> OrzmaTty<V> {
     /// Dismisses the selection and snaps a scrolled-back viewport to the
     /// live tail first, even when the key is then refused. A key that
     /// encodes to no bytes leaves the selection and the viewport alone and
-    /// queues nothing. `Ok` means the key was queued, not that it reached
-    /// the PTY.
+    /// queues nothing. `Ok` means the key's bytes, if any, were queued, not
+    /// that they reached the PTY.
     ///
     /// # Errors
     ///

@@ -51,10 +51,12 @@ pub(crate) fn terminal_modifiers(m: Modifiers) -> TerminalModifiers {
 /// character text that encodes to an empty string, or an unidentified key
 /// without a held Ctrl, Alt, or Meta and a recorded un-shifted character).
 ///
-/// `key_code` is the physical key; the numeric keypad's keys map to
-/// `TerminalKey::Keypad` whatever the logical key says. `unshifted` is the
-/// character the physical key types without Shift, and rides on a character
-/// key's text.
+/// `key_code` is the physical key. A numeric keypad key maps to
+/// `TerminalKey::Keypad` when its logical key is a non-empty character, a
+/// navigation key, or (for keypad Enter) Enter, or when it is the unnamed
+/// middle key; any other keypad key maps as its logical key alone.
+/// `unshifted` is the character the physical key types when no modifier is
+/// held; it rides on a character key's text and names an unidentified key.
 pub(crate) fn bevy_key_to_terminal_key(
     logical_key: &Key,
     key_code: KeyCode,
@@ -134,9 +136,9 @@ fn keypad_key(logical_key: &Key, key_code: KeyCode) -> Option<TerminalKey> {
     };
     let key = match logical_key {
         Key::Character(s) => {
-            return Some(TerminalKey::Keypad {
+            return KeyText::new(s.to_string()).map(|text| TerminalKey::Keypad {
                 key: character_key,
-                text: KeyText::new(s.to_string()),
+                text: Some(text),
             });
         }
         Key::ArrowUp => KeypadKey::Up,
@@ -286,8 +288,9 @@ mod tests {
     /// Asserts an unidentified key maps only when a modifier is held and its
     /// un-shifted character was recorded.
     ///
-    /// Case: the user presses Ctrl+Alt with a key whose layout gives no
-    /// logical key, such as one on a non-Latin layout.
+    /// Case: on Windows, the user presses Ctrl+Alt with a letter, the layout
+    /// gives that chord no character, and winit reports the key as
+    /// unidentified.
     #[test]
     fn an_unidentified_key_maps_only_with_a_modifier_and_a_recorded_character() {
         let key = Key::Unidentified(NativeKey::Unidentified);

@@ -33,7 +33,7 @@ pub(super) struct ShortcutsApplyPlugin;
 
 impl Plugin for ShortcutsApplyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<UnshiftedKeys>().add_systems(
             Update,
             apply_key_effects
                 .in_set(ShortcutSet::Apply)
@@ -347,8 +347,9 @@ mod tests {
     /// Asserts an unidentified `Type` effect with Ctrl and Alt reaches the
     /// terminal only when an un-shifted character was recorded for its key.
     ///
-    /// Case: the user presses Ctrl+Alt with a key whose layout gives no
-    /// logical key.
+    /// Case: on Windows, the user presses Ctrl+Alt with a letter, the layout
+    /// gives that chord no character, and winit reports the key as
+    /// unidentified.
     #[test]
     fn an_unidentified_type_effect_needs_a_recorded_character() {
         let effect = || KeyEffect::Type {

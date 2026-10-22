@@ -34,7 +34,7 @@ pub enum TerminalKey {
     Backspace,
     Tab,
     Escape,
-    /// A key the host's layout gave no character or name for.
+    /// A key press that typed no character under the modifiers held and has no name.
     ///
     /// It sends no bytes in the legacy form.
     Unidentified {

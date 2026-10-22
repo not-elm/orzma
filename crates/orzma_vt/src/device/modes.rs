@@ -352,7 +352,8 @@ impl TextCursorModes {
     }
 }
 
-/// The mode selects whether the numeric keypad sends ASCII numerals or application function.
+/// The keypad mode a program selected (DECKPAM / DECKPNM, mode 66), reported
+/// back through DECRQM; it has no effect on what the keypad sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KeypadMode {
     #[default]
