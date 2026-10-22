@@ -1,7 +1,7 @@
 //! Wheel routing: decides whether wheel travel becomes mouse reports,
 //! cursor keys, or a viewport scroll, from the modes the application set.
 
-use crate::input::keyboard::TerminalKey;
+use crate::input::keyboard::{CursorKey, TerminalKey};
 use crate::input::mouse::{CellCoord, MouseButton, ProtocolModifiers};
 use orzma_vt::prelude::{Scroll, VtModes};
 
@@ -203,9 +203,9 @@ impl WheelDecision {
 
     fn cursor_keys(notches: i32, mods: WheelModifiers, cfg: &WheelConfig) -> Self {
         let key = if notches > 0 {
-            TerminalKey::ArrowUp
+            TerminalKey::Cursor(CursorKey::Up)
         } else {
-            TerminalKey::ArrowDown
+            TerminalKey::Cursor(CursorKey::Down)
         };
         let count = capped(notches, cfg)
             .saturating_mul(lines_per_notch(mods, cfg))
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(
             WheelDecision::route(alternate_screen(), 1, 5, PLAIN, &cfg),
             WheelDecision::CursorKeys {
-                key: TerminalKey::ArrowUp,
+                key: TerminalKey::Cursor(CursorKey::Up),
                 count: 3
             }
         );
@@ -409,14 +409,14 @@ mod tests {
         assert_eq!(
             WheelDecision::route(alternate_screen(), 2, 0, PLAIN, &cfg),
             WheelDecision::CursorKeys {
-                key: TerminalKey::ArrowUp,
+                key: TerminalKey::Cursor(CursorKey::Up),
                 count: 6
             }
         );
         assert_eq!(
             WheelDecision::route(alternate_screen(), -1, 0, PLAIN, &cfg),
             WheelDecision::CursorKeys {
-                key: TerminalKey::ArrowDown,
+                key: TerminalKey::Cursor(CursorKey::Down),
                 count: 3
             }
         );
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(
             WheelDecision::route(alternate_screen(), 20, 0, PLAIN, &policy()),
             WheelDecision::CursorKeys {
-                key: TerminalKey::ArrowUp,
+                key: TerminalKey::Cursor(CursorKey::Up),
                 count: 24
             }
         );
@@ -452,7 +452,7 @@ mod tests {
         assert_eq!(
             WheelDecision::route(alternate_screen(), 1, 0, PLAIN, &cfg),
             WheelDecision::CursorKeys {
-                key: TerminalKey::ArrowUp,
+                key: TerminalKey::Cursor(CursorKey::Up),
                 count: MAX_CURSOR_KEYS
             }
         );
@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(
             WheelDecision::route(alternate_screen(), 2, 0, FINE, &cfg),
             WheelDecision::CursorKeys {
-                key: TerminalKey::ArrowUp,
+                key: TerminalKey::Cursor(CursorKey::Up),
                 count: 2
             }
         );
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(
             WheelDecision::route(tracking_on_the_alternate_screen(), 1, 5, SHIFT, &cfg),
             WheelDecision::CursorKeys {
-                key: TerminalKey::ArrowUp,
+                key: TerminalKey::Cursor(CursorKey::Up),
                 count: 3
             }
         );
