@@ -4,6 +4,7 @@ pub mod cell;
 pub mod character_sets;
 pub mod checkpoint;
 pub mod grid;
+pub mod kitty_keyboard;
 pub mod margins;
 pub mod selection;
 pub mod tabs;
