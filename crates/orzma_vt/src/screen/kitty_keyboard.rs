@@ -11,15 +11,15 @@ bitflags! {
     /// <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     pub struct KittyKeyboardFlags: u16 {
-        /// Disambiguate escape codes.
+        /// The "Disambiguate escape codes" enhancement.
         const DISAMBIGUATE = 1;
-        /// Report key press, repeat and release events.
+        /// The "Report event types" enhancement: key press, repeat and release events.
         const REPORT_EVENT_TYPES = 1 << 1;
-        /// Report alternate keys.
+        /// The "Report alternate keys" enhancement.
         const REPORT_ALTERNATE_KEYS = 1 << 2;
-        /// Report every key as an escape code.
+        /// The "Report all keys as escape codes" enhancement.
         const REPORT_ALL_KEYS = 1 << 3;
-        /// Report the text a key produces.
+        /// The "Report associated text" enhancement: the text a key produces.
         const REPORT_ASSOCIATED_TEXT = 1 << 4;
     }
 }
@@ -102,16 +102,12 @@ impl KittyKeyboardStack {
 
     /// Rewrites the top entry by `mode`, creating an entry first when the stack is empty.
     pub fn set(&mut self, flags: KittyKeyboardFlags, mode: KeyboardFlagSetMode) {
-        if self.0.is_empty() {
-            self.0.push_back(KittyKeyboardFlags::empty());
-        }
-        if let Some(top) = self.0.back_mut() {
-            *top = match mode {
-                KeyboardFlagSetMode::Replace => flags,
-                KeyboardFlagSetMode::Add => top.union(flags),
-                KeyboardFlagSetMode::Remove => top.difference(flags),
-            };
-        }
+        let top = self.0.pop_back().unwrap_or_default();
+        self.0.push_back(match mode {
+            KeyboardFlagSetMode::Replace => flags,
+            KeyboardFlagSetMode::Add => top.union(flags),
+            KeyboardFlagSetMode::Remove => top.difference(flags),
+        });
     }
 
     /// Drops every entry.
@@ -126,7 +122,7 @@ mod tests {
 
     /// Asserts that pushing onto a full stack evicts the oldest entry.
     ///
-    /// Case: an application pushes nine flag sets without popping, so the first one is lost.
+    /// Case: an application pushes nine flag sets without popping any of them.
     #[test]
     fn a_full_stack_evicts_its_oldest_entry() {
         let mut stack = KittyKeyboardStack::default();

@@ -271,20 +271,16 @@ impl VTActor for Executor<'_> {
             (None, [], b's') if params.values().count() == 0 => {
                 self.device.active_screen_mut().save_checkpoint()
             }
-            // Kitty keyboard flags query
             (Some(b'?'), [], b'u') => {
                 let flags = self.device.kitty_keyboard_flags();
                 self.reply(format!("\x1b[?{}u", flags.bits()).as_bytes());
             }
-            // Kitty keyboard flags push
             (Some(b'>'), [], b'u') => self
                 .device
                 .push_kitty_keyboard_flags(params.raw_value(0).unwrap_or(0)),
-            // Kitty keyboard flags pop
             (Some(b'<'), [], b'u') => self
                 .device
                 .pop_kitty_keyboard_flags(params.value(0).unwrap_or(1)),
-            // Kitty keyboard flags set
             (Some(b'='), [], b'u') => {
                 if let Some(mode) = KeyboardFlagSetMode::from_param(params.value(1).unwrap_or(1)) {
                     self.device

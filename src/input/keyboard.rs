@@ -5,7 +5,7 @@ use crate::input::current_modifiers;
 use crate::input::keyboard::handler::KeyboardHandlerPlugin;
 use crate::input::keyboard::held_modifiers::HeldModifiersPlugin;
 use crate::input::keyboard::unshifted::UnshiftedKeysPlugin;
-use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Modifiers;
 use orzma_tty::prelude::{
@@ -53,8 +53,10 @@ pub(crate) fn terminal_modifiers(m: Modifiers) -> TerminalModifiers {
 ///
 /// `key_code` is the physical key. A numeric keypad key maps to
 /// `TerminalKey::Keypad` when its logical key is a non-empty character, a
-/// navigation key, or (for keypad Enter) Enter, or when it is the unnamed
-/// middle key; any other keypad key maps as its logical key alone.
+/// navigation key, an unidentified key, or (for keypad Enter) Enter, and any
+/// other keypad key maps as its logical key alone. Keypad 5 is the Begin key
+/// when its logical key is Clear, or an unidentified key Windows did not
+/// report.
 /// `unshifted` is the character the physical key types when no modifier is
 /// held; it rides on a character key's text and names an unidentified key.
 pub(crate) fn bevy_key_to_terminal_key(
@@ -151,7 +153,14 @@ fn keypad_key(logical_key: &Key, key_code: KeyCode) -> Option<TerminalKey> {
         Key::PageDown => KeypadKey::PageDown,
         Key::Insert => KeypadKey::Insert,
         Key::Delete => KeypadKey::Delete,
-        _ if key_code == KeyCode::Numpad5 => KeypadKey::Begin,
+        // NOTE: Linux reports keypad Begin (5 with Num Lock off) as an
+        // unidentified key. Windows reports it as Clear, and reports a keypad
+        // key as unidentified only when Alt kept it from typing (Alt-code entry,
+        // or keypad `/`), so there the unidentified key is the keypad key itself.
+        Key::Clear if key_code == KeyCode::Numpad5 => KeypadKey::Begin,
+        Key::Unidentified(NativeKey::Windows(_)) => character_key,
+        Key::Unidentified(_) if key_code == KeyCode::Numpad5 => KeypadKey::Begin,
+        Key::Unidentified(_) => character_key,
         _ => return None,
     };
     Some(TerminalKey::Keypad { key, text: None })
@@ -160,8 +169,6 @@ fn keypad_key(logical_key: &Key, key_code: KeyCode) -> Option<TerminalKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::input::keyboard::NativeKey;
-    use orzma_tty::prelude::KeypadKey;
 
     fn map_key(key: &Key) -> Option<TerminalKey> {
         bevy_key_to_terminal_key(key, KeyCode::KeyA, None, &TerminalModifiers::default())
@@ -252,6 +259,52 @@ mod tests {
                 &Key::Unidentified(NativeKey::Unidentified)
             ),
             keypad(KeypadKey::Begin, None)
+        );
+    }
+
+    /// Asserts that a keypad key Windows reports as unidentified keeps its own
+    /// keypad identity, keypad 5 included, rather than becoming Begin or a key
+    /// of the main keyboard.
+    ///
+    /// Case: on Windows, the user holds Alt and presses keypad 5 while typing
+    /// an Alt code, or presses Ctrl+Alt with keypad `/`, and winit reports the
+    /// key as unidentified.
+    #[test]
+    fn a_keypad_key_windows_leaves_unidentified_keeps_its_identity() {
+        let ctrl_alt = TerminalModifiers {
+            ctrl: true,
+            alt: true,
+            ..TerminalModifiers::default()
+        };
+        assert_eq!(
+            map_numpad(
+                KeyCode::Numpad5,
+                &Key::Unidentified(NativeKey::Windows(0x65))
+            ),
+            keypad(KeypadKey::Five, None)
+        );
+        assert_eq!(
+            bevy_key_to_terminal_key(
+                &Key::Unidentified(NativeKey::Windows(0x6f)),
+                KeyCode::NumpadDivide,
+                Some('/'),
+                &ctrl_alt
+            ),
+            keypad(KeypadKey::Divide, None)
+        );
+    }
+
+    /// Asserts that keypad 5 with a named logical key other than Clear maps as
+    /// that logical key rather than as Begin.
+    ///
+    /// Case: an input method consumes the keypad 5 key, or a layout gives it
+    /// the function of Tab.
+    #[test]
+    fn a_named_key_on_keypad_5_maps_as_its_logical_key() {
+        assert_eq!(map_numpad(KeyCode::Numpad5, &Key::Process), None);
+        assert_eq!(
+            map_numpad(KeyCode::Numpad5, &Key::Tab),
+            Some(TerminalKey::Tab)
         );
     }
 

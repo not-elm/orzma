@@ -32,14 +32,14 @@ fn unsupported_flags_are_dropped_from_a_push() {
     assert_eq!(flags_after(b"\x1b[>30u"), b"\x1b[?0u");
 }
 
-/// Asserts that an oversized flag parameter keeps its low bits instead of saturating.
+/// Asserts that a flag parameter past the 16-bit range keeps its low bits instead of saturating
+/// to the 16-bit maximum.
 ///
 /// Case: a client sends a flag value past the 16-bit range.
 #[test]
 fn oversized_parameters_are_masked_rather_than_saturated() {
     assert_eq!(flags_after(b"\x1b[>65536u"), b"\x1b[?0u");
     assert_eq!(flags_after(b"\x1b[>65537u"), b"\x1b[?1u");
-    assert_eq!(flags_after(b"\x1b[>1u\x1b[<70000u"), b"\x1b[?0u");
     assert_eq!(flags_after(b"\x1b[=4294967297;1u"), b"\x1b[?1u");
 }
 
@@ -57,6 +57,7 @@ fn a_pop_restores_the_flags_below() {
 #[test]
 fn popping_past_the_bottom_clears_every_flag() {
     assert_eq!(flags_after(b"\x1b[>1u\x1b[<5u"), b"\x1b[?0u");
+    assert_eq!(flags_after(b"\x1b[>1u\x1b[<70000u"), b"\x1b[?0u");
     assert_eq!(flags_after(b"\x1b[<u"), b"\x1b[?0u");
 }
 
@@ -97,7 +98,8 @@ fn a_set_on_an_empty_stack_is_undone_by_one_pop() {
 
 /// Asserts that each screen keeps its own flag stack.
 ///
-/// Case: an application on the alternate screen enables flags that the shell on the main screen must not see.
+/// Case: a shell with flags pushed runs a full-screen program that pushes its own flags on the
+/// alternate screen, and the program is run again after it exits.
 #[test]
 fn each_screen_keeps_its_own_flags() {
     assert_eq!(flags_after(b"\x1b[>1u\x1b[?1049h"), b"\x1b[?0u");

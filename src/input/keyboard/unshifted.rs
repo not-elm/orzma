@@ -1,6 +1,7 @@
 //! Records the un-shifted character winit reports for each physical key.
 
 use bevy::input::ButtonState;
+use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::winit::RawWinitWindowEvent;
 use bevy::winit::converters::{convert_element_state, convert_physical_key_code};
@@ -8,17 +9,6 @@ use std::collections::HashMap;
 use winit::event::WindowEvent;
 use winit::keyboard::Key as WinitKey;
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-
-/// Records each pressed key's un-shifted character as winit reports it.
-pub(super) struct UnshiftedKeysPlugin;
-
-impl Plugin for UnshiftedKeysPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<UnshiftedKeys>()
-            .add_message::<RawWinitWindowEvent>()
-            .add_systems(PreUpdate, record_unshifted_keys);
-    }
-}
 
 /// The un-shifted character of each physical key pressed so far.
 #[derive(Resource, Debug, Default)]
@@ -41,6 +31,23 @@ impl UnshiftedKeys {
                 self.0.remove(&key_code);
             }
         }
+    }
+}
+
+/// Records each pressed key's un-shifted character as winit reports it.
+pub(super) struct UnshiftedKeysPlugin;
+
+impl Plugin for UnshiftedKeysPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<UnshiftedKeys>()
+            .add_message::<RawWinitWindowEvent>()
+            // NOTE: The gate relies on bevy_winit writing a `KeyboardInput`
+            // for every non-synthetic raw key event in the same update; a
+            // frame with a real press always carries one, so none is skipped.
+            .add_systems(
+                PreUpdate,
+                record_unshifted_keys.run_if(on_message::<KeyboardInput>),
+            );
     }
 }
 

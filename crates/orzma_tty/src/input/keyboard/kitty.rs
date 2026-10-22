@@ -7,14 +7,17 @@ use super::{CursorKey, EditingKey, FunctionKey, TerminalKey, TerminalModifiers};
 ///
 /// Enter, Tab and Backspace with no modifier held send CR, HT and DEL. A
 /// text key, and a keypad key that typed text, send the text as typed unless
-/// Ctrl, Alt or Meta is held. With one of them held, a text key of one
-/// character sends `CSI number ; m u` numbered by its un-shifted key, and a
-/// longer text keeps its legacy form; a keypad key sends its own keypad
-/// number. Every other key sends `CSI number ; m final` with
-/// its key number and final byte from the protocol's table. `m` is 1 plus
-/// Shift 1, Alt 2, Ctrl 4 and Meta 8, the protocol's Super bit; `; m` is left
-/// out when no modifier is held, and a number of 1 is then left out too.
-/// DECCKM does not affect the form.
+/// Ctrl, Alt or Meta is held.
+///
+/// With one of them held, a text key of one character sends
+/// `CSI number ; m u` numbered by its un-shifted key, and a longer text keeps
+/// its legacy form; a keypad key sends its own keypad number. Every other key
+/// sends `CSI number ; m final` with its key number and final byte from the
+/// protocol's table.
+///
+/// `m` is 1 plus Shift 1, Alt 2, Ctrl 4 and Meta 8, the protocol's Super bit;
+/// `; m` is left out when no modifier is held, and a number of 1 is then left
+/// out too. DECCKM does not affect the form.
 ///
 /// # References
 ///
@@ -225,8 +228,8 @@ mod tests {
     /// lowercase is one character, or by the character itself otherwise.
     ///
     /// Case: on a US layout the user presses Shift+Alt+1, which types `!`,
-    /// and on a German layout Ctrl+Shift+Ä or Ctrl+ß, in a program that
-    /// turned on the kitty keyboard protocol.
+    /// on a German layout Ctrl+Shift+Ä or Ctrl+ß, and on a Turkish layout
+    /// Ctrl+Shift+İ, in a program that turned on the kitty keyboard protocol.
     #[test]
     fn the_key_number_is_the_unshifted_key() {
         assert_cases(&[
@@ -238,6 +241,7 @@ mod tests {
             (character("!"), held("S+A"), b"\x1b[33;4u"),
             (character("Ä"), held("C+S"), b"\x1b[228;6u"),
             (character("ß"), held("C"), b"\x1b[223;5u"),
+            (character("İ"), held("C+S"), b"\x1b[304;6u"),
         ]);
     }
 

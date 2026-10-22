@@ -19,24 +19,39 @@ pub enum KeypadKey {
     Seven,
     Eight,
     Nine,
+    /// The decimal key, which types `.` or the layout's decimal separator.
     Decimal,
     Divide,
     Multiply,
     Subtract,
     Add,
+    /// The keypad's own Enter key.
     Enter,
+    /// The `=` key, which Macintosh and Sun keypads carry.
     Equal,
+    /// The thousands-separator key, which types `,` or the layout's separator.
     Separator,
+    /// The 4 key with Num Lock off.
     Left,
+    /// The 6 key with Num Lock off.
     Right,
+    /// The 8 key with Num Lock off.
     Up,
+    /// The 2 key with Num Lock off.
     Down,
+    /// The 9 key with Num Lock off.
     PageUp,
+    /// The 3 key with Num Lock off.
     PageDown,
+    /// The 7 key with Num Lock off.
     Home,
+    /// The 1 key with Num Lock off.
     End,
+    /// The 0 key with Num Lock off.
     Insert,
+    /// The decimal key with Num Lock off.
     Delete,
+    /// The 5 key with Num Lock off.
     Begin,
 }
 
@@ -45,9 +60,9 @@ impl KeypadKey {
     ///
     /// With `text`, the key sends what a text key sends. Without it, Enter
     /// sends CR, the arrows, Home, and End send what their cursor keys send
-    /// under `app_cursor` (DECCKM), Insert, Delete, PageUp, and PageDown send
-    /// what their editing keys send, and Begin sends nothing. A digit or an
-    /// operator key sends the character it names.
+    /// under `app_cursor` (DECCKM), and Insert, Delete, PageUp, and PageDown
+    /// send what their editing keys send. Begin, a digit, and an operator key
+    /// send nothing without `text`.
     pub(super) fn encode_legacy(
         self,
         text: Option<&KeyText>,
@@ -69,24 +84,24 @@ impl KeypadKey {
             Self::Delete => EditingKey::Delete.encode(mods),
             Self::PageUp => EditingKey::PageUp.encode(mods),
             Self::PageDown => EditingKey::PageDown.encode(mods),
-            Self::Begin => Vec::new(),
-            Self::Zero => self.encode_character("0", mods),
-            Self::One => self.encode_character("1", mods),
-            Self::Two => self.encode_character("2", mods),
-            Self::Three => self.encode_character("3", mods),
-            Self::Four => self.encode_character("4", mods),
-            Self::Five => self.encode_character("5", mods),
-            Self::Six => self.encode_character("6", mods),
-            Self::Seven => self.encode_character("7", mods),
-            Self::Eight => self.encode_character("8", mods),
-            Self::Nine => self.encode_character("9", mods),
-            Self::Decimal => self.encode_character(".", mods),
-            Self::Divide => self.encode_character("/", mods),
-            Self::Multiply => self.encode_character("*", mods),
-            Self::Subtract => self.encode_character("-", mods),
-            Self::Add => self.encode_character("+", mods),
-            Self::Equal => self.encode_character("=", mods),
-            Self::Separator => self.encode_character(",", mods),
+            Self::Zero
+            | Self::One
+            | Self::Two
+            | Self::Three
+            | Self::Four
+            | Self::Five
+            | Self::Six
+            | Self::Seven
+            | Self::Eight
+            | Self::Nine
+            | Self::Decimal
+            | Self::Divide
+            | Self::Multiply
+            | Self::Subtract
+            | Self::Add
+            | Self::Equal
+            | Self::Separator
+            | Self::Begin => Vec::new(),
         }
     }
 
@@ -131,10 +146,6 @@ impl KeypadKey {
             Self::Begin => return (1, 'E'),
         };
         (number, 'u')
-    }
-
-    fn encode_character(self, character: &str, mods: &TerminalModifiers) -> Vec<u8> {
-        KeyText::new(character).map_or_else(Vec::new, |text| text.encode(mods))
     }
 }
 
@@ -242,15 +253,22 @@ mod tests {
         );
     }
 
-    /// Asserts that a keypad digit without text sends the digit it names.
+    /// Asserts that a keypad digit or operator key without text sends no
+    /// bytes rather than the character it names.
     ///
-    /// Case: the user types a figure on the keypad of a host that reports the
-    /// key without the character it typed.
+    /// Case: on Windows, the user holds Alt and types an Alt code on the
+    /// keypad, so each digit key arrives without the character it typed.
     #[test]
-    fn a_keypad_digit_without_text_sends_the_digit() {
-        assert_eq!(
-            KeypadKey::Seven.encode_legacy(None, &no_mods(), false),
-            b"7".to_vec()
+    fn a_keypad_digit_or_operator_without_text_sends_nothing() {
+        let alt = TerminalModifiers {
+            alt: true,
+            ..Default::default()
+        };
+        assert!(KeypadKey::Seven.encode_legacy(None, &alt, false).is_empty());
+        assert!(
+            KeypadKey::Divide
+                .encode_legacy(None, &alt, false)
+                .is_empty()
         );
     }
 }

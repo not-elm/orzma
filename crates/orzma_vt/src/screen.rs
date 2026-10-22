@@ -1496,8 +1496,8 @@ impl Screen {
     ///
     /// Covers the screen-scoped actions of `RIS`: the grid and its
     /// history, the cursor, the SGR pen, the scrolling margins, the
-    /// origin mode, the tabulation stops, the character set mapping, and
-    /// the vi cursor.
+    /// origin mode, the tabulation stops, the character set mapping, the
+    /// vi cursor, and the keyboard flag stack.
     ///
     /// Reports [`DamageSpan::Full`], or nothing when the grid was
     /// already blank and carried no history; the cursor homes either

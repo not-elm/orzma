@@ -65,11 +65,7 @@ impl TerminalModifiers {
     /// Shift 1, Alt 2, Ctrl 4, and Meta 8 (the protocol's Super bit), or
     /// `None` when no modifier is held.
     fn kitty_code(&self) -> Option<u8> {
-        let code = 1
-            + u8::from(self.shift)
-            + 2 * u8::from(self.alt)
-            + 4 * u8::from(self.ctrl)
-            + 8 * u8::from(self.meta);
+        let code = self.xterm_code().unwrap_or(1) + 8 * u8::from(self.meta);
         (code > 1).then_some(code)
     }
 }
