@@ -47,7 +47,7 @@ run:
 
 [windows]
 run:
-    if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; cargo run
+    if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; python scripts/conpty.py install --dest target/debug; cargo run
 
 # build the workspace
 [unix]
@@ -56,7 +56,7 @@ build:
 
 [windows]
 build:
-    if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; cargo build
+    if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; python scripts/conpty.py install --dest target/debug; cargo build
 
 # run every Rust test
 [unix]
@@ -65,7 +65,7 @@ test:
 
 [windows]
 test:
-    if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; $env:PATH = "$PWD\target\debug;$env:PATH"; cargo test --workspace
+    if (-not $env:CEF_PATH) { $env:CEF_PATH = "{{ cef_cache_dir }}" }; $env:PATH = "$PWD\target\debug;$env:PATH"; python scripts/conpty.py install --dest target/debug; cargo test --workspace
 
 install-apps:
     pnpm i
