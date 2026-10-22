@@ -9,7 +9,7 @@ use super::*;
 #[test]
 fn set_focused_reports_each_transition_while_focus_reporting_is_enabled() {
     let (mut term, sink) = detached_term();
-    term.vt.modes.focus_in_out = true;
+    term.vt.modes_mut().focus_in_out = true;
     term.set_focused(true).expect("set_focused");
     term.set_focused(false).expect("set_focused");
     term.settle_writes();
@@ -23,7 +23,7 @@ fn set_focused_reports_each_transition_while_focus_reporting_is_enabled() {
 #[test]
 fn set_focused_writes_nothing_when_the_state_is_unchanged() {
     let (mut term, sink) = detached_term();
-    term.vt.modes.focus_in_out = true;
+    term.vt.modes_mut().focus_in_out = true;
     term.set_focused(true).expect("set_focused");
     term.set_focused(false).expect("set_focused");
     term.set_focused(false).expect("set_focused");
@@ -41,7 +41,7 @@ fn set_focused_writes_nothing_when_the_state_is_unchanged() {
 fn enabling_focus_reporting_reports_nothing_until_the_next_change() {
     let (mut term, sink) = detached_term();
     term.set_focused(true).expect("set_focused");
-    term.vt.modes.focus_in_out = true;
+    term.vt.modes_mut().focus_in_out = true;
     term.set_focused(true).expect("set_focused");
     term.settle_writes();
     assert_eq!(sink.contents(), b"");
@@ -57,13 +57,19 @@ fn enabling_focus_reporting_reports_nothing_until_the_next_change() {
 #[test]
 fn set_focused_does_not_snap_a_scrolled_back_viewport() {
     let (mut term, sink) = detached_term();
-    term.vt.modes.focus_in_out = true;
-    term.vt.display_offset = DisplayOffset(3);
+    term.vt.modes_mut().focus_in_out = true;
+    term.vt.set_display_offset(DisplayOffset(3));
     term.set_focused(true).expect("set_focused");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[I");
-    assert_eq!(term.vt.display_offset, DisplayOffset(3));
-    assert!(!term.vt.scrolls.iter().any(|s| matches!(s, Scroll::Bottom)));
+    assert_eq!(term.vt.display_offset(), DisplayOffset(3));
+    assert!(
+        !term
+            .vt
+            .scrolls()
+            .iter()
+            .any(|s| matches!(s, Scroll::Bottom))
+    );
     assert!(!term.coalescer.is_armed());
 }
 
@@ -82,7 +88,7 @@ fn a_failed_focus_write_keeps_the_new_state() {
         Box::new(FailingSink),
     )
     .expect("OrzmaTty::detached");
-    term.vt.modes.focus_in_out = true;
+    term.vt.modes_mut().focus_in_out = true;
     term.set_focused(true)
         .expect("the report is queued before the writer fails");
     term.settle_writes();

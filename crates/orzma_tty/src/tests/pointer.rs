@@ -19,7 +19,7 @@ fn a_forwarded_press_writes_an_sgr_report() {
     assert_eq!(copied, None);
     assert_eq!(sink.contents(), b"\x1b[<0;5;7M");
     assert_eq!(sink.writes(), 1);
-    assert_eq!(term.vt.selections, vec![SelectionOp::Clear]);
+    assert_eq!(term.vt.selections(), vec![SelectionOp::Clear]);
 }
 
 /// Asserts that reports follow the VT's X10 encoding when SGR is off.
@@ -29,7 +29,7 @@ fn a_forwarded_press_writes_an_sgr_report() {
 #[test]
 fn a_forwarded_press_follows_the_x10_encoding() {
     let (mut term, sink) = tracking_term();
-    term.vt.modes.mouse_encoding = MouseEncoding::X10;
+    term.vt.modes_mut().mouse_encoding = MouseEncoding::X10;
     term.send_pointer(press(PointerButton::Left, 1, 1))
         .expect("send_pointer");
     term.settle_writes();
@@ -46,14 +46,14 @@ fn a_forwarded_press_follows_the_x10_encoding() {
 #[test]
 fn a_scrolled_back_drag_selects_at_the_display_offset() {
     let (mut term, sink) = tracking_term();
-    term.vt.display_offset = DisplayOffset(3);
+    term.vt.set_display_offset(DisplayOffset(3));
     term.send_pointer(press(PointerButton::Left, 2, 1))
         .expect("press");
     term.send_pointer(motion(4, 2)).expect("motion");
     term.settle_writes();
     assert_eq!(sink.contents(), b"");
     assert_eq!(
-        term.vt.selections,
+        term.vt.selections(),
         vec![
             SelectionOp::Start(
                 GridPoint {
@@ -72,7 +72,7 @@ fn a_scrolled_back_drag_selects_at_the_display_offset() {
             ),
         ]
     );
-    assert!(term.vt.scrolls.is_empty());
+    assert!(term.vt.scrolls().is_empty());
 }
 
 /// Asserts that a selection change a pointer event makes arms the
@@ -83,7 +83,7 @@ fn a_scrolled_back_drag_selects_at_the_display_offset() {
 #[test]
 fn a_pointer_selection_change_arms_the_coalescer() {
     let (mut term, _sink) = detached_term();
-    term.vt.selection_changes = true;
+    term.vt.set_selection_changes(true);
     term.send_pointer(press(PointerButton::Left, 1, 1))
         .expect("press");
     assert!(term.coalescer.is_armed());
@@ -100,10 +100,10 @@ fn a_viewport_scroll_moves_a_held_drag_end() {
     term.send_pointer(press(PointerButton::Left, 1, 1))
         .expect("press");
     term.send_pointer(motion(5, 2)).expect("motion");
-    term.vt.scroll_moves = true;
+    term.vt.set_scroll_moves(true);
     term.scroll(Scroll::Delta(3));
     assert_eq!(
-        term.vt.selections.last(),
+        term.vt.selections().last(),
         Some(&SelectionOp::Extend(
             GridPoint {
                 line: GridLine(-2),
@@ -124,7 +124,7 @@ fn a_cancel_after_a_shrink_reports_inside_the_grid() {
     let (mut term, sink) = tracking_term();
     term.send_pointer(press(PointerButton::Left, 70, 20))
         .expect("press");
-    term.vt.grid_size = GridSize { cols: 40, rows: 10 };
+    term.vt.set_grid_size(GridSize { cols: 40, rows: 10 });
     term.send_pointer(event(PointerKind::Cancel, None, 1, 1))
         .expect("cancel");
     term.settle_writes();
@@ -143,7 +143,7 @@ fn an_out_of_grid_cell_is_clamped_to_the_grid() {
     input.click_count = 2;
     term.send_pointer(input).expect("send_pointer");
     assert_eq!(
-        term.vt.selections,
+        term.vt.selections(),
         vec![SelectionOp::Start(
             GridPoint {
                 line: GridLine(23),
@@ -163,7 +163,7 @@ fn an_out_of_grid_cell_is_clamped_to_the_grid() {
 #[test]
 fn a_finished_drag_returns_the_selected_text() {
     let (mut term, _sink) = detached_term();
-    term.vt.selected_text = Some("hello".to_string());
+    term.vt.set_selected_text(Some("hello".to_string()));
     term.send_pointer(press(PointerButton::Left, 1, 1))
         .expect("press");
     term.send_pointer(motion(5, 1)).expect("motion");
@@ -173,7 +173,7 @@ fn a_finished_drag_returns_the_selected_text() {
         Some("hello".to_string())
     );
 
-    term.vt.selected_text = Some(String::new());
+    term.vt.set_selected_text(Some(String::new()));
     term.send_pointer(press(PointerButton::Left, 1, 1))
         .expect("press");
     term.send_pointer(motion(5, 1)).expect("motion");

@@ -44,8 +44,8 @@ fn detached_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
 /// leaves it.
 fn tracking_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
     let (mut term, sink) = detached_term();
-    term.vt.modes.mouse_tracking = MouseTracking::Drag;
-    term.vt.modes.mouse_encoding = MouseEncoding::Sgr;
+    term.vt.modes_mut().mouse_tracking = MouseTracking::Drag;
+    term.vt.modes_mut().mouse_encoding = MouseEncoding::Sgr;
     (term, sink)
 }
 
@@ -132,7 +132,7 @@ fn update(consumed: usize, closed: bool) -> InterpretOutput {
     }
 }
 
-/// A minimal frame for scripting `FakeVt::frames`; its values are
+/// A minimal frame for scripting `FakeVt::push_frame`; its values are
 /// arbitrary placeholders.
 fn a_frame() -> Frame {
     Frame {

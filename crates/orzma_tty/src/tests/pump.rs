@@ -17,13 +17,13 @@ fn a_pump_drains_at_most_the_chunk_budget() {
     let first = tty.pump();
     assert!(first.more_pending);
     assert_eq!(
-        tty.vt.interpreted.len(),
+        tty.vt.interpreted().len(),
         OrzmaTty::<FakeVt>::MAX_CHUNKS_PER_PUMP
     );
     let second = tty.pump();
     assert!(!second.more_pending);
     assert_eq!(
-        tty.vt.interpreted.len(),
+        tty.vt.interpreted().len(),
         OrzmaTty::<FakeVt>::MAX_CHUNKS_PER_PUMP + 6
     );
 }
@@ -171,7 +171,7 @@ fn the_final_output_is_interpreted_when_the_exit_is_reported() {
     chunk_tx.send(b"bye".to_vec()).expect("send chunk");
     exit_tx.send(Some(0)).expect("send exit");
     assert_eq!(child_exits(&term.pump()), vec![Some(0)]);
-    assert!(term.vt.interpreted.contains(&b"bye".to_vec()));
+    assert!(term.vt.interpreted().contains(&b"bye".to_vec()));
 }
 
 /// Asserts that VT signals from interpreted chunks surface as
@@ -181,7 +181,7 @@ fn the_final_output_is_interpreted_when_the_exit_is_reported() {
 #[test]
 fn vt_signals_are_forwarded_before_child_exit() {
     let (mut term, chunk_tx, exit_tx) = channelled_term();
-    term.vt.updates.push_back(InterpretOutput {
+    term.vt.push_update(InterpretOutput {
         signals: vec![VtSignal::Bell],
         ..update(1, false)
     });
@@ -214,7 +214,7 @@ fn replies_are_written_back_to_the_pty() {
         exit_rx,
     );
     let mut term = OrzmaTty::wired(FakeVt::new(grid(80, 24)), pty);
-    term.vt.updates.push_back(InterpretOutput {
+    term.vt.push_update(InterpretOutput {
         replies: b"\x1b[1;1R".to_vec(),
         ..update(4, false)
     });
@@ -232,11 +232,11 @@ fn replies_are_written_back_to_the_pty() {
 #[test]
 fn a_pump_orders_signals_then_the_frame_then_the_exit() {
     let (mut tty, chunk_tx, exit_tx) = channelled_term();
-    tty.vt.updates.push_back(InterpretOutput {
+    tty.vt.push_update(InterpretOutput {
         signals: vec![VtSignal::Bell],
         ..update(3, false)
     });
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     chunk_tx.send(b"bye".to_vec()).unwrap();
     exit_tx.send(Some(0)).unwrap();
     drop(chunk_tx);

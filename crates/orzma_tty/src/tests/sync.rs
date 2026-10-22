@@ -6,14 +6,14 @@ use super::*;
 /// A terminal whose bootstrap frame is already painted.
 fn painted_term() -> (OrzmaTty<FakeVt>, CaptureSink) {
     let (mut tty, sink) = detached_term();
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     assert_eq!(tty.pump().frames().count(), 1);
     (tty, sink)
 }
 
 /// Opens a synchronized update with one damaging chunk.
 fn open_update(tty: &mut OrzmaTty<FakeVt>) {
-    tty.vt.sync_script.push_back(SynchronizedOutput::Active);
+    tty.vt.push_sync_state(SynchronizedOutput::Active);
     tty.feed_bytes(b"x")
         .expect("the fake VT honors the interpret contract");
 }
@@ -21,9 +21,9 @@ fn open_update(tty: &mut OrzmaTty<FakeVt>) {
 /// Closes the open synchronized update with one chunk that has a frame
 /// ready.
 fn close_update(tty: &mut OrzmaTty<FakeVt>) {
-    tty.vt.sync_script.push_back(SynchronizedOutput::Inactive);
-    tty.vt.updates.push_back(update(1, true));
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_sync_state(SynchronizedOutput::Inactive);
+    tty.vt.push_update(update(1, true));
+    tty.vt.push_frame(a_frame());
     tty.feed_bytes(b"z")
         .expect("the fake VT honors the interpret contract");
 }
@@ -38,10 +38,10 @@ fn an_open_update_holds_back_the_due_frame() {
     let (mut tty, _sink) = painted_term();
     open_update(&mut tty);
     tty.sync_deadline = Some(Instant::now() + Duration::from_secs(60));
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     thread::sleep(Duration::from_millis(5));
     assert!(tty.pump().frames().next().is_none());
-    assert_eq!(tty.vt.frames.len(), 1);
+    assert_eq!(tty.vt.pending_frames(), 1);
 }
 
 /// Asserts that a pump emits no bootstrap frame while a synchronized
@@ -54,7 +54,7 @@ fn an_open_update_holds_back_the_bootstrap_frame() {
     let (mut tty, _sink) = detached_term();
     open_update(&mut tty);
     tty.sync_deadline = Some(Instant::now() + Duration::from_secs(60));
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     assert!(tty.pump().frames().next().is_none());
     assert!(tty.coalescer.needs_bootstrap());
 }
@@ -98,11 +98,11 @@ fn a_timed_out_update_stops_holding_frames_back() {
     open_update(&mut tty);
     let expired = Instant::now();
     tty.sync_deadline = Some(expired);
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     thread::sleep(Duration::from_millis(5));
     assert_eq!(tty.pump().frames().count(), 1);
 
-    tty.vt.sync_script.push_back(SynchronizedOutput::Active);
+    tty.vt.push_sync_state(SynchronizedOutput::Active);
     tty.feed_bytes(b"y")
         .expect("the fake VT honors the interpret contract");
     assert_eq!(tty.sync_deadline, Some(expired));
@@ -148,14 +148,14 @@ fn a_closed_update_yields_a_frame_at_once() {
 fn closes_inside_the_emit_interval_share_one_frame() {
     let (mut tty, _sink) = painted_term();
     thread::sleep(OrzmaTty::<FakeVt>::SYNC_EMIT_INTERVAL);
-    tty.vt.updates.push_back(update(1, true));
-    tty.vt.updates.push_back(update(1, true));
-    tty.vt.frames.push_back(a_frame());
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_update(update(1, true));
+    tty.vt.push_update(update(1, true));
+    tty.vt.push_frame(a_frame());
+    tty.vt.push_frame(a_frame());
     tty.feed_bytes(b"ab")
         .expect("the fake VT honors the interpret contract");
-    assert_eq!(tty.vt.interpreted.len(), 2);
-    assert_eq!(tty.vt.frames.len(), 1);
+    assert_eq!(tty.vt.interpreted().len(), 2);
+    assert_eq!(tty.vt.pending_frames(), 1);
     assert!(tty.coalescer.is_armed());
 }
 
@@ -167,7 +167,7 @@ fn closes_inside_the_emit_interval_share_one_frame() {
 #[test]
 fn an_empty_update_keeps_the_bootstrap_debt() {
     let (mut tty, _sink) = detached_term();
-    tty.vt.updates.push_back(update(1, true));
+    tty.vt.push_update(update(1, true));
     tty.feed_bytes(b"x")
         .expect("the fake VT honors the interpret contract");
     assert!(tty.coalescer.needs_bootstrap());
@@ -183,7 +183,7 @@ fn an_empty_update_keeps_the_bootstrap_debt() {
 fn flush_now_emits_through_an_open_update() {
     let (mut tty, _sink) = painted_term();
     open_update(&mut tty);
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     assert_eq!(tty.flush_now().frames().count(), 1);
     assert!(tty.sync_deadline.is_some());
 }
@@ -201,9 +201,9 @@ fn a_close_frame_keeps_its_place_among_the_signals() {
     first.signals.push(VtSignal::Bell);
     let mut second = update(1, false);
     second.signals.push(VtSignal::ResetTitle);
-    tty.vt.updates.push_back(first);
-    tty.vt.updates.push_back(second);
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_update(first);
+    tty.vt.push_update(second);
+    tty.vt.push_frame(a_frame());
     tty.feed_bytes(b"ab")
         .expect("the fake VT honors the interpret contract");
     assert!(matches!(
@@ -225,14 +225,14 @@ fn a_close_frame_keeps_its_place_among_the_signals() {
 #[test]
 fn a_vt_that_interprets_nothing_is_cut_off() {
     let (mut tty, _sink) = painted_term();
-    tty.vt.updates.push_back(update(0, false));
+    tty.vt.push_update(update(0, false));
 
     let error = tty
         .feed_bytes(b"abc")
         .expect_err("a VT that interprets nothing breaks the contract");
 
     assert!(matches!(error, OrzmaTtyError::VtConsumedNothing { len: 3 }));
-    assert_eq!(tty.vt.interpreted.len(), 1);
+    assert_eq!(tty.vt.interpreted().len(), 1);
 }
 
 /// Asserts that a VT which claims more bytes than the chunk held is cut
@@ -245,7 +245,7 @@ fn a_vt_that_interprets_nothing_is_cut_off() {
 #[test]
 fn a_vt_that_interprets_beyond_the_chunk_is_cut_off() {
     let (mut tty, _sink) = painted_term();
-    tty.vt.updates.push_back(update(9, false));
+    tty.vt.push_update(update(9, false));
 
     let error = tty
         .feed_bytes(b"abc")
@@ -258,5 +258,5 @@ fn a_vt_that_interprets_beyond_the_chunk_is_cut_off() {
             len: 3
         }
     ));
-    assert_eq!(tty.vt.interpreted.len(), 1);
+    assert_eq!(tty.vt.interpreted().len(), 1);
 }

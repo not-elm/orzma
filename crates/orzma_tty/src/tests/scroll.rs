@@ -11,7 +11,7 @@ use super::*;
 #[test]
 fn scroll_arms_the_coalescer_when_the_viewport_moves() {
     let (mut term, _sink) = detached_term();
-    term.vt.scroll_moves = true;
+    term.vt.set_scroll_moves(true);
     term.scroll(Scroll::Delta(3));
     assert!(term.coalescer.is_armed());
 }
@@ -35,11 +35,11 @@ fn a_no_op_scroll_does_not_arm_the_coalescer() {
 #[test]
 fn a_no_op_scroll_does_not_extend_the_deadline() {
     let (mut term, _sink) = detached_term();
-    term.vt.scroll_moves = true;
+    term.vt.set_scroll_moves(true);
     term.scroll(Scroll::Delta(3));
     let deadline = term.coalescer.next_deadline();
     assert!(deadline.is_some(), "precondition: a real scroll arms");
-    term.vt.scroll_moves = false;
+    term.vt.set_scroll_moves(false);
     term.scroll(Scroll::Delta(0));
     assert_eq!(term.coalescer.next_deadline(), deadline);
 }
@@ -52,7 +52,7 @@ fn a_no_op_scroll_does_not_extend_the_deadline() {
 #[test]
 fn scroll_writes_nothing_through_the_pty_writer() {
     let (mut term, sink) = detached_term();
-    term.vt.scroll_moves = true;
+    term.vt.set_scroll_moves(true);
     term.scroll(Scroll::Delta(3));
     term.scroll(Scroll::Bottom);
     term.settle_writes();
@@ -71,13 +71,13 @@ fn selection_operations_arm_the_coalescer_only_on_a_change() {
         line: GridLine(0),
         column: GridColumn(0),
     };
-    term.vt.selection_changes = false;
+    term.vt.set_selection_changes(false);
     term.start_selection(cell, CellSide::Left, SelectionKind::Simple);
     term.extend_selection(cell, CellSide::Right);
     term.clear_selection();
     assert!(!term.coalescer.is_armed());
 
-    term.vt.selection_changes = true;
+    term.vt.set_selection_changes(true);
     term.start_selection(cell, CellSide::Left, SelectionKind::Simple);
     assert!(term.coalescer.is_armed());
 }
