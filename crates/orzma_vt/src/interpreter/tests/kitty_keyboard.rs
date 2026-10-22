@@ -101,8 +101,14 @@ fn a_set_on_an_empty_stack_is_undone_by_one_pop() {
 #[test]
 fn each_screen_keeps_its_own_flags() {
     assert_eq!(flags_after(b"\x1b[>1u\x1b[?1049h"), b"\x1b[?0u");
-    assert_eq!(flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>0u\x1b[?1049l"), b"\x1b[?1u");
-    assert_eq!(flags_after(b"\x1b[?1049h\x1b[>1u\x1b[?1049l\x1b[?1049h"), b"\x1b[?1u");
+    assert_eq!(
+        flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>0u\x1b[?1049l"),
+        b"\x1b[?1u"
+    );
+    assert_eq!(
+        flags_after(b"\x1b[?1049h\x1b[>1u\x1b[?1049l\x1b[?1049h"),
+        b"\x1b[?1u"
+    );
 }
 
 /// Asserts that leaving the alternate screen reports the main screen's flags.
@@ -118,7 +124,10 @@ fn leaving_the_alternate_screen_hands_the_shell_its_legacy_keys() {
 /// Case: a full-screen program is re-entered with mode 1047 after it pushed flags.
 #[test]
 fn the_alternate_screen_erase_keeps_its_flags() {
-    assert_eq!(flags_after(b"\x1b[?1047h\x1b[>1u\x1b[?1047l\x1b[?1047h"), b"\x1b[?1u");
+    assert_eq!(
+        flags_after(b"\x1b[?1047h\x1b[>1u\x1b[?1047l\x1b[?1047h"),
+        b"\x1b[?1u"
+    );
 }
 
 /// Asserts that an erase and a cursor restore leave the flags alone.
@@ -135,8 +144,14 @@ fn an_erase_or_a_cursor_restore_leaves_the_flags_alone() {
 /// Case: the user runs `reset` after a crashed program left flags pushed on either screen.
 #[test]
 fn a_hard_reset_clears_both_screens() {
-    assert_eq!(flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>1u\x1bc"), b"\x1b[?0u");
-    assert_eq!(flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>1u\x1bc\x1b[?1049h"), b"\x1b[?0u");
+    assert_eq!(
+        flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>1u\x1bc"),
+        b"\x1b[?0u"
+    );
+    assert_eq!(
+        flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>1u\x1bc\x1b[?1049h"),
+        b"\x1b[?0u"
+    );
 }
 
 /// Asserts that the sequences of the `reset` command leave no flag in force.
@@ -144,7 +159,10 @@ fn a_hard_reset_clears_both_screens() {
 /// Case: the user runs `reset` after a crashed program left flags pushed.
 #[test]
 fn the_reset_command_restores_the_legacy_keys() {
-    assert_eq!(flags_after(b"\x1b[>1u\x1bc\x1b]104\x1b[!p\x1b[?3;4l\x1b[4l\x1b>"), b"\x1b[?0u");
+    assert_eq!(
+        flags_after(b"\x1b[>1u\x1bc\x1b]104\x07\x1b[!p\x1b[?3;4l\x1b[4l\x1b>"),
+        b"\x1b[?0u"
+    );
 }
 
 /// Asserts that a soft reset clears the flags of both screens.
@@ -152,8 +170,14 @@ fn the_reset_command_restores_the_legacy_keys() {
 /// Case: the user runs `tput init` after a crashed program left flags pushed on either screen.
 #[test]
 fn a_soft_reset_clears_both_screens() {
-    assert_eq!(flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>1u\x1b[!p"), b"\x1b[?0u");
-    assert_eq!(flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>1u\x1b[!p\x1b[?1049l"), b"\x1b[?0u");
+    assert_eq!(
+        flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>1u\x1b[!p"),
+        b"\x1b[?0u"
+    );
+    assert_eq!(
+        flags_after(b"\x1b[>1u\x1b[?1049h\x1b[>1u\x1b[!p\x1b[?1049l"),
+        b"\x1b[?0u"
+    );
 }
 
 /// Asserts that a soft reset on the alternate screen clears the flags of both screens but
