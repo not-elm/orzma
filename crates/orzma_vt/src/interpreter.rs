@@ -274,7 +274,7 @@ impl VTActor for Executor<'_> {
             // Kitty keyboard flags query
             (Some(b'?'), [], b'u') => {
                 let flags = self.device.kitty_keyboard_flags();
-                self.reply(format!("[?{}u", flags.bits()).as_bytes());
+                self.reply(format!("\x1b[?{}u", flags.bits()).as_bytes());
             }
             // Kitty keyboard flags push
             (Some(b'>'), [], b'u') => self
