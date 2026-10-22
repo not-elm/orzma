@@ -3,7 +3,7 @@
 
 Sections, in fixed order: Rust crates (cargo-about), npm packages
 (@quantco/pnpm-licenses, scoped to @orzma/orzmd-web prod deps), ported source
-(Vimium), bundled fonts, and CEF/Chromium. Output is deterministic so CI can
+(Vimium), bundled fonts, CEF/Chromium, and Windows ConPTY. Output is deterministic so CI can
 detect drift.
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ LICENSES_DIR = REPO_ROOT / "licenses"
 OUTPUT_PATH = LICENSES_DIR / "THIRD-PARTY-LICENSES.md"
 NPM_DIR = REPO_ROOT / "apps" / "orzmd"
 FENCE = "~~~"
-NON_FONT_DIRS = {"chromium", "vimium"}
+NON_FONT_DIRS = {"chromium", "conpty", "vimium"}
 
 HEADER = (
     "# Third-Party Licenses\n"
@@ -97,6 +97,21 @@ def render_chromium_section(licenses_dir: Path) -> str:
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
+def render_conpty_section(licenses_dir: Path) -> str:
+    conpty = licenses_dir / "conpty"
+    license_text = (conpty / "LICENSE").read_text(encoding="utf-8")
+    notice_text = (conpty / "NOTICE.md").read_text(encoding="utf-8")
+    lines = [
+        "## Windows ConPTY\n",
+        "orzma's Windows distribution bundles `conpty.dll` and `OpenConsole.exe` from\n"
+        "Microsoft's `Microsoft.Windows.Console.ConPTY` package\n"
+        "(https://github.com/microsoft/terminal). Its license and third-party notice follow.\n",
+        _fenced(license_text),
+        _fenced(notice_text),
+    ]
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
 def render_ported_section(licenses_dir: Path) -> str:
     license_text = (licenses_dir / "vimium" / "MIT-LICENSE.txt").read_text(encoding="utf-8")
     lines = [
@@ -118,6 +133,7 @@ def assemble(rust_body: str, npm_entries: list[dict], licenses_dir: Path) -> str
         render_ported_section(licenses_dir),
         render_fonts_section(licenses_dir),
         render_chromium_section(licenses_dir),
+        render_conpty_section(licenses_dir),
     ]
     return "\n".join(part.rstrip("\n") for part in parts) + "\n"
 

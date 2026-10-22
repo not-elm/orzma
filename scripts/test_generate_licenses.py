@@ -44,12 +44,15 @@ class RenderFonts(unittest.TestCase):
             (d / "beta" / "OFL.txt").write_text("BETA OFL", encoding="utf-8")
             (d / "chromium").mkdir()
             (d / "chromium" / "LICENSE.txt").write_text("CEF SHOULD NOT APPEAR", encoding="utf-8")
+            (d / "conpty").mkdir()
+            (d / "conpty" / "LICENSE").write_text("CONPTY SHOULD NOT APPEAR", encoding="utf-8")
             (d / "vimium").mkdir()
             (d / "vimium" / "MIT-LICENSE.txt").write_text("VIMIUM SHOULD NOT APPEAR", encoding="utf-8")
             out = gl.render_fonts_section(d)
             self.assertIn("ALPHA LIC", out)
             self.assertIn("BETA OFL", out)
             self.assertNotIn("CEF SHOULD NOT APPEAR", out)
+            self.assertNotIn("CONPTY SHOULD NOT APPEAR", out)
             self.assertNotIn("VIMIUM SHOULD NOT APPEAR", out)
             self.assertLess(out.index("alpha"), out.index("beta"))
 
@@ -63,6 +66,20 @@ class RenderChromium(unittest.TestCase):
             out = gl.render_chromium_section(d)
             self.assertIn("CEF BSD LICENSE", out)
             self.assertIn("CREDITS.html", out)
+
+
+class RenderConpty(unittest.TestCase):
+    def test_includes_the_terminal_license_notice_and_the_bundled_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "conpty").mkdir()
+            (d / "conpty" / "LICENSE").write_text("CONPTY MIT", encoding="utf-8")
+            (d / "conpty" / "NOTICE.md").write_text("CONPTY NOTICE", encoding="utf-8")
+            out = gl.render_conpty_section(d)
+            self.assertTrue(out.startswith("## Windows ConPTY"))
+            self.assertIn("CONPTY MIT", out)
+            self.assertLess(out.index("CONPTY MIT"), out.index("CONPTY NOTICE"))
+            self.assertIn("OpenConsole.exe", out)
 
 
 class RenderPorted(unittest.TestCase):
@@ -83,6 +100,9 @@ class Assemble(unittest.TestCase):
         (d / "font1" / "OFL.txt").write_text("FONT1 TEXT", encoding="utf-8")
         (d / "chromium").mkdir()
         (d / "chromium" / "LICENSE.txt").write_text("CEF BSD", encoding="utf-8")
+        (d / "conpty").mkdir()
+        (d / "conpty" / "LICENSE").write_text("CONPTY MIT", encoding="utf-8")
+        (d / "conpty" / "NOTICE.md").write_text("CONPTY NOTICE", encoding="utf-8")
         (d / "vimium").mkdir()
         (d / "vimium" / "MIT-LICENSE.txt").write_text("VIMIUM MIT", encoding="utf-8")
 
@@ -101,6 +121,7 @@ class Assemble(unittest.TestCase):
             self.assertLess(a.index("npm packages"), a.index("VIMIUM MIT"))
             self.assertLess(a.index("VIMIUM MIT"), a.index("FONT1 TEXT"))
             self.assertLess(a.index("FONT1 TEXT"), a.index("CEF BSD"))
+            self.assertLess(a.index("CEF BSD"), a.index("CONPTY MIT"))
 
 
 class Main(unittest.TestCase):
