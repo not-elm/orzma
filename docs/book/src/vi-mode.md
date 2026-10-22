@@ -21,8 +21,8 @@ scrollback.
 On the alternate screen, where full-screen programs such as nvim and Claude
 Code run, there is no scrollback for vi mode to move through. When the program
 tracks the mouse, vi mode lets it scroll its own content instead, except while
-you drag a mouse selection: the scroll keys (`Ctrl+Y`, `Ctrl+E`, `Ctrl+U`,
-`Ctrl+D`, `Ctrl+B`, `Ctrl+F`) and `k` on the top line or `j` on the bottom line
+you drag a mouse selection: the scroll keys (`Ctrl+Y`, `Ctrl+E`, `K`,
+`J`, `Ctrl+B`, `Ctrl+F`) and `k` on the top line or `j` on the bottom line
 send the program wheel events at the vi cursor, and the wheel without Shift
 reaches the program at the pointer. Any selection is cleared before the
 program scrolls, and how far each event scrolls is up to the program. A held

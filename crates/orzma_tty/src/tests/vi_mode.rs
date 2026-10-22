@@ -185,7 +185,7 @@ fn a_release_after_entering_vi_mode_still_reaches_the_app() {
 /// the vi cursor while a mouse drag is held.
 ///
 /// Case: in vi mode at the live tail the user holds a drag across a word
-/// and presses `Ctrl+D`.
+/// and presses `Shift+J`.
 #[test]
 fn a_page_motion_during_a_held_drag_moves_the_vi_cursor() {
     let (mut term, _sink) = real_term(4);
@@ -207,7 +207,7 @@ fn a_page_motion_during_a_held_drag_moves_the_vi_cursor() {
 /// cursor in one write, instead of moving the vi cursor or the viewport.
 ///
 /// Case: the user enters vi mode over Claude Code's fullscreen chat and
-/// presses `Ctrl+U` to read back older messages.
+/// presses `Shift+K` to read back older messages.
 #[test]
 fn a_half_page_up_over_a_mouse_tracking_app_sends_wheel_ups_at_the_vi_cursor() {
     let (mut term, sink) = app_scroll_term(12);
@@ -280,7 +280,7 @@ fn history_jumps_and_a_zero_delta_are_not_forwarded() {
 /// mode on.
 ///
 /// Case: the user has selected a word in vi mode over Claude Code's
-/// fullscreen chat and presses `Ctrl+U` before copying it.
+/// fullscreen chat and presses `Shift+K` before copying it.
 #[test]
 fn a_forwarded_vi_scroll_clears_the_selection_and_stays_in_vi_mode() {
     let (mut term, _sink) = app_scroll_term(12);
@@ -371,7 +371,7 @@ fn vi_scrolls_stay_local_while_a_selection_press_is_held() {
 /// Asserts that vi scrolls over an alternate-screen program that does not
 /// track the mouse move the vi cursor and reach nothing.
 ///
-/// Case: the user enters vi mode over less and presses `Ctrl+U`.
+/// Case: the user enters vi mode over less and presses `Shift+K`.
 #[test]
 fn vi_scrolls_over_an_app_that_does_not_track_the_mouse_are_not_forwarded() {
     let (mut term, sink) = real_term(12);

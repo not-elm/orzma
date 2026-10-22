@@ -49,7 +49,7 @@ copied otherwise; a copied image does not refresh until orzmd is restarted.
 | --- | --- |
 | `j` / `ArrowDown` | Scroll down one line |
 | `k` / `ArrowUp` | Scroll up one line |
-| `Ctrl+d` / `Ctrl+u` | Scroll half a page down / up |
+| `J` / `K` | Scroll half a page down / up |
 | `Ctrl+f` / `Ctrl+b` | Scroll a full page down / up |
 | `Space` / `PageDown` | Scroll a full page down |
 | `PageUp` | Scroll a full page up |

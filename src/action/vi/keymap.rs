@@ -43,8 +43,8 @@ impl ResolvedViModeKeys {
         }
         if mods.ctrl {
             // NOTE: the Ctrl table keys on the physical KeyCode, which cannot
-            // carry Shift — without this guard Ctrl+Shift+D would silently
-            // alias to the Ctrl+D binding (scroll half a page down).
+            // carry Shift — without this guard Ctrl+Shift+F would silently
+            // alias to the Ctrl+F binding (scroll one page down).
             if mods.shift {
                 return None;
             }

@@ -1740,7 +1740,7 @@ mod tests {
     /// reports at the vi cursor.
     ///
     /// Case: the user enters vi mode over Claude Code's fullscreen chat in
-    /// a 24-row pane and presses `Ctrl+U`.
+    /// a 24-row pane and presses `Shift+K`.
     #[test]
     fn a_vi_scroll_over_a_mouse_tracking_app_reaches_the_pane_as_wheel_reports() {
         let mut h = Harness::new();
