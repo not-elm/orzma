@@ -14,6 +14,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import conpty
+
 APP_NAME = "orzma"
 BIN_NAME = "orzma"
 ARCH = "x64"
@@ -363,6 +365,7 @@ class StageConfig:
     render_process_target_dir: Path
     skip_build: bool
     rebuild_render_process: bool = False
+    conpty_cache_dir: Path = conpty.DEFAULT_CACHE_DIR
 
     @property
     def stage_dir(self) -> Path:
@@ -395,6 +398,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
              "the CEF wrapper's object paths under it must stay within MAX_PATH",
     )
     p.add_argument("--out-dir", default=str(REPO_ROOT / "target" / "dist"))
+    p.add_argument("--conpty-cache-dir", default=str(conpty.DEFAULT_CACHE_DIR))
     p.add_argument("--refresh-inventory", action="store_true",
                    help="rewrite build/windows/cef-inventory.json from --cef-dir and exit")
     p.add_argument("--cef-version", help="required with --refresh-inventory")
@@ -412,6 +416,7 @@ def resolve_config(args: argparse.Namespace) -> StageConfig:
         render_process_target_dir=Path(args.render_process_target_dir).expanduser(),
         skip_build=args.skip_build,
         rebuild_render_process=args.rebuild_render_process,
+        conpty_cache_dir=Path(args.conpty_cache_dir).expanduser(),
     )
 
 
@@ -530,6 +535,11 @@ def stage_binaries(cfg: StageConfig) -> None:
         print(f"==> staged {name}")
 
 
+def stage_conpty(cfg: StageConfig, src_dir: Path) -> None:
+    conpty.install(src_dir, cfg.stage_dir)
+    print(f"==> staged ConPTY {conpty.CONPTY_VERSION}")
+
+
 def stage_licenses(cfg: StageConfig) -> None:
     for src in (REPO_ROOT / "licenses" / "THIRD-PARTY-LICENSES.md",):
         shutil.copy2(src, cfg.stage_dir / src.name)
@@ -567,6 +577,7 @@ def main(argv: list[str] | None = None) -> None:
     cfg = resolve_config(args)
     verify_orzmd_web_assets()
     verify_orzbrowser_web_assets()
+    conpty_dir = conpty.fetch(cfg.conpty_cache_dir)
     if cfg.render_process_bin is None:
         assert_render_process_matches_lockfile(
             RENDER_PROCESS_VERSION, locked_version(RENDER_PROCESS_CRATE)
@@ -578,6 +589,7 @@ def main(argv: list[str] | None = None) -> None:
         cargo_build(cfg)
     stage_cef(cfg)
     stage_binaries(cfg)
+    stage_conpty(cfg, conpty_dir)
     stage_licenses(cfg)
     verify_crt(cfg)
     print(f"version={cfg.version}")

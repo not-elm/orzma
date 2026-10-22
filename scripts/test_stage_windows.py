@@ -305,6 +305,7 @@ class StageConfigResolution(unittest.TestCase):
         self.assertIsNone(cfg.render_process_bin)
         self.assertFalse(cfg.skip_build)
         self.assertFalse(cfg.rebuild_render_process)
+        self.assertEqual(cfg.conpty_cache_dir, sw.conpty.DEFAULT_CACHE_DIR)
 
     def test_the_render_process_builds_outside_the_checkout_by_default(self):
         args = sw.build_arg_parser().parse_args(["--version", "1.2.3"])
@@ -315,7 +316,7 @@ class StageConfigResolution(unittest.TestCase):
         args = sw.build_arg_parser().parse_args(
             ["--version", "1.2.3", "--out-dir", "/tmp/out", "--cef-dir", "/tmp/cef",
              "--render-process-bin", "/tmp/rp.exe", "--skip-build", "--rebuild-render-process",
-             "--render-process-target-dir", "/tmp/rp"]
+              "--render-process-target-dir", "/tmp/rp", "--conpty-cache-dir", "/tmp/conpty"]
         )
         cfg = sw.resolve_config(args)
         self.assertEqual(cfg.out_dir, Path("/tmp/out"))
@@ -324,6 +325,7 @@ class StageConfigResolution(unittest.TestCase):
         self.assertTrue(cfg.skip_build)
         self.assertTrue(cfg.rebuild_render_process)
         self.assertEqual(cfg.render_process_target_dir, Path("/tmp/rp"))
+        self.assertEqual(cfg.conpty_cache_dir, Path("/tmp/conpty"))
 
 
 class StageCefTree(unittest.TestCase):
@@ -429,6 +431,23 @@ class StageCefLocales(unittest.TestCase):
                 self._stage(root, cef)
             self.assertIn("en-US", str(raised.exception))
             self.assertFalse((root / "out" / "stage").exists())
+
+
+class StageConptyPair(unittest.TestCase):
+    def test_stage_conpty_installs_the_fetched_pair_into_the_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = sw.StageConfig(
+                version="0.0.0",
+                cef_dir=root / "cef",
+                out_dir=root / "out",
+                render_process_bin=None,
+                render_process_target_dir=root / "rp",
+                skip_build=True,
+            )
+            with mock.patch.object(sw.conpty, "install", return_value=[]) as install:
+                sw.stage_conpty(cfg, root / "src")
+            install.assert_called_once_with(root / "src", cfg.stage_dir)
 
 
 class OrzmdAssets(unittest.TestCase):
