@@ -5,7 +5,7 @@ use crate::action::vi::ResolvedViModeKeys;
 use crate::action::vi::mode::ViModeState;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
-use crate::input::keyboard::held_modifiers::{AltPolicy, HeldModifiers};
+use crate::input::keyboard::held_modifiers::{AltPolicy, FrameStartModifiers, HeldModifiers};
 use crate::input::keyboard::key_effect::{
     BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch,
 };
@@ -42,13 +42,15 @@ impl Plugin for KeyboardHandlerPlugin {
 
 /// The classifier inputs used to resolve the frame's key effects: the
 /// shortcut table, resolved vi-mode keys, held physical and logical keys, the
-/// Alt policy, and the real-time clock the leader timeout is measured against.
+/// modifier keys the frame starts from, the Alt policy, and the real-time
+/// clock the leader timeout is measured against.
 #[derive(SystemParam)]
 struct ClassifyInputs<'w> {
     shortcuts: Res<'w, Shortcuts>,
     resolved_vi_mode: Res<'w, ResolvedViModeKeys>,
     bevy_keys: Res<'w, ButtonInput<KeyCode>>,
     logical_keys: Res<'w, ButtonInput<Key>>,
+    frame_start: Res<'w, FrameStartModifiers>,
     alt_policy: Res<'w, AltPolicy>,
     time: Res<'w, Time<Real>>,
 }
@@ -101,7 +103,7 @@ fn resolve_key_effects(
         .unwrap_or(&[]);
     let held_mods = HeldModifiers::from_input(&inputs.bevy_keys, &inputs.logical_keys);
     let ctx = BatchContext {
-        held: held_mods,
+        frame_start: inputs.frame_start.keys(),
         alt_policy: *inputs.alt_policy,
         now: inputs.time.elapsed(),
         in_vi_mode,
@@ -235,6 +237,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<Key>>()
             .init_resource::<AltPolicy>()
+            .init_resource::<FrameStartModifiers>()
             .init_resource::<ImeState>()
             .init_resource::<FocusedWebview>()
             .init_resource::<CefKeyboardFilter>()
@@ -260,10 +263,20 @@ mod tests {
         app
     }
 
-    fn hold_ctrl(app: &mut App) {
+    fn hold_modifier(app: &mut App, key_code: KeyCode) {
+        let logical = match key_code {
+            KeyCode::ControlLeft | KeyCode::ControlRight => Key::Control,
+            KeyCode::ShiftLeft | KeyCode::ShiftRight => Key::Shift,
+            KeyCode::AltLeft | KeyCode::AltRight => Key::Alt,
+            KeyCode::SuperLeft | KeyCode::SuperRight => Key::Super,
+            other => panic!("hold_modifier takes a modifier key, got {other:?}"),
+        };
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::ControlLeft);
+            .press(key_code);
+        let mut keys = app.world().resource::<FrameStartModifiers>().keys();
+        keys.apply(key_code, &logical, ButtonState::Pressed);
+        *app.world_mut().resource_mut::<FrameStartModifiers>() = FrameStartModifiers::new(keys);
     }
 
     fn selection_range() -> SelectionRange {
@@ -285,6 +298,17 @@ mod tests {
             key_code,
             logical_key: logical,
             state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+    }
+
+    fn release_key(app: &mut App, key_code: KeyCode, logical: Key) {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key: logical,
+            state: ButtonState::Released,
             text: None,
             repeat: false,
             window: Entity::PLACEHOLDER,
@@ -387,9 +411,7 @@ mod tests {
     #[test]
     fn quit_writes_appexit_and_no_message() {
         let mut app = quit_test_app(true);
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::SuperLeft);
+        hold_modifier(&mut app, KeyCode::SuperLeft);
         press_key(&mut app, KeyCode::KeyQ, Key::Character("q".into()));
         app.update();
         let cap = app.world().resource::<Captured>();
@@ -427,11 +449,8 @@ mod tests {
         );
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.press(KeyCode::ControlLeft);
-            keys.press(KeyCode::ShiftLeft);
-        }
+        hold_modifier(&mut app, KeyCode::ControlLeft);
+        hold_modifier(&mut app, KeyCode::ShiftLeft);
         press_key(&mut app, KeyCode::Escape, Key::Escape);
         app.update();
         assert_eq!(app.world().resource::<Requested>().0, vec![None]);
@@ -499,7 +518,7 @@ mod tests {
                 ..TerminalView::default()
             },
         ));
-        hold_ctrl(&mut app);
+        hold_modifier(&mut app, KeyCode::ControlLeft);
         press_key(&mut app, KeyCode::KeyC, Key::Character("c".into()));
         app.update();
         assert_eq!(
@@ -528,7 +547,7 @@ mod tests {
         ));
         app.world_mut()
             .spawn((OrzmaTerminal, KeyboardFocused, TerminalView::default()));
-        hold_ctrl(&mut app);
+        hold_modifier(&mut app, KeyCode::ControlLeft);
         press_key(&mut app, KeyCode::KeyC, Key::Character("c".into()));
         app.update();
         assert_eq!(
@@ -562,9 +581,7 @@ mod tests {
     fn quit_writes_appexit_with_no_focused_terminal() {
         // No KeyboardFocused terminal spawned; the window is focused.
         let mut app = quit_test_app(false);
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::SuperLeft);
+        hold_modifier(&mut app, KeyCode::SuperLeft);
         press_key(&mut app, KeyCode::KeyQ, Key::Character("q".into()));
         app.update();
         let cap = app.world().resource::<Captured>();
@@ -662,9 +679,7 @@ mod tests {
         app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::SuperLeft);
+        hold_modifier(&mut app, KeyCode::SuperLeft);
         press_key(&mut app, KeyCode::Equal, Key::Character("=".into()));
         app.update();
         assert_eq!(
@@ -798,9 +813,7 @@ mod tests {
         let mut app = resolve_app(Shortcuts::default());
         app.insert_resource(AltPolicy::for_option_as_alt(OptionAsAlt::Right));
         app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::AltLeft);
+        hold_modifier(&mut app, KeyCode::AltLeft);
         press_key(&mut app, KeyCode::KeyH, Key::Character("˙".into()));
         app.update();
         let cap = app.world().resource::<Captured>();
@@ -808,5 +821,81 @@ mod tests {
             cap.last_typed(),
             Some((Key::Character("˙".into()), Modifiers::default()))
         );
+    }
+
+    /// Asserts that a key is typed with the modifiers held when it was
+    /// pressed, even when the modifier is released within the same frame.
+    ///
+    /// Case: a user types quickly, pressing Enter and releasing Shift in one
+    /// frame.
+    #[test]
+    fn a_shift_released_after_enter_reaches_the_terminal_with_shift() {
+        let mut app = resolve_app(Shortcuts::default());
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
+        hold_modifier(&mut app, KeyCode::ShiftLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::ShiftLeft);
+        press_key(&mut app, KeyCode::Enter, Key::Enter);
+        release_key(&mut app, KeyCode::ShiftLeft, Key::Shift);
+        app.update();
+        let cap = app.world().resource::<Captured>();
+        assert_eq!(
+            cap.last_typed(),
+            Some((
+                Key::Enter,
+                Modifiers {
+                    shift: true,
+                    ..Default::default()
+                }
+            ))
+        );
+    }
+
+    /// Asserts that a forward chord pressed while its modifier is released
+    /// in the same frame is withheld from the page with the end-of-frame
+    /// modifiers.
+    ///
+    /// Case: a TUI browser forwards Ctrl+Enter, and the user presses it and
+    /// releases Ctrl in one frame.
+    #[test]
+    fn a_forward_chord_is_withheld_with_the_end_of_frame_modifiers() {
+        let mut app = resolve_app(Shortcuts::default());
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
+        let webview = app
+            .world_mut()
+            .spawn(ForwardKeys(vec![NormalizedChord {
+                key: ChordKey::Code(KeyCode::Enter),
+                ctrl: true,
+                alt: false,
+                shift: false,
+                logo: false,
+            }]))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
+        hold_modifier(&mut app, KeyCode::ControlLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::ControlLeft);
+        press_key(&mut app, KeyCode::Enter, Key::Enter);
+        release_key(&mut app, KeyCode::ControlLeft, Key::Control);
+        app.update();
+        let cap = app.world().resource::<Captured>();
+        assert_eq!(
+            cap.effects,
+            vec![KeyEffect::Type {
+                logical: Key::Enter,
+                key_code: KeyCode::Enter,
+                mods: Modifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            }]
+        );
+        assert!(app.world().resource::<CefKeyboardFilter>().contains(
+            webview,
+            KeyCode::Enter,
+            ModifiersState::default()
+        ));
     }
 }
