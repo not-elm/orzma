@@ -504,6 +504,15 @@ impl Shortcuts {
         self
     }
 
+    /// Returns this table with the modifiers of every prefix binding
+    /// replaced.
+    pub fn with_prefix_modifiers(mut self, modifiers: Modifiers) -> Self {
+        for entry in &mut self.prefix {
+            entry.modifiers = modifiers;
+        }
+        self
+    }
+
     /// Returns this table with `direct-chords-over-webview` set to `enabled`.
     pub fn with_direct_chords_over_webview(self, enabled: bool) -> Self {
         Self {

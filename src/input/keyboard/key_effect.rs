@@ -2,7 +2,7 @@
 //! pressed key's effect, with no ECS handles.
 
 use crate::action::vi::ResolvedViModeKeys;
-use crate::input::keyboard::held_modifiers::{AltPolicy, HeldModifiers};
+use crate::input::keyboard::held_modifiers::{AltPolicy, ModifierKeys};
 use crate::input::shortcuts::{
     LeaderPhase, LeaderStep, Shortcuts, is_modifier_key, refire_held_repeat, step_leader,
 };
@@ -47,8 +47,8 @@ pub(crate) enum KeyEffect {
 /// Per-batch context needed to classify one frame's pressed keys, beyond
 /// the leader/shortcut state threaded through `leader_phase`.
 pub(crate) struct BatchContext<'a> {
-    /// The frame's held modifier keys, shared by every event in the batch.
-    pub(crate) held: HeldModifiers,
+    /// The modifier keys held when the frame's key events began.
+    pub(crate) frame_start: ModifierKeys,
     /// Which held Alt / Option keys count as Alt for a key that composes a
     /// character.
     pub(crate) alt_policy: AltPolicy,
@@ -88,8 +88,9 @@ impl BatchContext<'_> {
 /// `KeyEffect`s, plus the physical keys withheld from the focused webview —
 /// those the leader claimed, those a direct chord matched (including an OS
 /// repeat that does not fire it again), and those that matched a forward
-/// chord. The caller applies the frame's modifier snapshot when withholding
-/// them from CEF via `CefKeyboardFilter`; it is empty on the non-webview path.
+/// chord. The caller applies the end-of-frame modifier snapshot when
+/// withholding them from CEF via `CefKeyboardFilter`; it is empty on the
+/// non-webview path.
 pub(crate) struct ClassifiedKeys {
     pub(crate) effects: Vec<KeyEffect>,
     pub(crate) webview_suppressed: Vec<KeyCode>,
@@ -98,6 +99,9 @@ pub(crate) struct ClassifiedKeys {
 /// Classifies one frame's pressed `KeyboardInput` events into `KeyEffect`s,
 /// threading the shared leader state machine across the batch. Pure: no
 /// ECS handles.
+///
+/// Each pressed key is classified with `ctx.frame_start` as updated by
+/// every earlier event of the batch and by its own.
 ///
 /// A stale repeat window is closed before the batch is processed whenever
 /// `ctx.in_vi_mode` is set, so a repeat-marked key that doubles as a
@@ -124,8 +128,13 @@ pub(crate) fn classify_key_batch<'a>(
     }
     let mut effects = Vec::new();
     let mut webview_suppressed = Vec::new();
-    for ev in events.filter(|ev| ev.state == ButtonState::Pressed) {
-        let mods = ctx.held.for_key(&ev.logical_key, ctx.alt_policy);
+    let mut running = ctx.frame_start;
+    for ev in events {
+        running.apply(ev.key_code, &ev.logical_key, ev.state);
+        if ev.state != ButtonState::Pressed {
+            continue;
+        }
+        let mods = running.held().for_key(&ev.logical_key, ctx.alt_policy);
         let step = step_with_repeat(leader_phase, held_repeat, shortcuts, ev, mods, ctx.now);
         let abandoned = step == LeaderStep::Abandoned;
         if ctx.webview_focused {
@@ -283,6 +292,7 @@ fn chord_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::keyboard::held_modifiers::HeldModifiers;
     use crate::input::shortcuts::{
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
@@ -319,6 +329,13 @@ mod tests {
         }
     }
 
+    fn release(key_code: KeyCode, logical: Key) -> KeyboardInput {
+        KeyboardInput {
+            state: ButtonState::Released,
+            ..press(key_code, logical)
+        }
+    }
+
     fn press_repeat(key_code: KeyCode, logical: Key) -> KeyboardInput {
         KeyboardInput {
             repeat: true,
@@ -328,7 +345,7 @@ mod tests {
 
     fn ctx(mods: Modifiers, now: Duration) -> BatchContext<'static> {
         BatchContext {
-            held: HeldModifiers::from(mods),
+            frame_start: ModifierKeys::from(mods),
             alt_policy: AltPolicy::default(),
             now,
             in_vi_mode: false,
@@ -340,7 +357,7 @@ mod tests {
 
     fn policy_ctx(held: HeldModifiers, alt_policy: AltPolicy) -> BatchContext<'static> {
         BatchContext {
-            held,
+            frame_start: ModifierKeys::from(held),
             alt_policy,
             ..ctx(no_mods(), ms(0))
         }
@@ -352,6 +369,10 @@ mod tests {
 
     fn alt_shift() -> Modifiers {
         mods(false, true, true, false)
+    }
+
+    fn shift() -> Modifiers {
+        mods(false, true, false, false)
     }
 
     fn ctrl() -> Modifiers {
@@ -684,10 +705,17 @@ mod tests {
         );
     }
 
+    /// Asserts that a bare modifier press before the leader's second key
+    /// keeps the pending leader engaged, and the second key resolves with
+    /// the modifier.
+    ///
+    /// Case: a user taps the leader and then presses Ctrl+D, whose modifier
+    /// emits its own press event ahead of the main key.
     #[test]
     fn pending_skips_bare_modifier_then_second_key() {
         let sc =
-            test_shortcuts_with_repeat_prefix(KeyCode::KeyD, Shortcut::KillPane, Duration::ZERO);
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyD, Shortcut::KillPane, Duration::ZERO)
+                .with_prefix_modifiers(ctrl());
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [
@@ -711,6 +739,224 @@ mod tests {
              second key must resolve"
         );
         assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    /// Asserts that a modifier released after a key in the same frame still
+    /// modifies that key.
+    ///
+    /// Case: a user types quickly, pressing Enter and releasing Shift in one
+    /// frame.
+    #[test]
+    fn a_shift_released_after_enter_still_modifies_enter() {
+        let events = [
+            press(KeyCode::Enter, Key::Enter),
+            release(KeyCode::ShiftLeft, Key::Shift),
+        ];
+        assert_eq!(
+            classify_idle(&Shortcuts::default(), &events, ctx(shift(), ms(0))).effects,
+            vec![KeyEffect::Type {
+                logical: Key::Enter,
+                key_code: KeyCode::Enter,
+                mods: shift()
+            }]
+        );
+    }
+
+    /// Asserts that a modifier pressed after a key in the same frame does not
+    /// modify that key.
+    ///
+    /// Case: a user types quickly, pressing Enter and then Shift in one
+    /// frame.
+    #[test]
+    fn a_shift_pressed_after_enter_does_not_modify_enter() {
+        let events = [
+            press(KeyCode::Enter, Key::Enter),
+            press(KeyCode::ShiftLeft, Key::Shift),
+        ];
+        assert_eq!(
+            classify_idle(&Shortcuts::default(), &events, ctx(no_mods(), ms(0))).effects,
+            vec![KeyEffect::Type {
+                logical: Key::Enter,
+                key_code: KeyCode::Enter,
+                mods: no_mods()
+            }]
+        );
+    }
+
+    /// Asserts that a modifier pressed before a key in the same frame
+    /// modifies that key.
+    ///
+    /// Case: a user presses Shift and then Tab in one frame to move focus
+    /// backward.
+    #[test]
+    fn a_shift_pressed_before_tab_modifies_tab() {
+        let events = [
+            press(KeyCode::ShiftLeft, Key::Shift),
+            press(KeyCode::Tab, Key::Tab),
+        ];
+        assert_eq!(
+            classify_idle(&Shortcuts::default(), &events, ctx(no_mods(), ms(0))).effects,
+            vec![KeyEffect::Type {
+                logical: Key::Tab,
+                key_code: KeyCode::Tab,
+                mods: shift()
+            }]
+        );
+    }
+
+    /// Asserts that releasing one of two held Shift keys keeps Shift held for
+    /// a later key in the same frame.
+    ///
+    /// Case: a user holds both Shift keys while typing, then lifts the left
+    /// one just before pressing Tab.
+    #[test]
+    fn releasing_one_of_two_shift_keys_keeps_shift() {
+        let mut start = ModifierKeys::from(shift());
+        start.apply(KeyCode::ShiftRight, &Key::Shift, ButtonState::Pressed);
+        let events = [
+            release(KeyCode::ShiftLeft, Key::Shift),
+            press(KeyCode::Tab, Key::Tab),
+        ];
+        assert_eq!(
+            classify_idle(
+                &Shortcuts::default(),
+                &events,
+                BatchContext {
+                    frame_start: start,
+                    ..ctx(no_mods(), ms(0))
+                }
+            )
+            .effects,
+            vec![KeyEffect::Type {
+                logical: Key::Tab,
+                key_code: KeyCode::Tab,
+                mods: shift()
+            }]
+        );
+    }
+
+    /// Asserts that a modifier held only around a key press modifies that
+    /// key.
+    ///
+    /// Case: a user presses Ctrl+C quickly enough that the press, the key,
+    /// and the release land in one frame.
+    #[test]
+    fn ctrl_held_only_around_c_still_modifies_c() {
+        let events = [
+            press(KeyCode::ControlLeft, Key::Control),
+            press(KeyCode::KeyC, Key::Character("c".into())),
+            release(KeyCode::ControlLeft, Key::Control),
+        ];
+        assert_eq!(
+            classify_idle(&Shortcuts::default(), &events, ctx(no_mods(), ms(0))).effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("c".into()),
+                key_code: KeyCode::KeyC,
+                mods: ctrl()
+            }]
+        );
+    }
+
+    /// Asserts that an AltGr press in the frame never counts as Alt.
+    ///
+    /// Case: a user on a German layout types `@` with AltGr+Q.
+    #[test]
+    fn altgr_pressed_in_the_frame_never_counts_as_alt() {
+        let events = [
+            press(KeyCode::AltRight, Key::AltGraph),
+            press(KeyCode::KeyQ, Key::Character("@".into())),
+        ];
+        assert_eq!(
+            classify_idle(&Shortcuts::default(), &events, ctx(no_mods(), ms(0))).effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("@".into()),
+                key_code: KeyCode::KeyQ,
+                mods: Modifiers::default()
+            }]
+        );
+    }
+
+    /// Asserts that a direct chord fires when its modifier is released in the
+    /// same frame as its key.
+    ///
+    /// Case: a user presses Ctrl+T and releases Ctrl in one frame while a
+    /// direct Ctrl+T chord is bound.
+    #[test]
+    fn a_direct_chord_fires_when_ctrl_is_released_in_the_same_frame() {
+        let sc = test_shortcuts_with_direct_chord(KeyCode::KeyT, ctrl(), Shortcut::KillPane);
+        let events = [
+            press(KeyCode::KeyT, Key::Character("t".into())),
+            release(KeyCode::ControlLeft, Key::Control),
+        ];
+        assert_eq!(
+            classify_idle(&sc, &events, ctx(ctrl(), ms(0))).effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::KillPane,
+                via_leader: false
+            }]
+        );
+    }
+
+    /// Asserts that an auto-repeated modifier press keeps modifying later
+    /// keys in the same frame.
+    ///
+    /// Case: a user holds Shift long enough for the platform to repeat it,
+    /// then presses Enter.
+    #[test]
+    fn a_repeated_shift_press_keeps_modifying_later_keys() {
+        let events = [
+            press_repeat(KeyCode::ShiftLeft, Key::Shift),
+            press(KeyCode::Enter, Key::Enter),
+        ];
+        assert_eq!(
+            classify_idle(&Shortcuts::default(), &events, ctx(shift(), ms(0))).effects,
+            vec![KeyEffect::Type {
+                logical: Key::Enter,
+                key_code: KeyCode::Enter,
+                mods: shift()
+            }]
+        );
+    }
+
+    /// Asserts that swapping Shift sides within one frame keeps Shift held
+    /// for a later key.
+    ///
+    /// Case: a user lifts the left Shift and presses the right one in the
+    /// same frame, then presses Tab.
+    #[test]
+    fn shift_swapping_sides_in_one_frame_stays_held() {
+        let events = [
+            press(KeyCode::ShiftRight, Key::Shift),
+            release(KeyCode::ShiftLeft, Key::Shift),
+            press(KeyCode::Tab, Key::Tab),
+        ];
+        assert_eq!(
+            classify_idle(&Shortcuts::default(), &events, ctx(shift(), ms(0))).effects,
+            vec![KeyEffect::Type {
+                logical: Key::Tab,
+                key_code: KeyCode::Tab,
+                mods: shift()
+            }]
+        );
+    }
+
+    /// Asserts that a released key is never typed.
+    ///
+    /// Case: a user presses and releases Enter within one frame.
+    #[test]
+    fn a_released_key_is_never_typed() {
+        let events = [
+            press(KeyCode::Enter, Key::Enter),
+            release(KeyCode::Enter, Key::Enter),
+        ];
+        assert_eq!(
+            classify_idle(&Shortcuts::default(), &events, ctx(no_mods(), ms(0))).effects,
+            vec![KeyEffect::Type {
+                logical: Key::Enter,
+                key_code: KeyCode::Enter,
+                mods: no_mods()
+            }]
+        );
     }
 
     #[test]
