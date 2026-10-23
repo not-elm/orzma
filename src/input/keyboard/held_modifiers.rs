@@ -296,27 +296,6 @@ impl FrameStartModifiers {
     }
 }
 
-/// Records the modifier state the frame's key events start from: the previous
-/// end stepped through winit's key events, corrected with `ButtonInput` for
-/// the transitions winit never delivered.
-fn record_frame_start_modifiers(
-    mut frame_start: ResMut<FrameStartModifiers>,
-    mut raw_events: MessageReader<RawWinitWindowEvent>,
-    mut previous_end: Local<ModifierKeys>,
-    keys: Res<ButtonInput<KeyCode>>,
-    logical: Res<ButtonInput<Key>>,
-) {
-    let end = ModifierKeys::from_input(&keys, &logical);
-    let delivered = raw_events
-        .read()
-        .filter_map(|raw| DeliveredKey::from_raw(&raw.event));
-    let next = ModifierKeys::frame_start(*previous_end, delivered, end);
-    if next != frame_start.keys() {
-        *frame_start = FrameStartModifiers::new(next);
-    }
-    *previous_end = end;
-}
-
 /// Which held Alt / Option keys count as Alt even for a key that composes a
 /// character.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
@@ -367,12 +346,32 @@ fn build_alt_policy(mut policy: ResMut<AltPolicy>, configs: Res<OrzmaConfigsReso
     }
 }
 
+/// Records in [`FrameStartModifiers`] the modifier keys held before the
+/// frame's first key event, counting a change Bevy made without a winit key
+/// event as made before that event.
+fn record_frame_start_modifiers(
+    mut frame_start: ResMut<FrameStartModifiers>,
+    mut raw_events: MessageReader<RawWinitWindowEvent>,
+    mut previous_end: Local<ModifierKeys>,
+    keys: Res<ButtonInput<KeyCode>>,
+    logical: Res<ButtonInput<Key>>,
+) {
+    let end = ModifierKeys::from_input(&keys, &logical);
+    let delivered = raw_events
+        .read()
+        .filter_map(|raw| DeliveredKey::from_raw(&raw.event));
+    let next = ModifierKeys::frame_start(*previous_end, delivered, end);
+    if next != frame_start.keys() {
+        *frame_start = FrameStartModifiers::new(next);
+    }
+    *previous_end = end;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use orzma_configs::OrzmaConfigs;
     use orzma_configs::keyboard::KeyboardConfig;
-    use winit::event::WindowEvent;
 
     fn character(text: &str) -> Key {
         Key::Character(text.into())

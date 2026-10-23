@@ -506,7 +506,6 @@ impl Shortcuts {
 
     /// Returns this table with the modifiers of every prefix binding
     /// replaced.
-    #[cfg(test)]
     pub fn with_prefix_modifiers(mut self, modifiers: Modifiers) -> Self {
         for entry in &mut self.prefix {
             entry.modifiers = modifiers;

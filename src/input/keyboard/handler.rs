@@ -174,7 +174,6 @@ fn clear_cef_filter(cef_filter: &mut CefKeyboardFilter) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::keyboard::held_modifiers::FrameStartModifiers;
     use crate::input::shortcuts::{
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
