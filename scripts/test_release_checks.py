@@ -4,6 +4,8 @@ import hashlib
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -368,6 +370,40 @@ class Published(unittest.TestCase):
             ["published", "--tag", "v0.3.0-rc.1", "--sha", SHA], stdin=json.dumps(self._release())
         )
         self.assertEqual((code, out, err), (1, "", "Tag v0.3.0-rc.1 is not vMAJOR.MINOR.PATCH.\n"))
+
+
+def _sparse_checkout_paths(workflow: Path) -> list[str]:
+    lines = workflow.read_text(encoding="utf-8").splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() == "sparse-checkout: |":
+            key_indent = len(line) - len(line.lstrip())
+            paths = []
+            for entry in lines[index + 1 :]:
+                if len(entry) - len(entry.lstrip()) <= key_indent:
+                    break
+                paths.append(entry.strip())
+            return paths
+    return []
+
+
+class SparseCheckout(unittest.TestCase):
+    # release.yml and post-release.yml check out only the files they list, so
+    # release_checks.py must start with nothing else from scripts/ beside it.
+    def test_release_checks_starts_from_each_workflows_checkout(self):
+        for workflow in ("release.yml", "post-release.yml"):
+            with self.subTest(workflow=workflow), tempfile.TemporaryDirectory() as tmp:
+                paths = _sparse_checkout_paths(REPO_ROOT / ".github" / "workflows" / workflow)
+                self.assertIn("scripts/release_checks.py", paths)
+                for path in paths:
+                    (Path(tmp) / path).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy(REPO_ROOT / path, Path(tmp) / path)
+                result = subprocess.run(
+                    [sys.executable, "-E", "scripts/release_checks.py", "--help"],
+                    cwd=tmp,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":
