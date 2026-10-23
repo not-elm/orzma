@@ -77,6 +77,7 @@ jobs:
           sparse-checkout: |
             scripts/release_checks.py
             scripts/stage_windows.py
+            scripts/conpty.py
           sparse-checkout-cone-mode: false
 
       - uses: actions/download-artifact@v4
