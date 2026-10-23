@@ -30,7 +30,8 @@ pub struct VtModes {
     pub auto_wrap: AutoWrap,
     /// DECCKM (DECSET 1): arrow keys send SS3 instead of CSI.
     pub app_cursor: bool,
-    /// The mode selects whether the numeric keypad sends ASCII numerals or application function.
+    /// The keypad mode a program selected (DECKPAM / DECKPNM, mode 66),
+    /// reported back through DECRQM; it does not change what the keypad sends.
     pub keypad_mode: KeypadMode,
     /// DECSET 2004: pastes are wrapped in `ESC[200~` / `ESC[201~`.
     pub bracketed_paste: bool,
@@ -351,7 +352,8 @@ impl TextCursorModes {
     }
 }
 
-/// The mode selects whether the numeric keypad sends ASCII numerals or application function.
+/// The keypad mode a program selected (DECKPAM / DECKPNM, mode 66), reported
+/// back through DECRQM; it has no effect on what the keypad sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KeypadMode {
     #[default]

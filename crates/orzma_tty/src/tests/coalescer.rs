@@ -14,7 +14,7 @@ fn next_deadline_is_now_until_the_bootstrap_frame_settles() {
     let (mut tty, _chunk_tx, _exit_tx) = channelled_term();
     let now = Instant::now();
     assert!(tty.next_deadline(now).is_some());
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     tty.pump();
     assert!(tty.next_deadline(now).is_none());
 }
@@ -39,9 +39,9 @@ fn an_owed_bootstrap_frame_is_due_at_the_callers_now() {
 #[test]
 fn flush_now_returns_pending_signals_and_an_immediate_frame() {
     let (mut tty, chunk_tx, _exit_tx) = channelled_term();
-    tty.vt.evictions.push_back(vec![InstanceId(7)]);
+    tty.vt.push_evictions(vec![InstanceId(7)]);
     tty.resize(grid(40, 12), CellPixels::default()).unwrap();
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     chunk_tx.send(b"unread".to_vec()).unwrap();
 
     let out = tty.flush_now();
@@ -54,7 +54,7 @@ fn flush_now_returns_pending_signals_and_an_immediate_frame() {
     );
     assert!(!out.more_pending);
     assert!(
-        tty.vt.interpreted.is_empty(),
+        tty.vt.interpreted().is_empty(),
         "flush_now must not read the PTY"
     );
 }
@@ -69,7 +69,7 @@ fn flush_now_returns_pending_signals_and_an_immediate_frame() {
 #[test]
 fn the_first_pump_returns_the_bootstrap_frame_even_with_no_output() {
     let (mut tty, _sink) = detached_term();
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     let first = tty.pump();
     assert!(first.frames().count() == 1);
     let second = tty.pump();
@@ -89,7 +89,7 @@ fn a_bootstrap_pump_with_no_frame_ready_keeps_the_debt_for_the_next_pump() {
     assert!(first.frames().next().is_none());
     assert!(tty.coalescer.needs_bootstrap());
 
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
     let second = tty.pump();
     assert!(second.frames().count() == 1);
 }
@@ -103,8 +103,8 @@ fn a_bootstrap_pump_with_no_frame_ready_keeps_the_debt_for_the_next_pump() {
 #[test]
 fn a_pre_pump_chunk_does_not_double_emit_the_bootstrap_frame() {
     let (mut tty, _sink) = detached_term();
-    tty.vt.frames.push_back(a_frame());
-    tty.vt.frames.push_back(a_frame());
+    tty.vt.push_frame(a_frame());
+    tty.vt.push_frame(a_frame());
     tty.feed_bytes(b"$ ")
         .expect("the fake VT honors the interpret contract");
     let first = tty.pump();
@@ -122,7 +122,7 @@ fn a_pre_pump_chunk_does_not_double_emit_the_bootstrap_frame() {
 #[test]
 fn a_resize_eviction_reaches_the_next_pump() {
     let (mut tty, _sink) = detached_term();
-    tty.vt.evictions.push_back(vec![InstanceId(7)]);
+    tty.vt.push_evictions(vec![InstanceId(7)]);
     tty.resize(grid(100, 30), CellPixels::default())
         .expect("resize");
     assert_eq!(
@@ -166,7 +166,7 @@ fn a_chunk_that_stages_damage_arms_the_window() {
 #[test]
 fn a_chunk_that_stages_no_damage_does_not_arm_the_window() {
     let (mut term, _sink) = detached_term();
-    term.vt.updates.push_back(InterpretOutput {
+    term.vt.push_update(InterpretOutput {
         damaged: false,
         replies: b"\x1b[1;1R".to_vec(),
         ..update(4, false)

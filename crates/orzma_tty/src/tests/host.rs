@@ -59,7 +59,7 @@ fn a_host_mount_queues_the_mount_signal_and_arms_the_coalescer() {
         "an accepted mount arms the coalescer"
     );
     assert_eq!(
-        tty.vt.mounts,
+        tty.vt.mounts(),
         vec![(ScreenLine(1), GridColumn(2), size, InstanceId(7))]
     );
     let out = tty.flush_now();
@@ -106,7 +106,7 @@ fn a_host_removal_drops_the_queued_mount_verdict_of_its_placement() {
 #[test]
 fn a_rejected_host_mount_queues_the_rejection_without_arming() {
     let (mut tty, _sink) = detached_term();
-    tty.vt.mount_accepts = false;
+    tty.vt.set_mount_accepts(false);
     tty.coalescer.disarm();
 
     tty.mount_placement_at(

@@ -25,7 +25,7 @@ fn send_wheel_over_a_tracking_terminal_writes_its_reports_in_one_write() {
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M\x1b[<64;6;4M");
     assert_eq!(sink.writes(), 1);
-    assert!(term.vt.scrolls.is_empty());
+    assert!(term.vt.scrolls().is_empty());
 }
 
 /// Asserts that `send_wheel` over a tracking terminal writes one report
@@ -96,17 +96,36 @@ fn send_wheel_drops_reports_without_a_cell() {
 #[test]
 fn send_wheel_over_the_alternate_screen_writes_cursor_keys() {
     let (mut term, sink) = detached_term();
-    term.vt.modes.active_screen = ScreenKind::Alternate;
+    term.vt.modes_mut().active_screen = ScreenKind::Alternate;
     term.send_wheel(wheel(2, 0), &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A".repeat(6));
 
     let (mut term, sink) = detached_term();
-    term.vt.modes.active_screen = ScreenKind::Alternate;
-    term.vt.modes.app_cursor = true;
+    term.vt.modes_mut().active_screen = ScreenKind::Alternate;
+    term.vt.modes_mut().app_cursor = true;
     term.send_wheel(wheel(1, 0), &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1bOA".repeat(3));
+}
+
+/// Asserts that the alternate-scroll cursor keys take the kitty keyboard
+/// protocol's flag 1 form while the VT reports that flag, so DECCKM no
+/// longer turns them into `SS3`.
+///
+/// Case: a full-screen program on the alternate screen turns on the kitty
+/// keyboard protocol and application cursor keys without tracking the
+/// mouse, and the user spins the wheel up one notch.
+#[test]
+fn send_wheel_writes_kitty_cursor_keys_while_the_vt_reports_flag_1() {
+    let (mut term, sink) = detached_term();
+    term.vt.modes_mut().active_screen = ScreenKind::Alternate;
+    term.vt.modes_mut().app_cursor = true;
+    term.vt
+        .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE);
+    term.send_wheel(wheel(1, 0), &policy()).expect("send_wheel");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[A".repeat(3));
 }
 
 /// Asserts that wheel notches sent as cursor keys leave the selection in
@@ -117,11 +136,11 @@ fn send_wheel_over_the_alternate_screen_writes_cursor_keys() {
 #[test]
 fn send_wheel_as_cursor_keys_keeps_the_selection() {
     let (mut term, _sink) = detached_term();
-    term.vt.modes.active_screen = ScreenKind::Alternate;
-    term.vt.selection_changes = true;
+    term.vt.modes_mut().active_screen = ScreenKind::Alternate;
+    term.vt.set_selection_changes(true);
     term.send_wheel(wheel(-1, 0), &policy())
         .expect("send_wheel");
-    assert!(term.vt.selections.is_empty());
+    assert!(term.vt.selections().is_empty());
 }
 
 /// Asserts that Shift over a tracking alternate screen skips the
@@ -132,7 +151,7 @@ fn send_wheel_as_cursor_keys_keeps_the_selection() {
 #[test]
 fn send_wheel_with_shift_over_a_tracking_alternate_screen_writes_cursor_keys() {
     let (mut term, sink) = tracking_term();
-    term.vt.modes.active_screen = ScreenKind::Alternate;
+    term.vt.modes_mut().active_screen = ScreenKind::Alternate;
     let input = WheelInput {
         mods: WheelModifiers {
             shift: true,
@@ -167,7 +186,7 @@ fn send_wheel_routes_horizontal_reports_only_over_a_tracking_terminal() {
     term.send_wheel(wheel(0, 1), &policy()).expect("send_wheel");
     term.settle_writes();
     assert_eq!(sink.contents(), b"");
-    assert!(term.vt.scrolls.is_empty());
+    assert!(term.vt.scrolls().is_empty());
 }
 
 /// Asserts that `send_wheel` on the primary screen without tracking
@@ -179,9 +198,9 @@ fn send_wheel_routes_horizontal_reports_only_over_a_tracking_terminal() {
 #[test]
 fn send_wheel_on_the_primary_screen_scrolls_the_viewport() {
     let (mut term, sink) = detached_term();
-    term.vt.scroll_moves = true;
+    term.vt.set_scroll_moves(true);
     term.send_wheel(wheel(2, 0), &policy()).expect("send_wheel");
-    assert_eq!(term.vt.scrolls, vec![Scroll::Delta(6)]);
+    assert_eq!(term.vt.scrolls(), vec![Scroll::Delta(6)]);
     term.settle_writes();
     assert_eq!(sink.contents(), b"");
     assert!(term.coalescer.is_armed());
@@ -211,17 +230,17 @@ fn send_wheel_writes_both_axes_in_one_write_vertical_first() {
 #[test]
 fn send_wheel_snaps_the_viewport_only_on_the_cursor_key_route() {
     let (mut term, sink) = detached_term();
-    term.vt.modes.active_screen = ScreenKind::Alternate;
-    term.vt.display_offset = DisplayOffset(5);
+    term.vt.modes_mut().active_screen = ScreenKind::Alternate;
+    term.vt.set_display_offset(DisplayOffset(5));
     term.send_wheel(wheel(1, 0), &policy()).expect("send_wheel");
-    assert_eq!(term.vt.display_offset, DisplayOffset(0));
+    assert_eq!(term.vt.display_offset(), DisplayOffset(0));
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[A".repeat(3));
 
     let (mut term, sink) = tracking_term();
-    term.vt.display_offset = DisplayOffset(5);
+    term.vt.set_display_offset(DisplayOffset(5));
     term.send_wheel(wheel(1, 0), &policy()).expect("send_wheel");
-    assert_eq!(term.vt.display_offset, DisplayOffset(5));
+    assert_eq!(term.vt.display_offset(), DisplayOffset(5));
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[<64;6;4M");
 }
@@ -240,7 +259,7 @@ fn send_wheel_reports_a_pty_write_failure() {
         Box::new(FailingSink),
     )
     .expect("OrzmaTty::detached");
-    term.vt.modes.mouse_tracking = MouseTracking::Drag;
+    term.vt.modes_mut().mouse_tracking = MouseTracking::Drag;
     term.send_wheel(wheel(1, 0), &policy())
         .expect("the frame is queued before the writer fails");
     term.settle_writes();

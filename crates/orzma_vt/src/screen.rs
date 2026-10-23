@@ -4,6 +4,7 @@ pub mod cell;
 pub mod character_sets;
 pub mod checkpoint;
 pub mod grid;
+pub mod kitty_keyboard;
 pub mod margins;
 pub mod selection;
 pub mod tabs;
@@ -34,6 +35,7 @@ use crate::screen::cursor::Cursor;
 use crate::screen::grid::GridSize;
 use crate::screen::grid::coords::{GridColumn, GridLine, GridPoint, ScreenLine};
 use crate::screen::grid::reflow::{ScrollbackOnGrow, TrackedPoint};
+use crate::screen::kitty_keyboard::KittyKeyboardStack;
 use crate::screen::margins::{Margins, OriginMode, ScrollRegion};
 use crate::screen::selection::{
     CellSide, Resolved, ScreenSelection, SelectionEnd, SelectionGeometry, SelectionKind,
@@ -70,6 +72,7 @@ pub struct Screen {
     webview_placements: WebviewPlacements,
     selection: ScreenSelection,
     vi: ScreenVi,
+    kitty_keyboard: KittyKeyboardStack,
 }
 
 /// Span selector for [`Screen::erase_in_line`] (`CSI K`).
@@ -139,6 +142,7 @@ impl Screen {
             webview_placements: WebviewPlacements::new(),
             selection: ScreenSelection::new(),
             vi: ScreenVi::new(),
+            kitty_keyboard: KittyKeyboardStack::default(),
         }
     }
 }
@@ -1492,8 +1496,8 @@ impl Screen {
     ///
     /// Covers the screen-scoped actions of `RIS`: the grid and its
     /// history, the cursor, the SGR pen, the scrolling margins, the
-    /// origin mode, the tabulation stops, the character set mapping, and
-    /// the vi cursor.
+    /// origin mode, the tabulation stops, the character set mapping, the
+    /// vi cursor, and the keyboard flag stack.
     ///
     /// Reports [`DamageSpan::Full`], or nothing when the grid was
     /// already blank and carried no history; the cursor homes either
@@ -1523,6 +1527,7 @@ impl Screen {
         self.tabs = TabStops::default();
         self.character_set_mapping.reset();
         self.checkpoint = Checkpoint::default();
+        self.kitty_keyboard.clear();
         dirty.then_some(DamageSpan::Full)
     }
 
@@ -1546,6 +1551,16 @@ impl Screen {
         self.character_set_mapping.reset();
         self.state.pen = Pen::default();
         self.checkpoint = Checkpoint::default();
+    }
+
+    /// The keyboard flag stack this screen keeps.
+    pub fn kitty_keyboard(&self) -> &KittyKeyboardStack {
+        &self.kitty_keyboard
+    }
+
+    /// The keyboard flag stack this screen keeps, for mutation.
+    pub fn kitty_keyboard_mut(&mut self) -> &mut KittyKeyboardStack {
+        &mut self.kitty_keyboard
     }
 
     /// Resizes the grid, truncating rather than reflowing; `None` when

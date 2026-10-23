@@ -13,13 +13,13 @@ use crate::test_support::SelectionOp;
 #[test]
 fn send_key_dismisses_the_selection_and_arms() {
     let (mut term, _sink) = detached_term();
-    term.vt.selection_changes = true;
+    term.vt.set_selection_changes(true);
     term.send_key(
         &TerminalKey::Character(KeyText::new("a").expect("a non-empty key text")),
         &TerminalModifiers::default(),
     )
     .expect("send_key");
-    assert_eq!(term.vt.selections, vec![SelectionOp::Clear]);
+    assert_eq!(term.vt.selections(), vec![SelectionOp::Clear]);
     assert!(
         term.coalescer.is_armed(),
         "the dismissal must schedule a repaint"
@@ -34,9 +34,9 @@ fn send_key_dismisses_the_selection_and_arms() {
 #[test]
 fn send_paste_dismisses_the_selection_and_arms() {
     let (mut term, _sink) = detached_term();
-    term.vt.selection_changes = true;
+    term.vt.set_selection_changes(true);
     term.send_paste("ls").expect("send_paste");
-    assert_eq!(term.vt.selections, vec![SelectionOp::Clear]);
+    assert_eq!(term.vt.selections(), vec![SelectionOp::Clear]);
     assert!(
         term.coalescer.is_armed(),
         "the dismissal must schedule a repaint"
@@ -51,13 +51,16 @@ fn send_paste_dismisses_the_selection_and_arms() {
 #[test]
 fn paste_while_scrolled_back_snaps_and_arms() {
     let (mut term, _sink) = detached_term();
-    term.vt.display_offset = DisplayOffset(3);
+    term.vt.set_display_offset(DisplayOffset(3));
     term.send_paste("x").expect("send_paste");
     assert!(
-        term.vt.scrolls.iter().any(|s| matches!(s, Scroll::Bottom)),
+        term.vt
+            .scrolls()
+            .iter()
+            .any(|s| matches!(s, Scroll::Bottom)),
         "input must snap to the live tail"
     );
-    assert_eq!(term.vt.display_offset, DisplayOffset(0));
+    assert_eq!(term.vt.display_offset(), DisplayOffset(0));
     assert!(
         term.coalescer.is_armed(),
         "the snap must schedule a repaint"
@@ -71,7 +74,7 @@ fn paste_while_scrolled_back_snaps_and_arms() {
 #[test]
 fn send_key_honours_the_vt_reported_cursor_mode() {
     let (mut term, sink) = detached_term();
-    term.vt.modes.app_cursor = true;
+    term.vt.modes_mut().app_cursor = true;
     term.send_key(
         &TerminalKey::Cursor(CursorKey::Up),
         &TerminalModifiers::default(),
@@ -90,6 +93,62 @@ fn send_key_honours_the_vt_reported_cursor_mode() {
     assert_eq!(sink.contents(), b"\x1b[A");
 }
 
+/// Asserts that key encoding takes the kitty keyboard protocol's flag 1
+/// form while the VT reports that flag, leaving DECCKM out of it.
+///
+/// Case: a program turns on the kitty keyboard protocol and application
+/// cursor keys, and the user presses Shift+Enter to start a new line of
+/// input and then Up to recall history.
+#[test]
+fn send_key_writes_the_kitty_form_while_the_vt_reports_flag_1() {
+    let (mut term, sink) = detached_term();
+    term.vt
+        .set_kitty_keyboard_flags(KittyKeyboardFlags::DISAMBIGUATE);
+    term.vt.modes_mut().app_cursor = true;
+    let shift = TerminalModifiers {
+        shift: true,
+        ..TerminalModifiers::default()
+    };
+    term.send_key(&TerminalKey::Enter, &shift)
+        .expect("send_key");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[13;2u");
+
+    term.send_key(
+        &TerminalKey::Cursor(CursorKey::Up),
+        &TerminalModifiers::default(),
+    )
+    .expect("send_key");
+    term.settle_writes();
+    assert_eq!(sink.contents(), b"\x1b[13;2u\x1b[A");
+}
+
+/// Asserts that a key which encodes to no bytes leaves the selection, the
+/// scrolled-back viewport and the PTY queue alone.
+///
+/// Case: the user, scrolled back with a selection on screen, presses
+/// Ctrl+Alt with a key the host cannot name while no kitty keyboard flag is
+/// set.
+#[test]
+fn send_key_with_no_bytes_leaves_the_screen_alone() {
+    let (mut term, sink) = detached_term();
+    term.vt.set_selection_changes(true);
+    term.vt.set_display_offset(DisplayOffset(3));
+    let ctrl_alt = TerminalModifiers {
+        ctrl: true,
+        alt: true,
+        ..TerminalModifiers::default()
+    };
+    term.send_key(&TerminalKey::Unidentified { unshifted: 'a' }, &ctrl_alt)
+        .expect("send_key");
+    term.settle_writes();
+    assert!(term.vt.selections().is_empty());
+    assert!(term.vt.scrolls().is_empty());
+    assert_eq!(term.vt.display_offset(), DisplayOffset(3));
+    assert!(sink.contents().is_empty());
+    assert!(!term.coalescer.is_armed());
+}
+
 /// Asserts that paste encoding consults the VT-reported bracketed
 /// paste mode.
 ///
@@ -98,7 +157,7 @@ fn send_key_honours_the_vt_reported_cursor_mode() {
 #[test]
 fn send_paste_honours_the_vt_reported_bracketed_mode() {
     let (mut term, sink) = detached_term();
-    term.vt.modes.bracketed_paste = true;
+    term.vt.modes_mut().bracketed_paste = true;
     term.send_paste("hi").expect("send_paste");
     term.settle_writes();
     assert_eq!(sink.contents(), b"\x1b[200~hi\x1b[201~");
@@ -137,8 +196,8 @@ fn empty_paste_writes_nothing_to_the_pty() {
 #[test]
 fn empty_paste_keeps_the_selection() {
     let (mut term, _sink) = detached_term();
-    term.vt.selection_changes = true;
+    term.vt.set_selection_changes(true);
     term.send_paste("").expect("send_paste");
-    assert!(term.vt.selections.is_empty());
+    assert!(term.vt.selections().is_empty());
     assert!(!term.coalescer.is_armed());
 }

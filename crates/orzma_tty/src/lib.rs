@@ -7,9 +7,9 @@ use crate::{
     coalescer::Coalescer,
     error::{OrzmaTtyError, OrzmaTtyResult},
     input::{
-        CellCoord, MouseButton, MouseReport, MouseReportKind, PointerAction, PointerInput,
-        PointerKind, PointerState, ProtocolModifiers, PtyInput, TerminalKey, TerminalModifiers,
-        WheelConfig, WheelDecision, WheelInput, WheelModifiers, WheelSteps,
+        CellCoord, KeyEncodingModes, MouseButton, MouseReport, MouseReportKind, PointerAction,
+        PointerInput, PointerKind, PointerState, ProtocolModifiers, PtyInput, TerminalKey,
+        TerminalModifiers, WheelConfig, WheelDecision, WheelInput, WheelModifiers, WheelSteps,
     },
     pty::{ChunkPoll, ExitPoll, Pty},
     signal::TtySignal,
@@ -467,8 +467,10 @@ impl<V: Vt> OrzmaTty<V> {
     /// Encodes a key press and queues it for the PTY.
     ///
     /// Dismisses the selection and snaps a scrolled-back viewport to the
-    /// live tail first, even when the key is then refused. `Ok` means the
-    /// key was queued, not that it reached the PTY.
+    /// live tail first, even when the key is then refused. A key that
+    /// encodes to no bytes leaves the selection and the viewport alone and
+    /// queues nothing. `Ok` means the key's bytes, if any, were queued, not
+    /// that they reached the PTY.
     ///
     /// # Errors
     ///
@@ -476,10 +478,13 @@ impl<V: Vt> OrzmaTty<V> {
     /// the key (nothing is queued), `PtyWrite` once after the writer
     /// thread's write failed, and `PtyWriterClosed` after that.
     pub fn send_key(&mut self, key: &TerminalKey, mods: &TerminalModifiers) -> OrzmaTtyResult {
-        let modes = self.vt.modes();
+        let modes = KeyEncodingModes::read(&self.vt);
+        let bytes = PtyInput::encode_key(key, mods, modes).into_bytes();
+        if bytes.is_empty() {
+            return Ok(());
+        }
         self.begin_input();
-        self.pty
-            .enqueue_write(PtyInput::encode_key(key, mods, modes).into_bytes())
+        self.pty.enqueue_write(bytes)
     }
 
     /// Routes one frame's wheel travel by the VT's current modes and
@@ -927,8 +932,9 @@ impl<V: Vt> OrzmaTty<V> {
             }
             WheelDecision::CursorKeys { key, count } => {
                 self.snap_to_live_tail();
-                let encoded =
-                    PtyInput::encode_key(&key, &TerminalModifiers::default(), modes).into_bytes();
+                let key_modes = KeyEncodingModes::read(&self.vt);
+                let encoded = PtyInput::encode_key(&key, &TerminalModifiers::default(), key_modes)
+                    .into_bytes();
                 for _ in 0..count {
                     bytes.extend_from_slice(&encoded);
                 }

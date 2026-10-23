@@ -11,7 +11,7 @@ use crate::{
         vi::{mode::EnterViModeActionEvent, trigger_vi_mode_action},
     },
     input::{
-        keyboard::{bevy_key_to_terminal_key, key_effect::KeyEffect},
+        keyboard::{bevy_key_to_terminal_key, key_effect::KeyEffect, unshifted::UnshiftedKeys},
         shortcuts::{KeyEffectMessage, ShortcutSet},
     },
     session::spawn::PaneSpawnRequest,
@@ -33,7 +33,7 @@ pub(super) struct ShortcutsApplyPlugin;
 
 impl Plugin for ShortcutsApplyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<UnshiftedKeys>().add_systems(
             Update,
             apply_key_effects
                 .in_set(ShortcutSet::Apply)
@@ -46,7 +46,11 @@ impl Plugin for ShortcutsApplyPlugin {
 /// keys, typed keys, and the chords a focused webview declared as forward
 /// keys all go through `commands.trigger`, never a direct backend send, so
 /// the mux receives them in this order.
-fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffectMessage>) {
+fn apply_key_effects(
+    mut commands: Commands,
+    mut effects: MessageReader<KeyEffectMessage>,
+    unshifted: Res<UnshiftedKeys>,
+) {
     for msg in effects.read() {
         match &msg.effect {
             KeyEffect::Shortcut { action, via_leader } => {
@@ -63,14 +67,21 @@ fn apply_key_effects(mut commands: Commands, mut effects: MessageReader<KeyEffec
                     trigger_vi_mode_action(&mut commands, entity, *action);
                 }
             }
-            KeyEffect::Type { logical, mods, .. } => {
+            KeyEffect::Type {
+                logical,
+                key_code,
+                mods,
+            } => {
+                let modifiers = terminal_modifiers(*mods);
                 if msg.focused.is_some()
-                    && let Some(key) = bevy_key_to_terminal_key(logical)
+                    && let Some(key) = bevy_key_to_terminal_key(
+                        logical,
+                        *key_code,
+                        unshifted.get(*key_code),
+                        &modifiers,
+                    )
                 {
-                    commands.trigger(RequestActiveKeyInput {
-                        key,
-                        modifiers: terminal_modifiers(*mods),
-                    });
+                    commands.trigger(RequestActiveKeyInput { key, modifiers });
                 }
             }
         }
@@ -174,11 +185,11 @@ mod tests {
     use crate::input::shortcuts::Shortcuts;
     use crate::surface::OrzmaTerminal;
     use bevy::ecs::resource::Resource;
-    use bevy::input::keyboard::{Key, KeyCode};
+    use bevy::input::keyboard::{Key, KeyCode, NativeKey};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use bevy_orzmux::prelude::TabId;
     use orzma_configs::shortcuts::{FontSizeStep, Modifiers, PaneDirection, SplitOrientation};
-    use orzma_tty::prelude::TerminalKey;
+    use orzma_tty::prelude::{KeyText, KeypadKey, TerminalKey};
     use orzmux::prelude::PaneDirection as OrzmuxDirection;
 
     #[derive(Resource, Default)]
@@ -190,6 +201,7 @@ mod tests {
         copy: u32,
         vi_mode: u32,
         font_zoom: Vec<FontSizeStep>,
+        keys: Vec<TerminalKey>,
     }
 
     /// Builds an app running the dispatcher as a bare per-message
@@ -199,6 +211,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<KeyEffectMessage>()
             .init_resource::<Captured>()
+            .init_resource::<UnshiftedKeys>()
             .insert_resource(shortcuts)
             .add_systems(Update, apply_key_effects)
             .add_observer(|_ev: On<EnterViModeActionEvent>, mut c: ResMut<Captured>| {
@@ -214,6 +227,7 @@ mod tests {
                 c.order.push("copy".into());
             })
             .add_observer(|ev: On<RequestActiveKeyInput>, mut c: ResMut<Captured>| {
+                c.keys.push(ev.key.clone());
                 let TerminalKey::Character(text) = &ev.key else {
                     return;
                 };
@@ -279,6 +293,87 @@ mod tests {
             app.world().resource::<Captured>().order,
             vec!["key:a"],
             "a Type effect must forward to the active pane as a RequestActiveKeyInput"
+        );
+    }
+
+    /// Asserts a numpad digit `Type` effect reaches the terminal as a keypad
+    /// key carrying its text.
+    ///
+    /// Case: the user types `1` on the numeric keypad.
+    #[test]
+    fn a_keypad_type_effect_arrives_as_a_keypad_key() {
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![type_effect(Key::Character("1".into()), KeyCode::Numpad1)],
+            Some(term),
+            false,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().keys,
+            vec![TerminalKey::Keypad {
+                key: KeypadKey::One,
+                text: KeyText::new("1"),
+            }]
+        );
+    }
+
+    /// Asserts a text `Type` effect carries the un-shifted character recorded
+    /// for its physical key.
+    ///
+    /// Case: the user presses Shift+1, which types `!` on a US layout.
+    #[test]
+    fn a_text_type_effect_carries_the_recorded_unshifted_key() {
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        app.world_mut()
+            .resource_mut::<UnshiftedKeys>()
+            .record(KeyCode::Digit1, Some('1'));
+        dispatch(
+            &mut app,
+            vec![type_effect(Key::Character("!".into()), KeyCode::Digit1)],
+            Some(term),
+            false,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().keys,
+            vec![TerminalKey::Character(
+                KeyText::new("!").unwrap().with_unshifted('1')
+            )]
+        );
+    }
+
+    /// Asserts an unidentified `Type` effect with Ctrl and Alt reaches the
+    /// terminal only when an un-shifted character was recorded for its key.
+    ///
+    /// Case: on Windows, the user presses Ctrl+Alt with a letter, the layout
+    /// gives that chord no character, and winit reports the key as
+    /// unidentified.
+    #[test]
+    fn an_unidentified_type_effect_needs_a_recorded_character() {
+        let effect = || KeyEffect::Type {
+            logical: Key::Unidentified(NativeKey::Unidentified),
+            key_code: KeyCode::KeyA,
+            mods: Modifiers {
+                ctrl: true,
+                alt: true,
+                ..Modifiers::default()
+            },
+        };
+        let (mut app, term) = dispatch_app(Shortcuts::default());
+        dispatch(&mut app, vec![effect()], Some(term), false);
+        app.update();
+        assert!(app.world().resource::<Captured>().keys.is_empty());
+
+        app.world_mut()
+            .resource_mut::<UnshiftedKeys>()
+            .record(KeyCode::KeyA, Some('a'));
+        dispatch(&mut app, vec![effect()], Some(term), false);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().keys,
+            vec![TerminalKey::Unidentified { unshifted: 'a' }]
         );
     }
 

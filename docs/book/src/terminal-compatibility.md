@@ -26,6 +26,11 @@ orzma understands.
 
 ## Keyboard
 
+The bullets below describe the keys while no program has asked for the kitty
+keyboard protocol. In that form the keypad sends what the main keyboard's keys
+of the same name send, and the application keypad mode (DECKPAM) does not
+change it.
+
 - With a key that types a character, `Alt`, including the Option key that
   [`option_as_alt`](configuration.md#keyboard-option_as_alt) makes `Alt` on
   macOS, sends `ESC` before the character.
@@ -56,6 +61,10 @@ orzma understands.
   `CSI 24 ~`. With `Shift`, `Alt`, or `Ctrl` held, they send xterm's modified
   forms, such as `CSI 1 ; 2 P` for `Shift+F1` and `CSI 15 ; 5 ~` for
   `Ctrl+F5`. `F13` and above send nothing.
+
+A program that asks for the kitty keyboard protocol's "disambiguate escape
+codes" receives keys in that protocol's form instead, so `Shift+Enter`,
+`Ctrl+C`, and `Escape` reach it as keys of their own.
 
 ## Mouse
 
@@ -117,7 +126,8 @@ orzma understands.
 ## Not supported
 
 - Images: sixel, the kitty graphics protocol, and iTerm2 inline images.
-- Keyboard protocols: the kitty keyboard protocol and xterm's
-  modifyOtherKeys.
+- Keyboard protocols: xterm's modifyOtherKeys.
+- The kitty keyboard protocol's other enhancements: reporting event types,
+  alternate keys, all keys as escape codes, and associated text.
 - The XTVERSION, DECRQSS, and XTGETTCAP queries.
 - Left and right margins (DECLRMM) and reverse video (DECSCNM).

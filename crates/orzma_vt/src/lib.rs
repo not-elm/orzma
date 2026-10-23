@@ -10,6 +10,7 @@ use crate::{
     screen::grid::GridSize,
     screen::grid::coords::{GridColumn, GridPoint, ScreenLine},
     screen::grid::reflow::ScrollbackOnGrow,
+    screen::kitty_keyboard::KittyKeyboardFlags,
     screen::selection::{CellSide, SelectionKind},
     screen::vi::{SemanticEscapeChars, ViCursor, ViModeSwitch, ViMotion, ViewChange},
     screen::viewport::{DisplayOffset, Scroll},
@@ -45,6 +46,7 @@ pub mod prelude {
     pub use crate::screen::grid::reflow::ScrollbackOnGrow;
     pub use crate::screen::grid::row::Row;
     pub use crate::screen::grid::run::{Run, Style};
+    pub use crate::screen::kitty_keyboard::KittyKeyboardFlags;
     pub use crate::screen::selection::{
         CellSide, SelectionGeometry, SelectionKind, SelectionRange,
     };
@@ -266,6 +268,10 @@ pub trait Vt {
 
     /// Snapshot of the modes the device owns.
     fn modes(&self) -> VtModes;
+
+    /// The kitty keyboard flags in force on the screen on show; empty when
+    /// none are.
+    fn kitty_keyboard_flags(&self) -> KittyKeyboardFlags;
 
     /// Enters or leaves vi mode; returns whether the mode changed.
     ///
@@ -535,6 +541,10 @@ impl Vt for OrzmaVt {
 
     fn modes(&self) -> VtModes {
         self.device.modes()
+    }
+
+    fn kitty_keyboard_flags(&self) -> KittyKeyboardFlags {
+        self.device.kitty_keyboard_flags()
     }
 
     fn switch_vi_mode(&mut self, switch: ViModeSwitch) -> bool {

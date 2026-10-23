@@ -5,8 +5,8 @@
 use crate::CellPixels;
 use orzma_vt::prelude::{
     CellSide, DisplayOffset, Frame, GridColumn, GridPoint, GridSize, InstanceId, InterpretOutput,
-    PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind, SynchronizedOutput, ViCursor,
-    ViModeSwitch, ViMotion, Vt, VtModes,
+    KittyKeyboardFlags, PlacementSize, ResizeChanged, ScreenLine, Scroll, SelectionKind,
+    SynchronizedOutput, ViCursor, ViModeSwitch, ViMotion, Vt, VtModes,
 };
 #[cfg(any(test, feature = "test-support"))]
 use portable_pty::{MasterPty, PtySize};
@@ -121,55 +121,62 @@ pub enum SelectionOp {
 /// honestly (`None` when the size did not change) and names the next
 /// scripted `evictions` entry when it did.
 ///
-/// `scroll` records the motion: `Scroll::Bottom` snaps `display_offset`
-/// to zero, and every other motion returns the scripted `scroll_moves`; a
-/// `Scroll::Delta` that `scroll_moves` lets through also moves
-/// `display_offset` by its delta.
-/// The selection operations record themselves in `selections` and return
-/// the scripted `selection_changes`, and `selection_text` returns the
-/// scripted `selected_text`.
+/// `scroll` records the motion: `Scroll::Bottom` snaps the display offset
+/// to zero, and every other motion returns the verdict set by
+/// [`FakeVt::set_scroll_moves`]; a `Scroll::Delta` that verdict lets
+/// through also moves the display offset by its delta.
+/// The selection operations record themselves, readable through
+/// [`FakeVt::selections`], and return the verdict set by
+/// [`FakeVt::set_selection_changes`]; `selection_text` returns the text
+/// set by [`FakeVt::set_selected_text`].
+///
+/// The script is fed through the `push_*` methods and the recordings are
+/// read back through [`FakeVt::interpreted`], [`FakeVt::scrolls`],
+/// [`FakeVt::resizes`] and [`FakeVt::mounts`].
 pub struct FakeVt {
     /// Grid size reported and updated by `resize`.
-    pub grid_size: GridSize,
+    grid_size: GridSize,
     /// Offset reported by `display_offset`; `Scroll::Bottom` zeroes it, and
     /// a moving `Scroll::Delta` shifts it.
-    pub display_offset: DisplayOffset,
+    display_offset: DisplayOffset,
     /// Device-wide terminal modes the host reads back.
     ///
     /// A mode that would show up in a frame — DECTCEM's cursor
     /// visibility, for one — does not reach the scripted frames; script
     /// the frame to match instead.
-    pub modes: VtModes,
+    modes: VtModes,
+    /// Flags `kitty_keyboard_flags` reports.
+    kitty_keyboard_flags: KittyKeyboardFlags,
     /// Scripted return for non-`Bottom` scrolls.
-    pub scroll_moves: bool,
+    scroll_moves: bool,
     /// Scripted return for the selection operations.
-    pub selection_changes: bool,
+    selection_changes: bool,
     /// Every selection operation received, in order.
-    pub selections: Vec<SelectionOp>,
+    selections: Vec<SelectionOp>,
     /// Returned by `selection_text`.
-    pub selected_text: Option<String>,
+    selected_text: Option<String>,
     /// Every chunk `interpret` received, in order.
-    pub interpreted: Vec<Vec<u8>>,
+    interpreted: Vec<Vec<u8>>,
     /// Every motion `scroll` received, in order.
-    pub scrolls: Vec<Scroll>,
+    scrolls: Vec<Scroll>,
     /// Every size `resize` received, in order.
-    pub resizes: Vec<GridSize>,
+    resizes: Vec<GridSize>,
     /// Updates popped by `interpret`.
-    pub updates: VecDeque<InterpretOutput>,
+    updates: VecDeque<InterpretOutput>,
     /// Frames popped by `frame`.
-    pub frames: VecDeque<Frame>,
+    frames: VecDeque<Frame>,
     /// Placements a `resize` that changed the size reports as
     /// stranded, popped one list per such resize; an empty script
     /// reports none.
-    pub evictions: VecDeque<Vec<InstanceId>>,
+    evictions: VecDeque<Vec<InstanceId>>,
     /// The synchronized-output state `modes` reports after each
     /// `interpret`, popped one per call; an empty script leaves the
     /// state as it is.
-    pub sync_script: VecDeque<SynchronizedOutput>,
+    sync_script: VecDeque<SynchronizedOutput>,
     /// Every host-driven mount received, in order.
-    pub mounts: Vec<(ScreenLine, GridColumn, PlacementSize, InstanceId)>,
+    mounts: Vec<(ScreenLine, GridColumn, PlacementSize, InstanceId)>,
     /// Scripted verdict for host-driven mounts.
-    pub mount_accepts: bool,
+    mount_accepts: bool,
 }
 
 impl FakeVt {
@@ -180,6 +187,7 @@ impl FakeVt {
             grid_size,
             display_offset: DisplayOffset(0),
             modes: VtModes::default(),
+            kitty_keyboard_flags: KittyKeyboardFlags::empty(),
             scroll_moves: false,
             selection_changes: false,
             selections: Vec::new(),
@@ -194,6 +202,96 @@ impl FakeVt {
             mount_accepts: true,
             sync_script: VecDeque::new(),
         }
+    }
+
+    /// Replaces the grid size the fake reports.
+    pub fn set_grid_size(&mut self, size: GridSize) {
+        self.grid_size = size;
+    }
+
+    /// Replaces the display offset the fake reports.
+    pub fn set_display_offset(&mut self, offset: DisplayOffset) {
+        self.display_offset = offset;
+    }
+
+    /// Returns the terminal modes the host reads back, for mutation.
+    pub fn modes_mut(&mut self) -> &mut VtModes {
+        &mut self.modes
+    }
+
+    /// Sets the flags `kitty_keyboard_flags` reports.
+    pub fn set_kitty_keyboard_flags(&mut self, flags: KittyKeyboardFlags) {
+        self.kitty_keyboard_flags = flags;
+    }
+
+    /// Sets the verdict returned for non-`Bottom` scrolls.
+    pub fn set_scroll_moves(&mut self, moves: bool) {
+        self.scroll_moves = moves;
+    }
+
+    /// Sets the verdict returned for the selection operations.
+    pub fn set_selection_changes(&mut self, changes: bool) {
+        self.selection_changes = changes;
+    }
+
+    /// Sets the text `selection_text` returns.
+    pub fn set_selected_text(&mut self, text: Option<String>) {
+        self.selected_text = text;
+    }
+
+    /// Sets the verdict returned for host-driven mounts.
+    pub fn set_mount_accepts(&mut self, accepts: bool) {
+        self.mount_accepts = accepts;
+    }
+
+    /// Queues an update for `interpret` to pop.
+    pub fn push_update(&mut self, update: InterpretOutput) {
+        self.updates.push_back(update);
+    }
+
+    /// Queues a frame for `frame` to pop.
+    pub fn push_frame(&mut self, frame: Frame) {
+        self.frames.push_back(frame);
+    }
+
+    /// Queues the evicted placements the next size-changing `resize` reports.
+    pub fn push_evictions(&mut self, evicted: Vec<InstanceId>) {
+        self.evictions.push_back(evicted);
+    }
+
+    /// Queues the synchronized-output state the next `interpret` applies.
+    pub fn push_sync_state(&mut self, state: SynchronizedOutput) {
+        self.sync_script.push_back(state);
+    }
+
+    /// Returns every chunk `interpret` received, in order.
+    pub fn interpreted(&self) -> &[Vec<u8>] {
+        &self.interpreted
+    }
+
+    /// Returns every motion `scroll` received, in order.
+    pub fn scrolls(&self) -> &[Scroll] {
+        &self.scrolls
+    }
+
+    /// Returns every size `resize` received, in order.
+    pub fn resizes(&self) -> &[GridSize] {
+        &self.resizes
+    }
+
+    /// Returns every selection operation received, in order.
+    pub fn selections(&self) -> &[SelectionOp] {
+        &self.selections
+    }
+
+    /// Returns every host-driven mount received, in order.
+    pub fn mounts(&self) -> &[(ScreenLine, GridColumn, PlacementSize, InstanceId)] {
+        &self.mounts
+    }
+
+    /// Returns how many scripted frames `frame` has yet to pop.
+    pub fn pending_frames(&self) -> usize {
+        self.frames.len()
     }
 }
 
@@ -288,6 +386,10 @@ impl Vt for FakeVt {
 
     fn modes(&self) -> VtModes {
         self.modes
+    }
+
+    fn kitty_keyboard_flags(&self) -> KittyKeyboardFlags {
+        self.kitty_keyboard_flags
     }
 
     fn switch_vi_mode(&mut self, _switch: ViModeSwitch) -> bool {

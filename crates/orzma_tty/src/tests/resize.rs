@@ -4,7 +4,7 @@
 use super::*;
 
 /// A terminal whose PTY refuses every resize, wired without the
-/// initial sizing pass so `vt.resizes` starts empty.
+/// initial sizing pass so `FakeVt::resizes` starts empty.
 fn failing_term() -> OrzmaTty<FakeVt> {
     let pty = Pty::with_master(Box::new(FailingMaster), Box::new(CaptureSink::default()));
     OrzmaTty::wired(FakeVt::new(grid(80, 24)), pty)
@@ -48,7 +48,7 @@ fn resize_applies_the_size_to_both_seams() {
         .expect("resize");
     assert_eq!(sizes(&term), ((120, 40), (120, 40)));
     assert_eq!(
-        term.vt.resizes.last(),
+        term.vt.resizes().last(),
         Some(&GridSize {
             cols: 120,
             rows: 40
@@ -140,6 +140,6 @@ fn a_failing_pty_resize_leaves_the_vt_untouched() {
         matches!(result, Err(OrzmaTtyError::PtyResize(_))),
         "expected PtyResize, got {result:?}"
     );
-    assert!(term.vt.resizes.is_empty());
+    assert!(term.vt.resizes().is_empty());
     assert!(!term.coalescer.is_armed());
 }
