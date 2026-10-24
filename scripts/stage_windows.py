@@ -33,6 +33,15 @@ INVENTORY_PATH = REPO_ROOT / "build" / "windows" / "cef-inventory.json"
 
 CRT_STATIC_RUSTFLAGS = "-Ctarget-feature=+crt-static"
 
+# NOTE: these binaries link the hybrid CRT, a static vcruntime with the OS's UCRT
+# (ucrtbase.dll, part of Windows 10 and later). Microsoft Defender quarantines a fully
+# static orzmd.exe as Trojan:Win64/RustyStealer!pz, and the hybrid build of the same code
+# scans clean. The other binaries scan clean fully static, and orzma.exe's boundary with
+# libcef.dll has not been tested under the hybrid CRT, so they stay fully static.
+HYBRID_CRT_BINS = ("orzmd",)
+HYBRID_CRT_LINK_ARGS = ("-Clink-arg=/NODEFAULTLIB:libucrt.lib", "-Clink-arg=ucrt.lib")
+UCRT_IMPORTS = ("api-ms-win-crt-", "ucrtbase")
+
 RTF_HEADER = r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fnil Segoe UI;}}\fs18"
 
 FORBIDDEN_CRT_IMPORTS = ("vcruntime140", "msvcp140", "concrt140", "vcomp140")
@@ -75,6 +84,13 @@ def companion_cargo_build_argv(triple: str, profile: str, names: tuple[str, ...]
     for name in names:
         argv += ["-p", name]
     return argv
+
+
+def hybrid_crt_cargo_build_argv(triple: str, profile: str, name: str) -> list[str]:
+    # `cargo rustc` hands the link args to the final link of `name` alone, so its
+    # dependencies build with the same RUSTFLAGS as the other companions'.
+    return ["cargo", "rustc", "--profile", profile, "--target", triple, "--locked",
+            "-p", name, "--bin", name, "--", *HYBRID_CRT_LINK_ARGS]
 
 
 def render_process_install_argv(
@@ -299,6 +315,10 @@ def forbidden_crt_imports(names: list[str]) -> list[str]:
     )
 
 
+def imports_ucrt(names: list[str]) -> bool:
+    return any(name.startswith(prefix) for name in names for prefix in UCRT_IMPORTS)
+
+
 def _u16(buf: bytes, offset: int) -> int:
     return struct.unpack_from("<H", buf, offset)[0]
 
@@ -385,7 +405,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--skip-build", action="store_true",
         help="reuse already-built binaries instead of running cargo build; the "
              "caller is then responsible for having built orzma.exe with "
-             "--no-default-features",
+             "--no-default-features and orzmd.exe with the hybrid CRT link args",
     )
     p.add_argument(
         "--rebuild-render-process", action="store_true",
@@ -457,7 +477,10 @@ def verify_orzbrowser_web_assets(assets_dir: Path | None = None) -> None:
 def cargo_build(cfg: StageConfig) -> None:
     env = cargo_env(dict(os.environ))
     run(cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE), env=env)
-    run(companion_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, COMPANION_BINS), env=env)
+    static_companions = tuple(name for name in COMPANION_BINS if name not in HYBRID_CRT_BINS)
+    run(companion_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, static_companions), env=env)
+    for name in HYBRID_CRT_BINS:
+        run(hybrid_crt_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, name), env=env)
     if not cfg.rebuild_render_process and render_process_installed(
         cfg.tools_dir, RENDER_PROCESS_VERSION, TARGET_TRIPLE
     ):
@@ -549,6 +572,8 @@ def stage_licenses(cfg: StageConfig) -> None:
 
 def verify_crt(cfg: StageConfig) -> None:
     offenders = {}
+    static_ucrt = []
+    hybrid_exes = {f"{name}.exe" for name in HYBRID_CRT_BINS}
     for path in sorted(cfg.stage_dir.rglob("*")):
         if path.suffix.lower() not in (".exe", ".dll"):
             continue
@@ -559,12 +584,22 @@ def verify_crt(cfg: StageConfig) -> None:
         found = forbidden_crt_imports(imported)
         if found:
             offenders[path.name] = found
+        if path.name in hybrid_exes and not imports_ucrt(imported):
+            static_ucrt.append(path.name)
     if offenders:
         raise SystemExit(
             "dynamic CRT dependency found; the build did not use "
             f"{CRT_STATIC_RUSTFLAGS}: {offenders}"
         )
-    print(f"==> CRT check passed (no {'/'.join(FORBIDDEN_CRT_IMPORTS)} imports)")
+    if static_ucrt:
+        raise SystemExit(
+            f"{', '.join(static_ucrt)} links the UCRT statically, which Microsoft Defender "
+            f"quarantines; the build did not use {' '.join(HYBRID_CRT_LINK_ARGS)}"
+        )
+    print(
+        f"==> CRT check passed (no {'/'.join(FORBIDDEN_CRT_IMPORTS)} imports, "
+        f"{'/'.join(sorted(hybrid_exes))} on the OS UCRT)"
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
