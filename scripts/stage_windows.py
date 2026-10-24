@@ -44,7 +44,10 @@ UCRT_IMPORTS = ("api-ms-win-crt-", "ucrtbase")
 
 RTF_HEADER = r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fnil Segoe UI;}}\fs18"
 
-FORBIDDEN_CRT_IMPORTS = ("vcruntime140", "msvcp140", "concrt140", "vcomp140")
+# NOTE: ucrtbased.dll is the debug UCRT, which only a Windows SDK installs. It also
+# matches the "ucrtbase" prefix in UCRT_IMPORTS, so it must be rejected here or a
+# hybrid binary linked against ucrtd.lib would pass as running on the OS UCRT.
+FORBIDDEN_CRT_IMPORTS = ("vcruntime140", "msvcp140", "concrt140", "vcomp140", "ucrtbased")
 
 IMPORT_DIRECTORY_INDEX = 1
 DELAY_IMPORT_DIRECTORY_INDEX = 13
@@ -316,7 +319,7 @@ def forbidden_crt_imports(names: list[str]) -> list[str]:
 
 
 def imports_ucrt(names: list[str]) -> bool:
-    return any(name.startswith(prefix) for name in names for prefix in UCRT_IMPORTS)
+    return any(name.startswith(UCRT_IMPORTS) for name in names)
 
 
 def _u16(buf: bytes, offset: int) -> int:
@@ -478,7 +481,10 @@ def cargo_build(cfg: StageConfig) -> None:
     env = cargo_env(dict(os.environ))
     run(cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE), env=env)
     static_companions = tuple(name for name in COMPANION_BINS if name not in HYBRID_CRT_BINS)
-    run(companion_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, static_companions), env=env)
+    # NOTE: skip the build when no companion is left. Without a -p, `cargo build` builds
+    # the root package with its default features and overwrites the orzma.exe built above.
+    if static_companions:
+        run(companion_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, static_companions), env=env)
     for name in HYBRID_CRT_BINS:
         run(hybrid_crt_cargo_build_argv(TARGET_TRIPLE, CARGO_PROFILE, name), env=env)
     if not cfg.rebuild_render_process and render_process_installed(

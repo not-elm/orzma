@@ -170,7 +170,7 @@ class VerifyCrt(unittest.TestCase):
             with mock.patch.object(
                 sw, "pe_imported_dlls", side_effect=lambda path: imports[path.name]
             ):
-                sw.verify_crt(cfg)
+                return sw.verify_crt(cfg)
 
     def test_a_hybrid_orzmd_beside_fully_static_binaries_passes(self):
         self.assertIsNone(self._verify({
@@ -193,6 +193,11 @@ class VerifyCrt(unittest.TestCase):
                 "orzmd.exe": ["api-ms-win-crt-runtime-l1-1-0.dll", "vcruntime140.dll"],
             })
         self.assertIn("vcruntime140.dll", str(raised.exception))
+
+    def test_the_debug_ucrt_is_rejected_in_a_hybrid_binary(self):
+        with self.assertRaises(SystemExit) as raised:
+            self._verify({"orzmd.exe": ["kernel32.dll", "ucrtbased.dll"]})
+        self.assertIn("ucrtbased.dll", str(raised.exception))
 
 
 class CargoInvocation(unittest.TestCase):
@@ -276,6 +281,15 @@ class CargoBuild(unittest.TestCase):
             sw.cargo_build_argv(self.TRIPLE, "dist"),
             sw.companion_cargo_build_argv(self.TRIPLE, "dist", ("orzbrowser",)),
             sw.hybrid_crt_cargo_build_argv(self.TRIPLE, "dist", "orzmd"),
+        ])
+
+    def test_no_companion_build_runs_when_every_companion_is_hybrid(self):
+        with mock.patch.object(sw, "HYBRID_CRT_BINS", sw.COMPANION_BINS):
+            argvs = [call.args[0] for call in self._runs()]
+        self.assertEqual(argvs, [
+            sw.cargo_build_argv(self.TRIPLE, "dist"),
+            *(sw.hybrid_crt_cargo_build_argv(self.TRIPLE, "dist", name)
+              for name in sw.COMPANION_BINS),
         ])
 
     def test_every_build_keeps_the_static_crt_flag(self):
