@@ -177,7 +177,7 @@ bundle *args: orzmd-web
     pnpm build
     python3 scripts/bundle_macos.py {{ args }}
 
-# build, package and ICE-validate the orzma MSI (e.g. `just bundle 0.2.0`)
+# build, package and ICE-validate the orzma MSI (the version defaults to the Cargo version, e.g. `just bundle 0.2.0`)
 [windows]
 bundle version="":
     pnpm i
@@ -229,15 +229,16 @@ stage *args:
 _orzma-version:
     (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).packages | Where-Object { $_.name -eq "orzma" } | ForEach-Object { $_.version }
 
-# build the MSI from the staged tree (run `just stage` first)
+# build the MSI from the staged tree (run `just stage` first); MSI ProductVersion has no
+# prerelease field, so a version like 0.2.1-dev installs as 0.2.1 but keeps its name
 [windows]
 msi version="":
-    $v = "{{ version }}"; if (-not $v) { $v = (just _orzma-version) }; if ($v -notmatch '^\d+\.\d+\.\d+$') { Write-Error "resolved version '$v' is not 3-part numeric; MSI ProductVersion cannot express a prerelease, pass one explicitly, e.g. 'just msi 0.2.0'"; exit 1 }; if (-not (Test-Path "target/dist/stage")) { Write-Error "target/dist/stage not found; run 'just stage' first"; exit 1 }; if (-not (Test-Path "build/windows")) { Write-Error "build/windows not found; check your checkout"; exit 1 }; $stage = (Resolve-Path "target/dist/stage").Path; $build = (Resolve-Path "build/windows").Path; dotnet wix build build/windows/orzma.wxs -ext WixToolset.UI.wixext/{{ wix_version }} -bindpath "stage=$stage" -bindpath "build=$build" -d "Version=$v" -wx -arch x64 -o "target/dist/orzma-$v-x64.msi"
+    $v = "{{ version }}"; if (-not $v) { $v = (just _orzma-version) }; $pv = $v -replace '[-+].*$', ''; if ($pv -notmatch '^\d+\.\d+\.\d+$') { Write-Error "version '$v' does not start with the 3-part numeric version MSI ProductVersion needs, e.g. 'just msi 0.2.0'"; exit 1 }; if (-not (Test-Path "target/dist/stage")) { Write-Error "target/dist/stage not found; run 'just stage' first"; exit 1 }; if (-not (Test-Path "build/windows")) { Write-Error "build/windows not found; check your checkout"; exit 1 }; $stage = (Resolve-Path "target/dist/stage").Path; $build = (Resolve-Path "build/windows").Path; dotnet wix build build/windows/orzma.wxs -ext WixToolset.UI.wixext/{{ wix_version }} -bindpath "stage=$stage" -bindpath "build=$build" -d "Version=$pv" -wx -arch x64 -o "target/dist/orzma-$v-x64.msi"
 
 # run ICE validation on the built MSI
 [windows]
 msi-validate version="":
-    $v = "{{ version }}"; if (-not $v) { $v = (just _orzma-version) }; $msi = "target/dist/orzma-$v-x64.msi"; if (-not (Test-Path $msi)) { Write-Error "$msi not found; run 'just msi $v' first (a prerelease Cargo version needs an explicit 3-part version, e.g. 'just msi-validate 0.2.0')"; exit 1 }; dotnet wix msi validate $msi
+    $v = "{{ version }}"; if (-not $v) { $v = (just _orzma-version) }; $msi = "target/dist/orzma-$v-x64.msi"; if (-not (Test-Path $msi)) { Write-Error "$msi not found; run 'just msi $v' first"; exit 1 }; dotnet wix msi validate $msi
 
 # regenerate build/windows/cef-inventory.json from the provisioned CEF dir (run on cef_version bump)
 [windows]

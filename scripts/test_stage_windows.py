@@ -145,6 +145,60 @@ class PeImports(unittest.TestCase):
         names = ["api-ms-win-crt-runtime-l1-1-0.dll", "kernel32.dll", "ucrtbase.dll"]
         self.assertEqual(sw.forbidden_crt_imports(names), [])
 
+    def test_imports_ucrt_accepts_the_api_set_and_ucrtbase(self):
+        self.assertTrue(sw.imports_ucrt(["api-ms-win-crt-runtime-l1-1-0.dll", "kernel32.dll"]))
+        self.assertTrue(sw.imports_ucrt(["ucrtbase.dll"]))
+
+    def test_imports_ucrt_rejects_a_fully_static_image(self):
+        names = ["api-ms-win-core-synch-l1-2-0.dll", "kernel32.dll", "ntdll.dll"]
+        self.assertFalse(sw.imports_ucrt(names))
+
+
+class VerifyCrt(unittest.TestCase):
+    def _verify(self, imports: dict[str, list[str]]) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = sw.StageConfig(
+                version="0.0.0",
+                cef_dir=Path(tmp) / "cef",
+                out_dir=Path(tmp) / "out",
+                render_process_bin=None,
+                render_process_target_dir=Path(tmp) / "rp",
+                skip_build=True,
+            )
+            for name in imports:
+                _write(cfg.stage_dir / name, b"MZ")
+            with mock.patch.object(
+                sw, "pe_imported_dlls", side_effect=lambda path: imports[path.name]
+            ):
+                return sw.verify_crt(cfg)
+
+    def test_a_hybrid_orzmd_beside_fully_static_binaries_passes(self):
+        self.assertIsNone(self._verify({
+            "orzma.exe": ["kernel32.dll", "user32.dll"],
+            "orzbrowser.exe": ["kernel32.dll"],
+            "orzmd.exe": ["api-ms-win-crt-runtime-l1-1-0.dll", "kernel32.dll"],
+        }))
+
+    def test_a_fully_static_orzmd_is_rejected(self):
+        with self.assertRaises(SystemExit) as raised:
+            self._verify({
+                "orzma.exe": ["kernel32.dll"],
+                "orzmd.exe": ["api-ms-win-core-synch-l1-2-0.dll", "kernel32.dll"],
+            })
+        self.assertIn("orzmd.exe", str(raised.exception))
+
+    def test_a_vcruntime_import_is_still_rejected_in_a_hybrid_binary(self):
+        with self.assertRaises(SystemExit) as raised:
+            self._verify({
+                "orzmd.exe": ["api-ms-win-crt-runtime-l1-1-0.dll", "vcruntime140.dll"],
+            })
+        self.assertIn("vcruntime140.dll", str(raised.exception))
+
+    def test_the_debug_ucrt_is_rejected_in_a_hybrid_binary(self):
+        with self.assertRaises(SystemExit) as raised:
+            self._verify({"orzmd.exe": ["kernel32.dll", "ucrtbased.dll"]})
+        self.assertIn("ucrtbased.dll", str(raised.exception))
+
 
 class CargoInvocation(unittest.TestCase):
     def test_cargo_build_argv_disables_default_features(self):
@@ -159,6 +213,14 @@ class CargoInvocation(unittest.TestCase):
             sw.companion_cargo_build_argv("x86_64-pc-windows-msvc", "dist", ("orzbrowser", "orzmd")),
             ["cargo", "build", "--profile", "dist", "--target", "x86_64-pc-windows-msvc",
              "--locked", "-p", "orzbrowser", "-p", "orzmd"],
+        )
+
+    def test_hybrid_crt_cargo_build_argv_links_only_the_named_binary_against_the_os_ucrt(self):
+        self.assertEqual(
+            sw.hybrid_crt_cargo_build_argv("x86_64-pc-windows-msvc", "dist", "orzmd"),
+            ["cargo", "rustc", "--profile", "dist", "--target", "x86_64-pc-windows-msvc",
+             "--locked", "-p", "orzmd", "--bin", "orzmd", "--",
+             "-Clink-arg=/NODEFAULTLIB:libucrt.lib", "-Clink-arg=ucrt.lib"],
         )
 
     def test_render_process_install_argv_pins_version_and_target(self):
@@ -192,6 +254,47 @@ class CargoInvocation(unittest.TestCase):
     def test_cargo_env_does_not_duplicate_crt_static(self):
         env = sw.cargo_env({"RUSTFLAGS": "-Ctarget-feature=+crt-static"})
         self.assertEqual(env["RUSTFLAGS"], "-Ctarget-feature=+crt-static")
+
+
+class CargoBuild(unittest.TestCase):
+    TRIPLE = "x86_64-pc-windows-msvc"
+
+    def _runs(self) -> list:
+        cfg = sw.StageConfig(
+            version="0.0.0",
+            cef_dir=Path("cef"),
+            out_dir=Path("out"),
+            render_process_bin=None,
+            render_process_target_dir=Path("rp"),
+            skip_build=False,
+        )
+        with (
+            mock.patch.object(sw, "run") as run,
+            mock.patch.object(sw, "render_process_installed", return_value=True),
+        ):
+            sw.cargo_build(cfg)
+        return run.call_args_list
+
+    def test_orzmd_is_built_apart_from_the_fully_static_companions(self):
+        argvs = [call.args[0] for call in self._runs()]
+        self.assertEqual(argvs, [
+            sw.cargo_build_argv(self.TRIPLE, "dist"),
+            sw.companion_cargo_build_argv(self.TRIPLE, "dist", ("orzbrowser",)),
+            sw.hybrid_crt_cargo_build_argv(self.TRIPLE, "dist", "orzmd"),
+        ])
+
+    def test_no_companion_build_runs_when_every_companion_is_hybrid(self):
+        with mock.patch.object(sw, "HYBRID_CRT_BINS", sw.COMPANION_BINS):
+            argvs = [call.args[0] for call in self._runs()]
+        self.assertEqual(argvs, [
+            sw.cargo_build_argv(self.TRIPLE, "dist"),
+            *(sw.hybrid_crt_cargo_build_argv(self.TRIPLE, "dist", name)
+              for name in sw.COMPANION_BINS),
+        ])
+
+    def test_every_build_keeps_the_static_crt_flag(self):
+        for call in self._runs():
+            self.assertIn("-Ctarget-feature=+crt-static", call.kwargs["env"]["RUSTFLAGS"].split())
 
 
 class RenderProcessPin(unittest.TestCase):
